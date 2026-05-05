@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "959171239075",
+    "project_id": "pizza-wala-team",
+    "storage_bucket": "pizza-wala-team.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:959171239075:android:3ead00c09c27aa030b3316",
+        "android_client_info": {
+          "package_name": "com.djtranscendence.pizzawala"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "959171239075-v6nohal622jgvevnvcpv90lkp6bj6t0i.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCEZBpujIMl3ZSHx43duOunC-l457UWb9c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "959171239075-v6nohal622jgvevnvcpv90lkp6bj6t0i.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

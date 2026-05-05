@@ -1,4 +1,4 @@
-package com.pizzawala
+package com.djtranscendence.pizzawala
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

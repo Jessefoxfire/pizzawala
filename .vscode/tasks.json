@@ -1,0 +1,19 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Android release APK",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"-lc",
+				"cd android && ./gradlew assembleRelease"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gradle"
+			],
+			"group": "build"
+		}
+	]
+}

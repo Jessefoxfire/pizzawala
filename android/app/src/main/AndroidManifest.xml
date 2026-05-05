@@ -1,20 +1,30 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.pizzawala">
+    package="com.djtranscendence.pizzawala">
 
     <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
-    <!-- Foreground service (MANDATORY for geofencing) -->
+    <!-- Geofence persistence on boot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Lets the app open the system “don’t optimize / allow unrestricted” prompt for reliable geofence delivery. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- Stability -->
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Photos/Media -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
 
     <application
         android:name=".MainApplication"
@@ -25,6 +35,46 @@
         android:theme="@style/AppTheme"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true">
+        <!-- Play Services delivers geofence transitions from another UID; exported must be true. -->
+        <receiver
+            android:name=".geofence.GeofenceBroadcastReceiver"
+            android:exported="true" />
+
+        <receiver
+            android:name=".geofence.GeofenceBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.location.PROVIDERS_CHANGED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".geofence.ActivityTransitionReceiver"
+            android:exported="false" />
+
+        <service
+            android:name=".geofence.GeofenceEventService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <service
+            android:name=".geofence.GeofenceBootService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <service
+            android:name=".geofence.GeofenceMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="@string/google_maps_key" />
 
         <activity
             android:name=".MainActivity"
@@ -44,4 +94,3 @@
     </application>
 
 </manifest>
-

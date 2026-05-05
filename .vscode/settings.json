@@ -1,0 +1,6 @@
+{
+  "rubyLsp.rubyVersionManager": "none",
+  "rubyLsp.bundleGemfile": "/Users/jesse/Documents/PizzaWala/Gemfile",
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "java.compile.nullAnalysis.mode": "automatic"
+}

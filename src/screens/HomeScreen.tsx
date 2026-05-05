@@ -1,256 +1,429 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  TouchableOpacity,
   StyleSheet,
+  TouchableOpacity,
   Alert,
-  ActivityIndicator,
+  Image,
+  ImageBackground,
+  Modal,
   ScrollView,
-  SafeAreaView,
-  Platform,
 } from 'react-native';
-import { signOutUser, db } from '../services/firebase';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { collection, doc, getFirestore, onSnapshot, query } from '@react-native-firebase/firestore';
+import { signOutUser, nativeAuth } from '../services/firebase';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  addDoc,
-  updateDoc,
-  doc,
-  serverTimestamp,
-  limit,
-  getDoc,
-} from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
-import { Icons } from '../components/Icons';
-import Geolocation from 'react-native-geolocation-service';
+import type { Geofence } from '../types';
+import { Avatars, type AvatarKey } from '../../assets/avatars';
+import { normalizeLatLng } from '../utils/geo';
+import { setLastUserName } from '../geofencing/storage';
+import { resolveAvatarSource } from '../utils/avatar';
+import { useAuth } from '../auth/useAuth';
 
-type HomeScreenProps = NativeStackScreenProps<RootStackParamList, 'Home'>;
-
-const ADMIN_EMAILS = ['indispirit@gmail.com', 'dylanmarkusimhoff@gmail.com', 'michaudlea91@gmail.com'];
-
-export default function HomeScreen({ navigation }: HomeScreenProps) {
-  const [isLoading, setIsLoading] = useState(true);
-  const [geofences, setGeofences] = useState<any[]>([]);
-  const [activeShift, setActiveShift] = useState<any>(null);
-  const [activeGeofence, setActiveGeofence] = useState<any>(null);
-  const [isCheckingOut, setIsCheckingOut] = useState<boolean>(false);
-  
-  const auth = getAuth();
-  const user = auth.currentUser;
-
-  const [isAdmin, setIsAdmin] = useState(() => {
-    return !!(user?.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim()));
-  });
+export default function HomeScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Home'>>();
+  const authState = useAuth();
+  const [userName, setUserName] = useState<string>('');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [customAvatarUrl, setCustomAvatarUrl] = useState<string | null>(null);
+  const [profileIsAdmin, setProfileIsAdmin] = useState(false);
+  const [worksites, setWorksites] = useState<Geofence[]>([]);
+  const [worksitePickerVisible, setWorksitePickerVisible] = useState(false);
+  const [selectedWorksite, setSelectedWorksite] = useState<Geofence | null>(null);
+  const isAdmin = authState.status === 'admin' || profileIsAdmin;
+  const welcomeText = userName ? `Welcome ${userName}` : 'Welcome';
+  const sortedWorksites = useMemo(
+    () => [...worksites].sort((a, b) => a.name.localeCompare(b.name)),
+    [worksites]
+  );
 
   useEffect(() => {
-    if (!user) {
-        setIsLoading(false);
-        return;
-    }
+    let unsubProfile: (() => void) | null = null;
 
-    const userDocRef = doc(db, 'users', user.uid);
-    const unsubscribeUser = onSnapshot(userDocRef, (docSnap) => {
-        if (docSnap.exists()) {
-            const userData = docSnap.data();
-            const emailMatch = user.email && ADMIN_EMAILS.includes(user.email.toLowerCase().trim());
-            if ((userData.roles && userData.roles.includes('admin')) || emailMatch) {
-                setIsAdmin(true);
-            }
-        }
-    });
+    const unsubAuth = nativeAuth().onAuthStateChanged(user => {
+      setUserName(user?.displayName || '');
 
-    const geofenceQuery = query(collection(db, 'geofences'), where('active', '==', true));
-    const unsubscribeGeofences = onSnapshot(geofenceQuery, (snapshot) => {
-      const activeGeofences = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      setGeofences(activeGeofences);
-    });
-
-    const shiftQuery = query(
-      collection(db, 'shifts'),
-      where('userId', '==', user.uid),
-      where('status', '==', 'open'),
-      limit(1)
-    );
-    const unsubscribeShifts = onSnapshot(shiftQuery, (snapshot) => {
-      if (!snapshot.empty) {
-        const shiftDoc = snapshot.docs[0];
-        setActiveShift({ id: shiftDoc.id, ...shiftDoc.data() });
-      } else {
-        setActiveShift(null);
-        setActiveGeofence(null);
+      if (unsubProfile) {
+        unsubProfile();
+        unsubProfile = null;
       }
-      setIsLoading(false);
-    }, (error) => {
-        setIsLoading(false);
+
+      if (!user) {
+        setProfileIsAdmin(false);
+        return;
+      }
+
+      const fs = getFirestore();
+      const profileRef = doc(fs, 'users', user.uid);
+      unsubProfile = onSnapshot(
+        profileRef,
+        snap => {
+          if (!snap || !snap.exists()) {
+            setProfileIsAdmin(false);
+            return;
+          }
+          const data = snap.data();
+          const roles = data?.roles;
+          const name = data?.name;
+          const avatar = data?.avatarUrl;
+          const customAvatar = data?.customAvatarUrl;
+          setProfileIsAdmin(Array.isArray(roles) && roles.includes('admin'));
+          if (typeof name === 'string' && name.trim()) {
+            setUserName(name);
+            void setLastUserName(name);
+          } else if (user.email) {
+            setUserName(prev => (prev ? prev : user.email!.split('@')[0]));
+          }
+          setAvatarUrl(avatar || null);
+          setCustomAvatarUrl(customAvatar || null);
+        },
+        err => console.warn('HomeScreen user profile listener:', err)
+      );
     });
 
     return () => {
-      unsubscribeUser();
-      unsubscribeGeofences();
-      unsubscribeShifts();
+      if (unsubProfile) {
+        unsubProfile();
+      }
+      unsubAuth();
     };
-  }, [user]);
+  }, []);
 
   useEffect(() => {
-      if (activeShift && activeShift.geofenceId) {
-          const geofenceDocRef = doc(db, 'geofences', activeShift.geofenceId);
-          getDoc(geofenceDocRef).then(docSnap => {
-              if (docSnap.exists()) {
-                  setActiveGeofence(docSnap.data());
-              }
-          });
+    const fs = getFirestore();
+    const q = query(collection(fs, 'geofences'));
+    const unsub = onSnapshot(q, snap => {
+      if (!snap || !snap.docs || snap.empty) {
+        setWorksites([]);
+        return;
       }
-  }, [activeShift]);
-
-
-  const handleLogout = () => {
-    signOutUser().catch((error) => {
-      Alert.alert('Logout Failed', error.message);
+      const items = snap.docs
+        .map(d => {
+          const data = d.data() as any;
+          const center = normalizeLatLng(data.center ?? data.location ?? data.coords);
+          if (!center) return null;
+          return { id: d.id, ...data, center } as Geofence;
+        })
+        .filter(Boolean) as Geofence[];
+      setWorksites(items);
     });
+
+    return () => unsub();
+  }, []);
+
+  const handleNavigatorPress = () => {
+    if (sortedWorksites.length === 0) {
+      Alert.alert('No worksites', 'There are no worksites available yet.');
+      return;
+    }
+    setWorksitePickerVisible(true);
   };
 
-  const handleCheckOut = async () => {
-    if (!user || !activeShift) return;
-    setIsCheckingOut(true);
-    
-    Geolocation.getCurrentPosition(
-        async (position) => {
-            const { latitude, longitude, accuracy } = position.coords;
-            const logTimestamp = new Date();
-
-            try {
-                const logRef = await addDoc(collection(db, 'attendanceLogs'), {
-                    userId: user.uid,
-                    geofenceId: activeShift.geofenceId,
-                    eventType: 'manual_checkout',
-                    timestamp: logTimestamp,
-                    location: { lat: latitude, lng: longitude, accuracy },
-                    permissionState: 'granted',
-                    deviceInfo: 'React Native App',
-                    responded: false,
-                });
-
-                const shiftDocRef = doc(db, 'shifts', activeShift.id);
-                await updateDoc(shiftDocRef, {
-                    status: 'completed',
-                    endTimestamp: logTimestamp,
-                    derivedFromLogs: [...activeShift.derivedFromLogs, logRef.id],
-                    updatedAt: serverTimestamp(),
-                });
-
-                Alert.alert('Checked Out!', `Your shift has ended.`);
-            } catch (e) {
-                Alert.alert('Error', 'Failed to end shift.');
-            } finally {
-                setIsCheckingOut(false);
-            }
-        },
-        (error) => {
-            Alert.alert('Location Error', 'Could not get location for checkout.');
-            setIsCheckingOut(false);
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
-    );
+  const handleSelectWorksite = (worksite: Geofence) => {
+    setSelectedWorksite(worksite);
+    setWorksitePickerVisible(false);
+    navigation.navigate('WorksiteFinder', { geofence: worksite });
   };
-  
-  if (isLoading) {
-      return (
-          <SafeAreaView style={styles.container}>
-              <View style={styles.centered}>
-                <ActivityIndicator size="large" color="#FEF6E4" />
-                <Text style={styles.loadingText}>Loading Dashboard...</Text>
-              </View>
-          </SafeAreaView>
-      );
-  }
 
-  const commonFooter = (
-    <View style={styles.footerNav}>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Chat')}>
-            <Icons.book width={24} height={24} color="#3D352E" />
-            <Text style={styles.navText}>Team Chat</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={handleLogout}>
-            <Icons.eyeOff width={24} height={24} color="#d9534f" />
-            <Text style={[styles.navText, { color: '#d9534f' }]}>Logout</Text>
-        </TouchableOpacity>
-    </View>
+  const renderTile = (label: string, iconSource: any, onPress: () => void, fullWidth = false) => (
+    <TouchableOpacity 
+      style={[styles.tile, fullWidth && styles.fullWidthTile]} 
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <Image source={iconSource} style={styles.tileIcon} resizeMode="contain" />
+      <Text style={styles.tileLabel}>{label}</Text>
+    </TouchableOpacity>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.card}>
-          <Text style={styles.title}>{isAdmin ? 'Admin Panel' : (activeShift ? 'Clocked In' : 'Ready to Work?')}</Text>
-          <Text style={styles.subtitle}>Welcome back, {user?.email?.split('@')[0]}</Text>
+    <ImageBackground
+      source={require('../../assets/Flames background.png')}
+      style={styles.background}
+      resizeMode="cover"
+    >
+      <SafeAreaView style={styles.safe}>
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.profileSection}>
+            {(avatarUrl || customAvatarUrl) ? (
+              <Image
+                source={resolveAvatarSource(avatarUrl, customAvatarUrl)}
+                style={styles.avatar}
+                resizeMode="cover"
+              />
+            ) : (
+              <Image
+                source={require('../../assets/Pizza Wala Logo.png')}
+                style={styles.logo}
+                resizeMode="contain"
+              />
+            )}
+            <Text style={styles.welcomeTitle}>{welcomeText}</Text>
+            {selectedWorksite && (
+              <Text style={styles.selectedSubtitle}>Selected: {selectedWorksite.name}</Text>
+            )}
+          </View>
 
-          {isAdmin ? (
-            <TouchableOpacity 
-                style={styles.button} 
-                onPress={() => navigation.navigate('Geofences')}
+          <View style={styles.gridContainer}>
+            {isAdmin && renderTile('Admin Panel', require('../../assets/Icons/Admin.png'), () => navigation.navigate('AdminOptions'))}
+            {renderTile('Shift', require('../../assets/Icons/Shift.png'), () => navigation.navigate('ShiftSetup'))}
+            {renderTile('My Schedule', require('../../assets/Icons/Schedule.png'), () => navigation.navigate('MySchedule'))}
+            {renderTile('Events', require('../../assets/Icons/Events.png'), () => navigation.navigate('Events'))}
+            {renderTile('Team Chat', require('../../assets/Icons/Chat.png'), () => navigation.navigate('Chat'))}
+            {renderTile('Navigate', require('../../assets/Icons/Navigate.png'), handleNavigatorPress)}
+            
+            {renderTile('Award Medal', require('../../assets/Icons/Medal.png'), () => navigation.navigate('AwardMedal'))}
+            
+            {renderTile('Edit Profile', require('../../assets/Icons/Profile.png'), () => navigation.navigate('EditProfile'))}
+            
+            {renderTile('Logout', require('../../assets/Icons/Logout.png'), () => {
+              Alert.alert('Logout', 'Are you sure you want to sign out?', [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Sign Out',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await signOutUser();
+                    } catch (e) {
+                      console.warn('Sign out failed', e);
+                      Alert.alert('Notice', 'Unable to sign out.');
+                    }
+                  },
+                },
+              ]);
+            })}
+          </View>
+        </ScrollView>
+
+      <Modal visible={worksitePickerVisible} transparent animationType="fade">
+        <View style={styles.modalBg}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Select Worksite</Text>
+            <Text style={styles.modalSub}>Choose a worksite to navigate to.</Text>
+            <ScrollView
+              style={styles.worksiteScroll}
+              contentContainerStyle={styles.worksiteList}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={sortedWorksites.length > 4}
             >
-              <Text style={styles.buttonText}>Manage Worksites</Text>
-            </TouchableOpacity>
-          ) : (
-            <>
-              {activeShift ? (
-                <View style={styles.shiftInfo}>
-                    <Text style={styles.geofenceName}>{activeGeofence ? activeGeofence.name : '...'}</Text>
-                    <TouchableOpacity 
-                        style={[styles.button, styles.checkOutButton]} 
-                        onPress={handleCheckOut}
-                        disabled={isCheckingOut}
-                    >
-                        {isCheckingOut ? <ActivityIndicator color="#FFFFFF" /> : <Text style={[styles.buttonText, { color: '#fff' }]}>Clock Out</Text>}
-                    </TouchableOpacity>
-                </View>
-              ) : (
-                <View style={styles.worksiteList}>
-                    <Text style={styles.smallSubtitle}>Select a worksite to find it:</Text>
-                    {geofences.map(geo => (
-                        <TouchableOpacity 
-                            key={geo.id} 
-                            style={styles.button} 
-                            onPress={() => navigation.navigate('WorksiteFinder', { geofence: geo })}
-                        >
-                            <Text style={styles.buttonText}>{geo.name}</Text>
-                        </TouchableOpacity>
-                    ))}
-                    {geofences.length === 0 && <Text style={styles.infoText}>No active worksites found.</Text>}
-                </View>
-              )}
-            </>
-          )}
-          {commonFooter}
+              {sortedWorksites.map(worksite => {
+                const isSelected = selectedWorksite?.id === worksite.id;
+                return (
+                  <TouchableOpacity
+                    key={worksite.id}
+                    style={[styles.worksitePill, isSelected && styles.worksitePillSelected]}
+                    onPress={() => handleSelectWorksite(worksite)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.worksitePillText} numberOfLines={2}>
+                      {worksite.name}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalLink}
+                onPress={() => setWorksitePickerVisible(false)}
+              >
+                <Text style={styles.modalLinkText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
-      </ScrollView>
-    </SafeAreaView>
+      </Modal>
+      </SafeAreaView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#e77f39' },
-  scrollContent: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 40 : 0 },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  card: { width: '100%', maxWidth: 400, backgroundColor: '#FEF6E4', borderRadius: 24, padding: 24, alignItems: 'center', elevation: 5 },
-  loadingText: { marginTop: 10, fontSize: 16, color: '#FEF6E4', fontFamily: 'sans-serif' },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#3D352E', marginBottom: 4, textAlign: 'center', fontFamily: 'sans-serif' },
-  subtitle: { fontSize: 16, color: '#57493E', marginBottom: 24, textAlign: 'center', fontFamily: 'sans-serif' },
-  smallSubtitle: { fontSize: 14, fontWeight: '600', color: '#3D352E', marginBottom: 12, alignSelf: 'flex-start', fontFamily: 'sans-serif' },
-  geofenceName: { fontSize: 22, fontWeight: '600', color: '#3D352E', marginBottom: 24, textAlign: 'center', fontFamily: 'sans-serif' },
-  infoText: { fontSize: 14, color: '#57493E', marginVertical: 12, textAlign: 'center', fontFamily: 'sans-serif' },
-  button: { backgroundColor: '#FDECC8', paddingVertical: 16, paddingHorizontal: 24, borderRadius: 12, width: '100%', marginBottom: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#EADBC7' },
-  checkOutButton: { backgroundColor: '#d9534f', borderColor: '#d43f3a' },
-  buttonText: { color: '#3D352E', fontSize: 16, fontWeight: '600', textAlign: 'center', fontFamily: 'sans-serif' },
-  shiftInfo: { width: '100%', alignItems: 'center' },
-  worksiteList: { width: '100%' },
-  footerNav: { flexDirection: 'row', justifyContent: 'space-around', width: '100%', marginTop: 24, borderTopWidth: 1, borderTopColor: '#FDECC8', paddingTop: 24 },
-  navItem: { alignItems: 'center' },
-  navText: { fontSize: 12, marginTop: 4, fontWeight: '600', color: '#3D352E', fontFamily: 'sans-serif' }
+  background: {
+    flex: 1,
+  },
+  safe: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    padding: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileSection: {
+    alignItems: 'center',
+    marginBottom: 32,
+    width: '100%',
+  },
+  logo: {
+    width: 160,
+    height: 64,
+    marginBottom: 16,
+  },
+  avatar: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    marginBottom: 16,
+    borderWidth: 3,
+    borderColor: '#C9782B',
+    backgroundColor: '#1E1813',
+  },
+  welcomeTitle: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#F6EDE2',
+    textAlign: 'center',
+    letterSpacing: 0.5,
+  },
+  selectedSubtitle: {
+    fontSize: 14,
+    color: '#C9782B',
+    fontWeight: '700',
+    marginTop: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    width: '100%',
+    gap: 16,
+  },
+  tile: {
+    width: '47.5%',
+    backgroundColor: '#1E1813',
+    borderRadius: 24,
+    paddingVertical: 24,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#C9782B',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  fullWidthTile: {
+    width: '100%',
+  },
+  tileIcon: {
+    width: 56,
+    height: 56,
+    marginBottom: 16,
+  },
+  tileLabel: {
+    color: '#F6EDE2',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  modalBg: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#1E1813',
+    borderRadius: 18,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#3A2D24',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 6,
+    textAlign: 'center',
+    color: '#F6EDE2',
+  },
+  modalSub: {
+    textAlign: 'center',
+    color: '#C8B29A',
+    marginBottom: 12,
+  },
+  input: {
+    backgroundColor: '#3A2D24',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+    color: '#EBDCCB',
+    borderWidth: 1,
+    borderColor: '#5A4739',
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#C8B29A',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  modalLink: {
+    marginRight: 16,
+  },
+  modalLinkText: {
+    fontSize: 14,
+    color: '#D9A441',
+  },
+  modalButton: {
+    backgroundColor: '#C9782B',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  modalButtonText: {
+    color: '#FFF',
+    fontWeight: '600',
+  },
+  worksiteScroll: {
+    maxHeight: 280,
+    marginBottom: 12,
+  },
+  worksiteList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  worksitePill: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 999,
+    backgroundColor: '#3A2D24',
+    borderWidth: 1,
+    borderColor: '#5A4739',
+    maxWidth: '100%',
+  },
+  worksitePillSelected: {
+    borderColor: '#D9A441',
+    backgroundColor: '#4A3828',
+  },
+  worksitePillText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#F6EDE2',
+    textAlign: 'center',
+  },
 });

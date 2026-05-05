@@ -2,30 +2,43 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+
 	<key>CFBundleDisplayName</key>
 	<string>PizzaWala</string>
+
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
+
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+
 	<key>CFBundleSignature</key>
 	<string>????</string>
+
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -33,23 +46,54 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+
+	<!-- Location Permissions -->
+
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>PizzaWala uses your location to detect worksite entry and exit for shift tracking.</string>
+
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>PizzaWala needs background location access to detect worksite entry and exit when the app is closed.</string>
+
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>PizzaWala needs background location access to detect worksite entry and exit when the app is closed.</string>
+
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
+
 	<key>RCTNewArchEnabled</key>
 	<true/>
+
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
+
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arm64</string>
 	</array>
+
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PizzaWala needs photo library access so you can choose a profile picture and share images in team chat.</string>
+
+	<key>NSCameraUsageDescription</key>
+	<string>PizzaWala needs camera access so you can take a profile photo or share pictures in chat.</string>
+
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>PizzaWala can save photos you take to your library when you use the camera.</string>
+
 </dict>
 </plist>

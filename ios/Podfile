@@ -23,6 +23,10 @@ target 'PizzaWala' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
+  # React Native Permissions handlers (vendored podspecs pointing to node_modules)
+  pod 'Permission-LocationWhenInUse', :path => './PermissionsPods/Permission-LocationWhenInUse.podspec'
+  pod 'Permission-LocationAlways', :path => './PermissionsPods/Permission-LocationAlways.podspec'
+
   post_install do |installer|
     react_native_post_install(
       installer,

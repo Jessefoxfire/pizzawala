@@ -14,3 +14,7 @@ gem 'bigdecimal'
 gem 'logger'
 gem 'benchmark'
 gem 'mutex_m'
+
+group :development do
+  gem 'ruby-lsp'
+end

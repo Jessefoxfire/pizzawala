@@ -1,114 +1,295 @@
-
 import React, { useState } from 'react';
 import {
   View,
   Text,
+  StyleSheet,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
+  ActivityIndicator,
   Alert,
   Image,
-  ActivityIndicator,
+  ImageBackground,
+  StatusBar,
+  KeyboardAvoidingView,
   ScrollView,
-  SafeAreaView,
   Platform,
 } from 'react-native';
-import { loginWithEmail } from '../services/firebase';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { loginWithEmail, resetPassword } from '../services/firebase';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { Icons } from '../components/Icons';
 
-type LoginScreenProps = NativeStackScreenProps<RootStackParamList, 'Login'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
-export default function LoginScreen({ navigation }: LoginScreenProps) {
+export default function LoginScreen({ navigation }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isResetting, setIsLoadingResetting] = useState(false);
 
-  const handleLogin = () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please enter your email and password.');
+  const handleSignIn = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !password) {
+      Alert.alert('Notice', 'Email and password are required.');
       return;
     }
+
     setIsLoading(true);
-    loginWithEmail(email, password)
-      .catch((error) => {
-        Alert.alert('Login Failed', 'Invalid email or password.');
-      })
-      .finally(() => setIsLoading(false));
+    try {
+      const credential = await loginWithEmail(trimmedEmail.toLowerCase(), password);
+      if (!credential?.user) {
+        Alert.alert('Sign In Failed', 'Unable to complete sign-in. Try again.');
+      }
+    } catch (err: any) {
+      const code = String(err?.code || '');
+      const friendly =
+        code === 'auth/invalid-credential' || code === 'auth/wrong-password'
+          ? 'Invalid email or password. Double-check and try again.'
+          : code === 'auth/user-not-found'
+            ? 'No account found for that email. Try Create Account.'
+            : code === 'auth/too-many-requests'
+              ? 'Too many attempts. Please wait a moment and try again.'
+              : err?.message
+                ? String(err.message)
+                : 'Unable to sign in.';
+      Alert.alert('Sign In Failed', friendly);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      Alert.alert('Email required', 'Enter your email to receive a reset link.');
+      return;
+    }
+
+    setIsLoadingResetting(true);
+    try {
+      await resetPassword(trimmedEmail.toLowerCase());
+      Alert.alert('Reset Email Sent', 'Check your inbox for a password reset link.');
+    } catch (err: any) {
+      const code = String(err?.code || '');
+      const friendly =
+        code === 'auth/user-not-found'
+          ? 'No account found for that email.'
+          : err?.message
+            ? String(err.message)
+            : 'Unable to send reset email.';
+      const debug = code ? `\n\nCode: ${code}` : '';
+      Alert.alert('Reset Failed', `${friendly}${debug}`);
+    } finally {
+      setIsLoadingResetting(false);
+    }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-     <ScrollView contentContainerStyle={styles.scrollContainer}>
-      <View style={styles.card}>
-        <Image
-          source={{ uri: 'https://firebasestorage.googleapis.com/v0/b/pizza-wala-team.firebasestorage.app/o/Pizza%20Wala%20Logo.png?alt=media&token=60fce49d-2ef0-4e4d-9465-1fd42a6fb612' }}
-          style={styles.logo}
-        />
-        <Text style={styles.title}>Pizza Wala</Text>
-        <Text style={styles.subtitle}>Team Member Login</Text>
+    <View style={styles.container}>
+      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+      <ImageBackground
+        source={require('../../assets/Flames background.png')}
+        style={styles.background}
+        resizeMode="cover"
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <ScrollView
+            contentContainerStyle={styles.scrollContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.content}>
+              <Image
+                source={require('../../assets/Pizza Wala Logo.png')}
+                style={styles.logo}
+                resizeMode="contain"
+              />
+              <Text style={styles.title}>PizzaWala</Text>
+              <Text style={styles.subtitle}>
+                Welcome to The Pizza Wala Team!{"\n"}
+                Create your account or sign in.
+              </Text>
 
-        <View style={styles.inputGroup}>
-            <Text style={styles.label}>Email</Text>
-            <TextInput
-                placeholder="tony@pizzawala.com"
-                value={email}
-                onChangeText={setEmail}
-                style={styles.input}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                placeholderTextColor="#8F6A48"
-            />
-        </View>
-
-        <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password</Text>
-            <View style={styles.passwordContainer}>
+              <View style={styles.form}>
                 <TextInput
-                    placeholder="********"
+                  style={styles.input}
+                  placeholder="Email"
+                  placeholderTextColor="#8F6A48"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  value={email}
+                  onChangeText={setEmail}
+                />
+                <View style={styles.passwordRow}>
+                  <TextInput
+                    style={styles.passwordInput}
+                    placeholder="Password"
+                    placeholderTextColor="#8F6A48"
+                    secureTextEntry={!showPassword}
                     value={password}
                     onChangeText={setPassword}
-                    style={styles.passwordInput}
-                    secureTextEntry={!showPassword}
-                    placeholderTextColor="#8F6A48"
-                />
-                <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
-                    {showPassword ? <Icons.eyeOff color="#fff" width={20} height={20} /> : <Icons.eye color="#fff" width={20} height={20} />}
+                  />
+                  <TouchableOpacity
+                    style={styles.toggleButton}
+                    onPress={() => setShowPassword(prev => !prev)}
+                  >
+                    <Text style={styles.toggleText}>{showPassword ? 'Hide' : 'Show'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.primaryButton}
+                  onPress={handleSignIn}
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color="#3D352E" />
+                  ) : (
+                    <Text style={styles.primaryButtonText}>Sign In</Text>
+                  )}
                 </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.resetButton}
+                  onPress={handleResetPassword}
+                  disabled={isResetting}
+                >
+                  {isResetting ? (
+                    <ActivityIndicator color="#B35412" />
+                  ) : (
+                    <Text style={styles.resetButtonText}>Forgot Password?</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.secondaryButton}
+                  onPress={() => navigation.navigate('CreateAccount')}
+                >
+                  <Text style={styles.secondaryButtonText}>Create Account</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-        </View>
-
-        <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={isLoading}>
-          {isLoading ? <ActivityIndicator color="#3D352E" /> : <Text style={styles.buttonText}>Login</Text>}
-        </TouchableOpacity>
-
-        <TouchableOpacity style={styles.createAccountButton} onPress={() => navigation.navigate('CreateAccount')}>
-            <Text style={styles.createAccountButtonText}>New here? <Text style={styles.underline}>Create Account</Text></Text>
-        </TouchableOpacity>
-      </View>
-      </ScrollView>
-    </SafeAreaView>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </ImageBackground>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#e77f39' },
-  scrollContainer: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, paddingTop: Platform.OS === 'android' ? 40 : 0 },
-  card: { width: '100%', maxWidth: 380, backgroundColor: '#FEF6E4', padding: 24, borderRadius: 24, alignItems: 'center', elevation: 5 },
-  logo: { width: 100, height: 100, marginBottom: 12 },
-  title: { fontSize: 28, fontWeight: 'bold', color: '#3D352E', marginBottom: 4, fontFamily: 'sans-serif' },
-  subtitle: { marginBottom: 24, color: '#3D352E', fontSize: 18, fontWeight: '600', fontFamily: 'sans-serif' },
-  inputGroup: { width: '100%', marginBottom: 16 },
-  label: { color: '#3D352E', fontSize: 14, fontWeight: '600', marginBottom: 8, fontFamily: 'sans-serif' },
-  input: { backgroundColor: '#e77f39', padding: 14, borderRadius: 12, color: '#FFF', fontFamily: 'sans-serif' },
-  passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#e77f39', borderRadius: 12 },
-  passwordInput: { flex: 1, padding: 14, color: '#FFF', fontFamily: 'sans-serif' },
-  eyeIcon: { paddingRight: 16 },
-  button: { backgroundColor: '#FDECC8', padding: 16, borderRadius: 12, width: '100%', marginTop: 16, alignItems: 'center' },
-  buttonText: { fontWeight: 'bold', fontSize: 16, color: '#3D352E', fontFamily: 'sans-serif' },
-  createAccountButton: { marginTop: 24 },
-  createAccountButtonText: { color: '#57493E', fontSize: 14, fontFamily: 'sans-serif' },
-  underline: { textDecorationLine: 'underline' }
+  container: {
+    flex: 1,
+    backgroundColor: '#2A211B',
+  },
+  background: {
+    flex: 1,
+  },
+  content: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+  logo: {
+    width: 180,
+    height: 90,
+  },
+  title: {
+    marginTop: 16,
+    fontSize: 30,
+    fontWeight: '700',
+    color: '#F6EDE2',
+    textShadowColor: 'rgba(0, 0, 0, 0.35)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  subtitle: {
+    marginTop: 8,
+    fontSize: 17,
+    lineHeight: 24,
+    textAlign: 'center',
+    color: '#F6EDE2',
+    paddingHorizontal: 24,
+  },
+  form: {
+    width: '100%',
+    marginTop: 24,
+    backgroundColor: 'rgba(31, 41, 55, 0.92)',
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#3A2D24',
+  },
+  input: {
+    backgroundColor: '#3A2D24',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    fontSize: 16,
+    color: '#EBDCCB',
+    marginBottom: 12,
+  },
+  passwordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3A2D24',
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    fontSize: 16,
+    color: '#EBDCCB',
+  },
+  toggleButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  toggleText: {
+    color: '#C9782B',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  primaryButton: {
+    backgroundColor: '#C9782B',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#F6EDE2',
+  },
+  secondaryButton: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  secondaryButtonText: {
+    fontSize: 14,
+    textDecorationLine: 'underline',
+    color: '#D9A441',
+  },
+  resetButton: {
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  resetButtonText: {
+    fontSize: 13,
+    textDecorationLine: 'underline',
+    color: '#D9A441',
+  },
 });

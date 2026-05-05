@@ -1,0 +1,116 @@
+--------- beginning of system
+04-16 12:25:28.306 23741 23917 I ActivityTaskManager: START u0 {flg=0x10000000 cmp=com.djtranscendence.pizzawala/.MainActivity} from uid 2000
+04-16 12:25:28.308 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 265464455; UID 10174; state: DISABLED
+04-16 12:25:28.309 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 265452344; UID 10174; state: DISABLED
+04-16 12:25:28.310 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 266124927; UID 10174; state: DISABLED
+04-16 12:25:28.310 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 265451093; UID 10174; state: DISABLED
+04-16 12:25:28.311 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 265456536; UID 10174; state: DISABLED
+04-16 12:25:28.311 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 255940284; UID 10174; state: DISABLED
+04-16 12:25:28.312 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 236283604; UID 10174; state: DISABLED
+04-16 12:25:28.313 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 263959004; UID 10174; state: DISABLED
+04-16 12:25:28.313 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 264304459; UID 10174; state: DISABLED
+04-16 12:25:28.314 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 264301586; UID 10174; state: DISABLED
+04-16 12:25:28.314 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 254631730; UID 10174; state: DISABLED
+04-16 12:25:28.315 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 273509367; UID 10174; state: DISABLED
+04-16 12:25:28.315 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 263259275; UID 10174; state: DISABLED
+04-16 12:25:28.317 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 194480991; UID 10174; state: ENABLED
+04-16 12:25:28.318 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 174042980; UID 10174; state: DISABLED
+04-16 12:25:28.329 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 197654537; UID 10174; state: ENABLED
+04-16 12:25:28.338 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 181136395; UID 10174; state: DISABLED
+04-16 12:25:28.338 23741 23917 D CompatibilityChangeReporter: Compat change id reported: 174042936; UID 10174; state: DISABLED
+--------- beginning of main
+04-16 12:25:28.339 28632 28632 W unknown:BridgelessReact: ReactHost{0}.onHostPause(activity)
+04-16 12:25:28.346 23741 24025 D CoreBackPreview: Window{7e82a4f u0 com.djtranscendence.pizzawala/com.djtranscendence.pizzawala.MainActivity}: Setting back callback null
+04-16 12:25:28.350 23741 24025 W InputManager-JNI: Input channel object '7e82a4f com.djtranscendence.pizzawala/com.djtranscendence.pizzawala.MainActivity (client)' was disposed without first being removed with the input manager!
+04-16 12:25:28.360 28632 28632 W unknown:BridgelessReact: ReactHost{0}.raiseSoftException(onNewIntent(intent = "Intent { flg=0x10000000 cmp=com.djtranscendence.pizzawala/.MainActivity }")): Tried to access onNewIntent while context is not ready
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: Unhandled SoftException
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: com.facebook.react.bridge.ReactNoCrashSoftException: raiseSoftException(onNewIntent(intent = "Intent { flg=0x10000000 cmp=com.djtranscendence.pizzawala/.MainActivity }")): Tried to access onNewIntent while context is not ready
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.facebook.react.runtime.ReactHostImpl.raiseSoftException(ReactHostImpl.kt:861)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.facebook.react.runtime.ReactHostImpl.raiseSoftException$default(ReactHostImpl.kt:852)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.facebook.react.runtime.ReactHostImpl.onNewIntent(ReactHostImpl.kt:652)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.facebook.react.ReactDelegate.onNewIntent(ReactDelegate.kt:196)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.facebook.react.ReactActivityDelegate.onNewIntent(ReactActivityDelegate.java:233)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.facebook.react.ReactActivity.onNewIntent(ReactActivity.java:131)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.Activity.performNewIntent(Activity.java:8358)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.Instrumentation.callActivityOnNewIntent(Instrumentation.java:1517)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.Instrumentation.callActivityOnNewIntent(Instrumentation.java:1530)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.ActivityThread.deliverNewIntents(ActivityThread.java:3822)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.ActivityThread.handleNewIntent(ActivityThread.java:3829)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.servertransaction.NewIntentItem.execute(NewIntentItem.java:56)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.servertransaction.ActivityTransactionItem.execute(ActivityTransactionItem.java:45)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.servertransaction.TransactionExecutor.executeCallbacks(TransactionExecutor.java:138)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.servertransaction.TransactionExecutor.execute(TransactionExecutor.java:95)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.ActivityThread$H.handleMessage(ActivityThread.java:2307)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.os.Handler.dispatchMessage(Handler.java:106)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.os.Looper.loopOnce(Looper.java:201)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.os.Looper.loop(Looper.java:288)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at android.app.ActivityThread.main(ActivityThread.java:7924)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at java.lang.reflect.Method.invoke(Native Method)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:548)
+04-16 12:25:28.362 28632 28632 E unknown:ReactHost: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:936)
+04-16 12:25:28.362   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a75f70
+04-16 12:25:28.362   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a73bd0
+04-16 12:25:28.362 28632 28632 W unknown:BridgelessReact: ReactHost{0}.onHostResume(activity)
+04-16 12:25:28.365 23741 23761 V WindowManager: Unknown focus tokens, dropping reportFocusChanged
+04-16 12:25:28.383 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:28.387 28632 28791 W unknown:ReconnectingWebSocket: Couldn't connect to "ws://10.0.2.2:8081/message?device=sdk_gphone64_x86_64%20-%2013%20-%20API%2033&app=com.djtranscendence.pizzawala&clientid=BridgelessDevSupportManager", will silently retry
+04-16 12:25:28.393 28632 28632 W unknown:BridgelessReact: ReactHost{0}.raiseSoftException(onWindowFocusChange(hasFocus = "true")): Tried to access onWindowFocusChange while context is not ready
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: Unhandled SoftException
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: com.facebook.react.bridge.ReactNoCrashSoftException: raiseSoftException(onWindowFocusChange(hasFocus = "true")): Tried to access onWindowFocusChange while context is not ready
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.facebook.react.runtime.ReactHostImpl.raiseSoftException(ReactHostImpl.kt:861)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.facebook.react.runtime.ReactHostImpl.raiseSoftException$default(ReactHostImpl.kt:852)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.facebook.react.runtime.ReactHostImpl.onWindowFocusChange(ReactHostImpl.kt:625)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.facebook.react.ReactDelegate.onWindowFocusChanged(ReactDelegate.kt:232)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.facebook.react.ReactActivityDelegate.onWindowFocusChanged(ReactActivityDelegate.java:237)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.facebook.react.ReactActivity.onWindowFocusChanged(ReactActivity.java:158)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at androidx.appcompat.view.WindowCallbackWrapper.onWindowFocusChanged(WindowCallbackWrapper.java:124)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.android.internal.policy.DecorView.onWindowFocusChanged(DecorView.java:1793)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.View.dispatchWindowFocusChanged(View.java:15323)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.ViewGroup.dispatchWindowFocusChanged(ViewGroup.java:1508)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.ViewRootImpl.dispatchFocusEvent(ViewRootImpl.java:3927)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.ViewRootImpl.handleWindowFocusChanged(ViewRootImpl.java:3833)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.ViewRootImpl.-$$Nest$mhandleWindowFocusChanged(Unknown Source:0)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.ViewRootImpl$ViewRootHandler.handleMessageImpl(ViewRootImpl.java:5768)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.view.ViewRootImpl$ViewRootHandler.handleMessage(ViewRootImpl.java:5682)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.os.Handler.dispatchMessage(Handler.java:106)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.os.Looper.loopOnce(Looper.java:201)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.os.Looper.loop(Looper.java:288)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at android.app.ActivityThread.main(ActivityThread.java:7924)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at java.lang.reflect.Method.invoke(Native Method)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(RuntimeInit.java:548)
+04-16 12:25:28.395 28632 28632 E unknown:ReactHost: 	at com.android.internal.os.ZygoteInit.main(ZygoteInit.java:936)
+04-16 12:25:28.397 24487 24487 I GoogleInputMethodService: GoogleInputMethodService.onFinishInput():3227 
+04-16 12:25:28.399 24487 24487 I GoogleInputMethodService: GoogleInputMethodService.updateDeviceLockedStatus():2087 repeatCheckTimes = 0, unlocked = true
+04-16 12:25:28.400 24487 24487 I GoogleInputMethodService: GoogleInputMethodService.onStartInput():1877 onStartInput(EditorInfo{inputType=0x0(NULL) imeOptions=0x0 privateImeOptions=null actionName=UNSPECIFIED actionLabel=null actionId=0 initialSelStart=-1 initialSelEnd=-1 initialCapsMode=0x0 hintText=null label=null packageName=com.djtranscendence.pizzawala fieldId=-1 fieldName=null extras=null}, false)
+04-16 12:25:28.400 24487 24487 I GoogleInputMethodService: GoogleInputMethodService.shouldHideHeaderOnInitialState():4008 ShouldHideHeaderOnInitialState = false
+04-16 12:25:28.401 24487 24487 I GoogleInputMethodService: GoogleInputMethodService.updateDeviceLockedStatus():2087 repeatCheckTimes = 2, unlocked = true
+04-16 12:25:28.406   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a78250
+04-16 12:25:28.575   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a77d70
+04-16 12:25:28.575   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a77a10
+04-16 12:25:28.576   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a781f0
+04-16 12:25:28.576   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a781f0
+04-16 12:25:28.577   355   477 W TransactionTracing: Could not find layer handle 0x7492c6a77a10
+04-16 12:25:30.390 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:30.784 24416 24416 D BoundBrokerSvc: onUnbind: Intent { act=com.google.android.gms.nearby.exposurenotification.START dat=chimera-action:/... cmp=com.google.android.gms/.chimera.PersistentApiServiceNoInstantApps }
+04-16 12:25:31.031 24811 24811 D BoundBrokerSvc: onUnbind: Intent { act=com.google.android.gms.feedback.internal.IFeedbackService dat=chimera-action:/... cmp=com.google.android.gms/.chimera.GmsBoundBrokerService }
+04-16 12:25:32.399 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:33.556   336   336 E android.hardware.power.stats@1.0-service-mock: Failed to getEnergyData
+04-16 12:25:34.406 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:34.428 23741 23916 I ActivityManager: Killing 26418:com.google.android.gms.unstable/u0a120 (adj 925): empty #17
+04-16 12:25:34.430 23741 23776 I libprocessgroup: Successfully killed process cgroup uid 10120 pid 26418 in 0ms
+04-16 12:25:34.437 23741 23916 D WifiNl80211Manager: Scan result ready event
+04-16 12:25:34.437 23741 23916 D WifiNative: Scan result ready event
+04-16 12:25:34.441 23741 23869 D ConnectivityService: releasing NetworkRequest [ REQUEST id=140, [ Capabilities: INTERNET&NOT_RESTRICTED&TRUSTED&NOT_VCN_MANAGED Uid: 10120 RequestorUid: 10120 RequestorPkg: com.google.android.gms UnderlyingNetworks: Null] ] (release request)
+04-16 12:25:34.443 23671 23671 I Zygote  : Process 26418 exited due to signal 9 (Killed)
+--------- beginning of kernel
+04-16 12:25:34.393     0     0 I binder  : undelivered transaction 28061585, process died.
+04-16 12:25:34.395     0     0 I binder  : undelivered transaction 28061596, process died.
+04-16 12:25:34.398     0     0 I binder  : undelivered transaction 28061625, process died.
+04-16 12:25:34.403     0     0 I binder  : undelivered transaction 28073709, process died.
+04-16 12:25:34.406     0     0 I binder  : undelivered transaction 28061555, process died.
+04-16 12:25:34.407     0     0 I binder  : undelivered transaction 28069106, process died.
+04-16 12:25:36.444 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:38.452 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:40.460 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:42.468 28632 28791 D TrafficStats: tagSocket(51) with statsTag=0xffffffff, statsUid=-1
+04-16 12:25:42.956     0     0 I logd    : logdr: UID=2000 GID=2000 PID=28797 n tail=0 logMask=99 pid=0 start=0ns deadline=0ns

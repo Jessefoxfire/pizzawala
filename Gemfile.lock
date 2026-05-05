@@ -77,6 +77,7 @@ GEM
     i18n (1.14.8)
       concurrent-ruby (~> 1.0)
     json (2.18.1)
+    language_server-protocol (3.17.0.5)
     logger (1.7.0)
     minitest (6.0.1)
       prism (~> 1.5)
@@ -87,9 +88,18 @@ GEM
     netrc (0.11.0)
     prism (1.9.0)
     public_suffix (4.0.7)
+    rbs (4.0.2)
+      logger
+      prism (>= 1.6.0)
+      tsort
     rexml (3.4.4)
+    ruby-lsp (0.26.9)
+      language_server-protocol (~> 3.17.0)
+      prism (>= 1.2, < 2.0)
+      rbs (>= 3, < 5)
     ruby-macho (2.5.1)
     securerandom (0.4.1)
+    tsort (0.2.0)
     typhoeus (1.5.0)
       ethon (>= 0.9.0, < 0.16.0)
     tzinfo (2.0.6)
@@ -113,6 +123,7 @@ DEPENDENCIES
   concurrent-ruby (< 1.3.4)
   logger
   mutex_m
+  ruby-lsp
   xcodeproj (< 1.26.0)
 
 CHECKSUMS
@@ -146,6 +157,7 @@ CHECKSUMS
   httpclient (2.9.0) sha256=4b645958e494b2f86c2f8a2f304c959baa273a310e77a2931ddb986d83e498c8
   i18n (1.14.8) sha256=285778639134865c5e0f6269e0b818256017e8cde89993fdfcbfb64d088824a5
   json (2.18.1) sha256=fe112755501b8d0466b5ada6cf50c8c3f41e897fa128ac5d263ec09eedc9f986
+  language_server-protocol (3.17.0.5) sha256=fd1e39a51a28bf3eec959379985a72e296e9f9acfce46f6a79d31ca8760803cc
   logger (1.7.0) sha256=196edec7cc44b66cfb40f9755ce11b392f21f7967696af15d274dde7edff0203
   minitest (6.0.1) sha256=7854c74f48e2e975969062833adc4013f249a4b212f5e7b9d5c040bf838d54bb
   molinillo (0.8.0) sha256=efbff2716324e2a30bccd3eba1ff3a735f4d5d53ffddbc6a2f32c0ca9433045d
@@ -155,9 +167,12 @@ CHECKSUMS
   netrc (0.11.0) sha256=de1ce33da8c99ab1d97871726cba75151113f117146becbe45aa85cb3dabee3f
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
   public_suffix (4.0.7) sha256=8be161e2421f8d45b0098c042c06486789731ea93dc3a896d30554ee38b573b8
+  rbs (4.0.2) sha256=af75671e66cd03434cc546622741ebf83f6197ec4328375805306330bf78ef25
   rexml (3.4.4) sha256=19e0a2c3425dfbf2d4fc1189747bdb2f849b6c5e74180401b15734bc97b5d142
+  ruby-lsp (0.26.9) sha256=33a01c001c00a76b4e821efc04ed7572983430f31ca5d6f3e343d0b6ccab4129
   ruby-macho (2.5.1) sha256=9075e52e0f9270b552a90b24fcc6219ad149b0d15eae1bc364ecd0ac8984f5c9
   securerandom (0.4.1) sha256=cc5193d414a4341b6e225f0cb4446aceca8e50d5e1888743fac16987638ea0b1
+  tsort (0.2.0) sha256=9650a793f6859a43b6641671278f79cfead60ac714148aabe4e3f0060480089f
   typhoeus (1.5.0) sha256=120b67ed1ef515e6c0e938176db880f15b0916f038e78ce2a66290f3f1de3e3b
   tzinfo (2.0.6) sha256=8daf828cc77bcf7d63b0e3bdb6caa47e2272dcfaf4fbfe46f8c3a9df087a829b
   xcodeproj (1.25.1) sha256=9a2310dccf6d717076e86f602b17c640046b6f1dfe64480044596f6f2f13dc84
