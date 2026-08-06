@@ -1,0 +1,49 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) &&
+        userDoc().data.roles is list &&
+        userDoc().data.roles.hasAny(['admin']);
+    }
+
+    // Hygiene training cards (PDF/PNG/JPEG) — any signed-in user (matches Firestore app access)
+    match /hygiene/{userId}/credentials/{fileName} {
+      allow read, write: if signedIn();
+    }
+
+    // Monthly hygiene CSV exports
+    match /hygiene/exports/{month}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && isAdmin();
+    }
+
+    // Schedule PDF exports (admin-generated, shareable via download URL token)
+    match /schedules/exports/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && isAdmin();
+    }
+
+    // Chat image attachments
+    match /chatImages/{userId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == userId;
+    }
+
+    // Profile photos
+    match /users/{userId}/photos/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == userId;
+    }
+  }
+}

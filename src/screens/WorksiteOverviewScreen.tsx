@@ -12,22 +12,27 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { collection, onSnapshot, query, where, doc } from 'firebase/firestore';
+import {
+  collection,
+  getFirestore,
+  onSnapshot,
+} from '@react-native-firebase/firestore';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { db } from '../services/firebase';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import {
+  calcWorkedMs,
+  calcWorkedMsInRange,
+  getTimestampMs,
+  shiftOverlapsRange,
+  type LiveShift,
+} from '../services/shifts';
 import { Avatars, AvatarKey } from '../../assets/avatars';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'WorksiteOverview'>;
 
-type ShiftRecord = {
-  id: string;
-  userId: string;
-  geofenceId: string;
-  geofenceName: string;
-  status: 'open' | 'closed';
-  startAt: any;
-  endAt?: any;
+type ShiftRecord = LiveShift & {
+  geofenceId?: string;
+  geofenceName?: string;
 };
 
 type WorksiteStats = {
@@ -62,20 +67,16 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
   }, []);
 
   useEffect(() => {
-    const unsubShifts = onSnapshot(collection(db, 'shifts'), snap => {
-      if (!snap || !snap.docs || snap.empty) {
-        setShifts([]);
-        return;
-      }
-      const items = snap.docs.map(docSnap => ({
-        id: docSnap.id,
-        ...docSnap.data(),
-      })) as ShiftRecord[];
+    const fs = getFirestore();
+    const unsubShifts = onSnapshot(collection(fs, 'shifts'), snap => {
+      const items = (snap?.docs || [])
+        .map(docSnap => ({ id: docSnap.id, ...docSnap.data() } as ShiftRecord))
+        .filter(shift => !shift.isScheduled);
       setShifts(items);
     });
 
-    const unsubUsers = onSnapshot(collection(db, 'users'), snap => {
-      if (!snap || !snap.docs) {
+    const unsubUsers = onSnapshot(collection(fs, 'users'), snap => {
+      if (!snap?.docs) {
         setUsers([]);
         setLoading(false);
         return;
@@ -104,24 +105,18 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
           user,
         };
       })
-      .sort((a, b) => {
-        const aTime = a.startAt?.toDate?.()?.getTime() || 0;
-        const bTime = b.startAt?.toDate?.()?.getTime() || 0;
-        return bTime - aTime;
-      });
+      .sort((a, b) => getTimestampMs(b.startAt) - getTimestampMs(a.startAt));
   }, [shifts, users]);
 
   const memberStats = useMemo(() => {
     const map: Record<string, number> = {};
 
     shifts.forEach(shift => {
-      if (shift.status === 'closed' && shift.startAt && shift.endAt) {
-        const start = shift.startAt.toDate?.() || new Date(shift.startAt);
-        const end = shift.endAt.toDate?.() || new Date(shift.endAt);
-        const diffHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-        const hours = Math.max(0, diffHours);
-        map[shift.userId] = (map[shift.userId] || 0) + hours;
-      }
+      if (shift.status !== 'closed' || shift.isScheduled) return;
+      const endMs = getTimestampMs(shift.endAt);
+      if (!endMs) return;
+      const hours = calcWorkedMs(shift, endMs) / 3600000;
+      map[shift.userId] = (map[shift.userId] || 0) + hours;
     });
 
     return users.map(user => {
@@ -156,11 +151,11 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
 
       if (shift.status === 'open') {
         worksite.activePeople += 1;
-      } else if (shift.startAt && shift.endAt) {
-        const start = shift.startAt.toDate?.() || new Date(shift.startAt);
-        const end = shift.endAt.toDate?.() || new Date(shift.endAt);
-        const diffHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-        worksite.totalHours += Math.max(0, diffHours);
+      } else if (shift.status === 'closed') {
+        const endMs = getTimestampMs(shift.endAt);
+        if (endMs) {
+          worksite.totalHours += calcWorkedMs(shift, endMs) / 3600000;
+        }
       }
     });
 
@@ -169,40 +164,50 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
 
   const auditResult = useMemo(() => {
     if (!auditUserId) return 0;
-    
-    const nowLocal = new Date();
+
+    const nowLocal = new Date(now);
     const startOfToday = new Date(nowLocal.getFullYear(), nowLocal.getMonth(), nowLocal.getDate()).getTime();
-    const startOfWeek = startOfToday - (nowLocal.getDay() * 86400000);
+    const endOfToday = startOfToday + 86400000;
+    const startOfWeek = startOfToday - nowLocal.getDay() * 86400000;
     const startOfMonth = new Date(nowLocal.getFullYear(), nowLocal.getMonth(), 1).getTime();
 
+    let rangeStart = 0;
+    let rangeEnd = Number.MAX_SAFE_INTEGER;
+    if (auditPeriod === 'today') {
+      rangeStart = startOfToday;
+      rangeEnd = endOfToday;
+    } else if (auditPeriod === 'week') {
+      rangeStart = startOfWeek;
+      rangeEnd = endOfToday;
+    } else if (auditPeriod === 'month') {
+      rangeStart = startOfMonth;
+      rangeEnd = endOfToday;
+    } else if (auditPeriod === 'custom') {
+      rangeStart = new Date(customStart).getTime();
+      rangeEnd = new Date(customEnd).getTime() + 86400000;
+    }
+
     let total = 0;
-    shifts.forEach(s => {
-      if (s.userId !== auditUserId || s.status !== 'closed' || !s.startAt || !s.endAt) return;
-      
-      const start = s.startAt.toDate?.()?.getTime() || new Date(s.startAt).getTime();
-      const end = s.endAt.toDate?.()?.getTime() || new Date(s.endAt).getTime();
-      
-      let include = false;
-      if (auditPeriod === 'all') include = true;
-      else if (auditPeriod === 'today' && start >= startOfToday) include = true;
-      else if (auditPeriod === 'week' && start >= startOfWeek) include = true;
-      else if (auditPeriod === 'month' && start >= startOfMonth) include = true;
-      else if (auditPeriod === 'custom') {
-        const cStart = new Date(customStart).getTime();
-        const cEnd = new Date(customEnd).getTime() + 86400000; // end of day
-        if (start >= cStart && start <= cEnd) include = true;
+    shifts.forEach(shift => {
+      if (shift.userId !== auditUserId || shift.status !== 'closed' || shift.isScheduled) return;
+
+      const endMs = getTimestampMs(shift.endAt);
+      if (!endMs) return;
+
+      if (auditPeriod === 'all') {
+        total += calcWorkedMs(shift, endMs) / 3600000;
+        return;
       }
 
-      if (include) {
-        total += (end - start) / 3600000;
-      }
+      if (!shiftOverlapsRange(shift, rangeStart, rangeEnd, endMs)) return;
+      total += calcWorkedMsInRange(shift, rangeStart, rangeEnd, endMs) / 3600000;
     });
     return total;
-  }, [shifts, auditUserId, auditPeriod, customStart, customEnd]);
+  }, [shifts, auditUserId, auditPeriod, customStart, customEnd, now]);
 
-  const formatElapsed = (start: any) => {
-    if (!start) return '00:00';
-    const startTime = start.toDate?.()?.getTime() || new Date(start).getTime();
+  const formatElapsed = (start: unknown) => {
+    const startTime = getTimestampMs(start);
+    if (!startTime) return '00:00';
     const diff = now - startTime;
     const hours = Math.floor(diff / 3600000);
     const mins = Math.floor((diff % 3600000) / 60000);

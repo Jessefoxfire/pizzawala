@@ -1,0 +1,51 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userTeamId() {
+      return signedIn() && userDoc().exists() ? userDoc().data.teamId : null;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        userDoc().exists() &&
+        userDoc().data.roles is list &&
+        userDoc().data.roles.hasAny(['admin']);
+    }
+
+    // Team + DM: path is always `chats/{roomId}/messages/{messageId}` (odd depth to `messages` collection).
+    // Team rooms use user team id (e.g. team-1); DM rooms use sorted `uid_uid` thread ids (underscore, not slashes).
+    match /chats/{chatRoomId}/messages/{messageId} {
+      allow read, write: if signedIn() && (
+        isAdmin() ||
+        userTeamId() == chatRoomId ||
+        chatRoomId.matches('(^|_)' + request.auth.uid + '(_|$)')
+      );
+    }
+
+    // Event chat: only assigned staff for that event (or admins)
+    match /chats/events/threads/{eventId}/messages/{messageId} {
+      allow read, write: if signedIn() && (
+        isAdmin() ||
+        (
+          get(/databases/$(database)/documents/events/$(eventId)).exists() &&
+          get(/databases/$(database)/documents/events/$(eventId)).data.staffIds is list &&
+          get(/databases/$(database)/documents/events/$(eventId)).data.staffIds.hasAny([request.auth.uid])
+        )
+      );
+    }
+
+    // Keep non-chat collections available to signed-in app users.
+    match /{document=**} {
+      allow read, write: if signedIn();
+    }
+  }
+}

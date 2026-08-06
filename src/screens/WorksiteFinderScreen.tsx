@@ -16,7 +16,6 @@ import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import CompassHeading from 'react-native-compass-heading';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { Avatars, type AvatarKey } from '../../assets/avatars';
 import { auth, db } from '../services/firebase';
 import { doc, onSnapshot, collection, query, where, updateDoc } from 'firebase/firestore';
 import { resolveAvatarSource } from '../utils/avatar';
@@ -115,29 +114,14 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
   const [mapType, setMapType] = useState<'standard' | 'satellite'>('satellite');
   const [followMap, setFollowMap] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [userProfile, setUserProfile] = useState<any | null>(null);
   const [otherUsers, setOtherUsers] = useState<any[]>([]);
   const [showTeam, setShowTeam] = useState(false);
+  const [selectedTeammate, setSelectedTeammate] = useState<any | null>(null);
   const mapRef = useRef<MapView | null>(null);
   const pulse = useRef(new Animated.Value(0)).current;
   const lastGpsFixRef = useRef<{ position: Coordinates; timestamp: number; speedMps: number; heading: number | null } | null>(null);
   const user = auth.currentUser;
   const insets = useSafeAreaInsets();
-
-
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    const unsub = onSnapshot(doc(db, 'users', user.uid), snap => {
-      if (!snap || !snap.exists()) return;
-      const data = snap.data();
-      console.log('User profile data:', data);
-      console.log('Avatar URL:', data?.avatarUrl);
-      setUserProfile(data);
-    });
-    return () => unsub();
-  }, [user?.uid]);
-
   // Listen to other users' locations
   useEffect(() => {
     if (!user?.uid) return;
@@ -160,6 +144,10 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
           return lastUpdate > fiveMinutesAgo;
         });
       setOtherUsers(users);
+      setSelectedTeammate((previous: any) => {
+        if (!previous?.id) return previous;
+        return users.find((u: any) => u.id === previous.id) || null;
+      });
     });
     return () => unsub();
   }, [user?.uid]);
@@ -355,20 +343,39 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
 
   const bearing = useMemo(() => {
     if (!displayPosition) return null;
-    return getBearing(displayPosition, geofence.center);
-  }, [displayPosition, geofence.center]);
+    const target = selectedTeammate?.lastLocation || geofence.center;
+    return getBearing(displayPosition, target);
+  }, [displayPosition, geofence.center, selectedTeammate]);
 
   const distance = useMemo(() => {
     if (!displayPosition) return null;
-    return getDistanceMeters(displayPosition, geofence.center);
-  }, [displayPosition, geofence.center]);
+    const target = selectedTeammate?.lastLocation || geofence.center;
+    return getDistanceMeters(displayPosition, target);
+  }, [displayPosition, geofence.center, selectedTeammate]);
 
   const routeStart = useMemo(() => {
     if (!displayPosition) return null;
-    const directBearing = getBearing(displayPosition, geofence.center);
+    const target = selectedTeammate?.lastLocation || geofence.center;
+    const directBearing = getBearing(displayPosition, target);
     const routeOffsetMeters = Math.min(Math.max(distance ?? 0, 0), 16);
     return moveCoordinate(displayPosition, directBearing, routeOffsetMeters);
-  }, [displayPosition, geofence.center, distance]);
+  }, [displayPosition, geofence.center, distance, selectedTeammate]);
+
+  const selectedTeammateDistance = useMemo(() => {
+    if (!displayPosition || !selectedTeammate?.lastLocation) return null;
+    return getDistanceMeters(displayPosition, selectedTeammate.lastLocation);
+  }, [displayPosition, selectedTeammate]);
+
+  const teamWithDistance = useMemo(() => {
+    if (!displayPosition) return [];
+    return otherUsers
+      .filter((u: any) => !!u.lastLocation)
+      .map((u: any) => ({
+        ...u,
+        distanceMeters: getDistanceMeters(displayPosition, u.lastLocation),
+      }))
+      .sort((a: any, b: any) => a.distanceMeters - b.distanceMeters);
+  }, [displayPosition, otherUsers]);
 
   const rotation = useMemo<string>(() => {
     if (bearing == null) return '0deg';
@@ -390,17 +397,19 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
       };
     }
 
-    const dist = getDistanceMeters(displayPosition, geofence.center);
-    const focusMeters = Math.max(dist, geofence.radiusMeters * 1.6);
+    const target = selectedTeammate?.lastLocation || geofence.center;
+    const dist = getDistanceMeters(displayPosition, target);
+    const baseRadius = selectedTeammate ? 120 : geofence.radiusMeters;
+    const focusMeters = Math.max(dist, baseRadius * 1.6);
     const deltas = regionDeltaForMeters(focusMeters, displayPosition.lat);
 
     return {
-      latitude: (displayPosition.lat + geofence.center.lat) / 2,
-      longitude: (displayPosition.lng + geofence.center.lng) / 2,
+      latitude: (displayPosition.lat + target.lat) / 2,
+      longitude: (displayPosition.lng + target.lng) / 2,
       latitudeDelta: deltas.latitudeDelta,
       longitudeDelta: deltas.longitudeDelta,
     };
-  }, [displayPosition, geofence.center, geofence.radiusMeters]);
+  }, [displayPosition, geofence.center, geofence.radiusMeters, selectedTeammate]);
 
   useEffect(() => {
     if (mapRef.current && followMap) {
@@ -434,43 +443,17 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
           <Polyline
             coordinates={[
               { latitude: routeStart.lat, longitude: routeStart.lng },
-              { latitude: geofence.center.lat, longitude: geofence.center.lng },
+              {
+                latitude: (selectedTeammate?.lastLocation?.lat ?? geofence.center.lat),
+                longitude: (selectedTeammate?.lastLocation?.lng ?? geofence.center.lng),
+              },
             ]}
             strokeColor="rgba(0, 245, 160, 0.85)"
             strokeWidth={3}
             lineDashPattern={[8, 6]}
           />
         )}
-        {displayPosition && (
-          <Marker
-            coordinate={{ latitude: displayPosition.lat, longitude: displayPosition.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            title="You"
-          >
-            <View style={styles.userMarker}>
-              <Animated.View
-                style={[
-                  styles.userPulse,
-                  {
-                    opacity: pulse.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.25, 0],
-                    }),
-                    transform: [
-                      {
-                        scale: pulse.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0.6, 1.8],
-                        }),
-                      },
-                    ],
-                  },
-                ]}
-              />
-              <View style={styles.userDot} />
-            </View>
-          </Marker>
-        )}
+        {/* Intentionally hide self marker: map should show only other team members + worksite. */}
         {showTeam && otherUsers.map(otherUser => {
           if (!otherUser.lastLocation) return null;
           const avatarSource = resolveAvatarSource(otherUser.avatarUrl);
@@ -484,7 +467,7 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
               }}
               anchor={{ x: 0.5, y: 0.5 }}
               title={displayName}
-              onPress={() => navigation.navigate('Chat', { prefillText: `@${displayName} ` })}
+              onPress={() => setSelectedTeammate(otherUser)}
             >
               <View style={styles.otherUserMarker}>
                   <Image
@@ -512,7 +495,10 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.mapControlButton, showTeam && styles.mapControlButtonActive]}
-            onPress={() => setShowTeam(!showTeam)}
+            onPress={() => {
+              setShowTeam(!showTeam);
+              if (showTeam) setSelectedTeammate(null);
+            }}
           >
             <Text style={styles.mapControlButtonText}>
               {showTeam ? 'Hide Team' : 'Show Team'}
@@ -528,7 +514,7 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
             <Text style={styles.mapControlButtonText}>Recenter</Text>
           </TouchableOpacity>
         </View>
-        <View style={styles.card} pointerEvents="none">
+        <View style={[styles.card, { marginTop: 92 + insets.top }]} pointerEvents="none">
           {error ? (
             <Text style={styles.errorText}>{error}</Text>
           ) : !displayPosition ? (
@@ -568,11 +554,6 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
                     {item.label}
                   </Text>
                 ))}
-                <View style={styles.compassDegreePill}>
-                  <Text style={styles.compassDegreeText}>
-                    {`${Math.round(compassHeading ?? gpsHeading ?? 0)}°`}
-                  </Text>
-                </View>
                 <View style={[styles.pointerWrap, { transform: [{ rotate: rotation }] }]}>
                   <View style={styles.pointerNeedle}>
                     <View style={styles.pointerHead} />
@@ -581,27 +562,45 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
                     </View>
                   </View>
                 </View>
-                {resolveAvatarSource(userProfile?.avatarUrl) ? (
-                  <View style={styles.centerAvatarWrap}>
-                    <Image
-                      source={resolveAvatarSource(userProfile?.avatarUrl, userProfile?.customAvatarUrl)}
-                      style={styles.centerAvatar}
-                      resizeMode="cover"
-                    />
-                  </View>
-                ) : (
-                  <View style={styles.compassCenter} />
-                )}
+                <View style={styles.compassCenter} />
               </View>
             </View>
           )}
         </View>
+        {showTeam && teamWithDistance.length > 0 && (
+          <View style={[styles.teamPanel, { top: 140 + insets.top }]}>
+            <Text style={styles.teamPanelTitle}>Team Nearby</Text>
+            {teamWithDistance.slice(0, 4).map(member => {
+              const displayName = member.name || member.email || 'Teammate';
+              const isSelected = selectedTeammate?.id === member.id;
+              return (
+                <TouchableOpacity
+                  key={member.id}
+                  style={[styles.teamRow, isSelected && styles.teamRowActive]}
+                  onPress={() => setSelectedTeammate(member)}
+                >
+                  <Image
+                    source={resolveAvatarSource(member.avatarUrl, member.customAvatarUrl)}
+                    style={styles.teamRowAvatar}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.teamRowName}>{displayName}</Text>
+                    <Text style={styles.teamRowSub}>{formatDistance(member.distanceMeters)}</Text>
+                  </View>
+                  <Text style={styles.teamRowAction}>Navigate</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
 
         <View style={[styles.bottomReadout, { bottom: 24 + insets.bottom }]}>
           <View style={styles.readoutPanel}>
             <View style={styles.readoutRow}>
               <Text style={styles.readoutLabel}>NAVIGATING TO:</Text>
-              <Text style={styles.readoutValueLine}>{geofence.name}</Text>
+              <Text style={styles.readoutValueLine}>
+                {selectedTeammate?.name || selectedTeammate?.email || geofence.name}
+              </Text>
             </View>
             <View style={styles.readoutDivider} />
             <View style={styles.readoutRow}>
@@ -612,6 +611,17 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
                 </Text>
               </View>
             </View>
+            {selectedTeammateDistance != null && (
+              <>
+                <View style={styles.readoutDivider} />
+                <View style={styles.readoutRow}>
+                  <Text style={styles.readoutLabel}>
+                    DISTANCE TO {String(selectedTeammate?.name || selectedTeammate?.email || 'TEAM MEMBER').toUpperCase()}:
+                  </Text>
+                  <Text style={styles.readoutValueLine}>{formatDistance(selectedTeammateDistance)}</Text>
+                </View>
+              </>
+            )}
             <View style={styles.readoutDivider} />
             <View style={styles.readoutRow}>
               <Text style={styles.readoutLabel}>HEADING / MOTION:</Text>
@@ -695,6 +705,59 @@ const styles = StyleSheet.create({
     color: '#F6EDE2',
     fontSize: 12,
     fontWeight: '700',
+  },
+  teamPanel: {
+    position: 'absolute',
+    right: 16,
+    width: 200,
+    backgroundColor: 'rgba(15, 23, 42, 0.9)',
+    borderWidth: 1,
+    borderColor: '#C9782B',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    zIndex: 25,
+  },
+  teamPanelTitle: {
+    color: '#F6EDE2',
+    fontWeight: '700',
+    marginBottom: 6,
+    fontSize: 12,
+  },
+  teamRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    marginBottom: 6,
+    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+  },
+  teamRowActive: {
+    backgroundColor: 'rgba(201, 120, 43, 0.35)',
+    borderWidth: 1,
+    borderColor: '#C9782B',
+  },
+  teamRowAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    marginRight: 8,
+  },
+  teamRowName: {
+    color: '#F6EDE2',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  teamRowSub: {
+    color: '#C8B29A',
+    fontSize: 11,
+  },
+  teamRowAction: {
+    color: '#7EF2FF',
+    fontSize: 11,
+    fontWeight: '700',
+    marginLeft: 6,
   },
   card: {
     width: 300,
@@ -868,23 +931,6 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0, 0, 0, 0.55)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
-  },
-  compassDegreePill: {
-    position: 'absolute',
-    bottom: 34,
-    minWidth: 56,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(70, 227, 255, 0.45)',
-    backgroundColor: 'rgba(4, 31, 40, 0.8)',
-  },
-  compassDegreeText: {
-    color: '#7EF2FF',
-    fontSize: 16,
-    fontWeight: '800',
-    textAlign: 'center',
   },
   compassCenter: {
     width: 8,

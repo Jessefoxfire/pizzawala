@@ -9,8 +9,17 @@ export async function registerPushForCurrentUser(): Promise<() => void> {
     return () => {};
   }
 
-  await messaging().requestPermission();
+  try {
+    await messaging().requestPermission();
+  } catch (error) {
+    console.warn('[Push] requestPermission failed:', error);
+  }
+
   const token = await messaging().getToken();
+  if (!token) {
+    console.warn('[Push] No FCM token available for user:', user.uid);
+    return () => {};
+  }
 
   const fs = getFirestore();
   await setDoc(
@@ -23,6 +32,7 @@ export async function registerPushForCurrentUser(): Promise<() => void> {
   );
 
   const unsubscribe = messaging().onTokenRefresh(async newToken => {
+    if (!newToken) return;
     await setDoc(
       doc(fs, 'users', user.uid),
       {

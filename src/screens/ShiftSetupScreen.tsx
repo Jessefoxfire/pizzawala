@@ -17,48 +17,46 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import {
   getAutoShiftEnabled,
+  getShiftSetupIntroSeen,
   setAutoShiftEnabled,
-  getTrackingActiveState,
-  setTrackingActiveState,
-  getShiftStartTime,
-  setShiftStartTime,
+  setShiftSetupIntroSeen,
   loadCachedGeofences,
 } from '../geofencing/storage';
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { 
   getNativeNotificationsEnabled, 
-  setNativeNotificationsEnabled,
-  initNativeGeofencing
 } from '../geofencing/native';
 import type { Geofence } from '../types';
 import { getDistanceMeters, normalizeLatLng } from '../utils/geo';
 import Geolocation from 'react-native-geolocation-service';
-import notifee from '@notifee/react-native';
 
 import {
-  addDoc,
+  calcBreakMs,
+  calcCurrentPauseMs,
+  calcWorkedMs,
+  endLiveShift,
+  formatShiftDuration,
+  isShiftPaused,
+  offlineOpenShiftToLiveShift,
+  pauseLiveShift,
+  resumeLiveShift,
+  startLiveShift,
+  type LiveShift,
+} from '../services/shifts';
+import { getOfflineOpenShift } from '../offline/outbox';
+import { subscribeOutboxChanges } from '../offline/events';
+import { useOffline } from '../context/OfflineContext';
+import {
   collection,
-  doc,
-  getDoc,
   getFirestore,
   limit,
   onSnapshot,
   query,
-  serverTimestamp,
-  updateDoc,
   where,
 } from '@react-native-firebase/firestore';
 import { auth } from '../services/firebase';
 
-type ShiftRecord = {
-  id: string;
-  userId: string;
-  geofenceId?: string;
-  geofenceName?: string;
-  status: 'open' | 'closed';
-  startAt?: any;
-  endAt?: any;
-};
+type ShiftRecord = LiveShift;
 
 const toRad = (v: number) => (v * Math.PI) / 180;
 const distanceM = (p1: { lat: number; lng: number }, p2: { lat: number; lng: number }) => {
@@ -71,14 +69,7 @@ const distanceM = (p1: { lat: number; lng: number }, p2: { lat: number; lng: num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-const formatWorkedDuration = (ms: number) => {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-};
+const formatWorkedDuration = formatShiftDuration;
 
 export default function ShiftSetupScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'ShiftSetup'>>();
@@ -88,9 +79,8 @@ export default function ShiftSetupScreen() {
   const [worksites, setWorksites] = useState<Geofence[]>([]);
   const [selectedWorksite, setSelectedWorksite] = useState<Geofence | null>(null);
   const [loading, setLoading] = useState(true);
-  const [trackingActive, setTrackingActive] = useState(false);
-  const [startTime, setStartTime] = useState<number | null>(null);
-  const [_elapsed, setElapsed] = useState('00:00:00');
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [showIntroMessage, setShowIntroMessage] = useState(false);
 
   const userId = auth.currentUser?.uid ?? null;
   const [historyShifts, setHistoryShifts] = useState<ShiftRecord[]>([]);
@@ -100,14 +90,48 @@ export default function ShiftSetupScreen() {
     isInside: boolean;
     distance: number;
     worksiteName: string;
+    configuredRadius: number;
+    effectiveRadius: number;
     center?: { lat: number; lng: number };
   } | null>(null);
+  const [offlineShift, setOfflineShift] = useState<LiveShift | null>(null);
+  const { isOnline, pendingCount } = useOffline();
 
-  const openShift = useMemo(() => historyShifts.find(s => s.status === 'open') || null, [historyShifts]);
+  const refreshOfflineShift = React.useCallback(async () => {
+    const offline = await getOfflineOpenShift();
+    setOfflineShift(offline ? offlineOpenShiftToLiveShift(offline) : null);
+  }, []);
+
+  useEffect(() => {
+    void refreshOfflineShift();
+    return subscribeOutboxChanges(() => {
+      void refreshOfflineShift();
+    });
+  }, [refreshOfflineShift]);
+
+  const openShift = useMemo(() => {
+    const fromFirestore = historyShifts.find(s => s.status === 'open' && !s.isScheduled) || null;
+    if (offlineShift) return offlineShift;
+    return fromFirestore;
+  }, [historyShifts, offlineShift]);
+
+  const shiftPaused = openShift ? isShiftPaused(openShift) : false;
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    void (async () => {
+      const seen = await getShiftSetupIntroSeen();
+      if (seen) {
+        setShowIntroMessage(false);
+        return;
+      }
+      setShowIntroMessage(true);
+      await setShiftSetupIntroSeen(true);
+    })();
   }, []);
 
   useEffect(() => {
@@ -120,7 +144,9 @@ export default function ShiftSetupScreen() {
           setHistoryShifts([]);
           return;
         }
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as ShiftRecord));
+        const items = snap.docs
+          .map(d => ({ id: d.id, ...d.data() } as ShiftRecord))
+          .filter(s => !s.isScheduled);
         items.sort((a, b) => {
           const ts = (s: ShiftRecord) => {
             if (!s?.startAt) return 0;
@@ -156,11 +182,17 @@ export default function ShiftSetupScreen() {
             }
             if (target) {
               const dist = distanceM(current, target.center);
+              const configuredRadius =
+                typeof target.radiusMeters === 'number' && target.radiusMeters > 0
+                  ? target.radiusMeters
+                  : 150;
               const threshold = effectiveGeofenceRadiusMeters(target.radiusMeters);
               setProximity({
                 isInside: dist <= threshold,
                 distance: dist,
                 worksiteName: target.name,
+                configuredRadius,
+                effectiveRadius: threshold,
                 center: target.center,
               });
             }
@@ -179,74 +211,127 @@ export default function ShiftSetupScreen() {
     };
   }, [openShift]);
 
-  const elapsedMs = useMemo(() => {
-    if (!openShift?.startAt && !localStartAt) return 0;
-    const startSource = openShift?.startAt ?? localStartAt;
-    const startDate = (startSource as any)?.toDate?.() || new Date(startSource as any);
-    return now.getTime() - startDate.getTime();
-  }, [openShift, localStartAt, now]);
+  const workedMs = useMemo(() => {
+    if (!openShift) return 0;
+    return calcWorkedMs(openShift, now.getTime());
+  }, [openShift, now]);
+
+  const breakMs = useMemo(() => {
+    if (!openShift) return 0;
+    return calcBreakMs(openShift, now.getTime());
+  }, [openShift, now]);
+
+  const pauseMs = useMemo(() => {
+    if (!openShift) return 0;
+    return calcCurrentPauseMs(openShift, now.getTime());
+  }, [openShift, now]);
 
   const handleFirestoreStartShift = async () => {
     if (!userId) {
       Alert.alert('Notice', 'Sign in to start a shift.');
       return;
     }
-    if (openShift) return;
-    let gId: string | null = null;
-    let gName: string | null = null;
-    try {
-      const cached = await loadCachedGeofences();
-      const pos = await new Promise<Geolocation.GeoPosition | null>(resolve =>
-        Geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 5000 })
-      );
-      if (pos && cached.length > 0) {
-        const current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        const sorted = cached
-          .filter(g => g.active !== false)
-          .map(g => ({ ...g, dist: distanceM(current, g.center) }))
-          .sort((a, b) => a.dist - b.dist);
-        if (sorted[0] && sorted[0].dist < 300) {
-          gId = sorted[0].id;
-          gName = sorted[0].name;
+    if (openShift || shiftBusy) return;
+    let gId: string | null = selectedWorksite?.id || null;
+    let gName: string | null = selectedWorksite?.name || null;
+    if (!gId) {
+      try {
+        const cached = await loadCachedGeofences();
+        const pos = await new Promise<Geolocation.GeoPosition | null>(resolve =>
+          Geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 5000 })
+        );
+        if (pos && cached.length > 0) {
+          const current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          const sorted = cached
+            .filter(g => g.active !== false)
+            .map(g => ({ ...g, dist: distanceM(current, g.center) }))
+            .sort((a, b) => a.dist - b.dist);
+          if (sorted[0] && sorted[0].dist < 300) {
+            gId = sorted[0].id;
+            gName = sorted[0].name;
+          }
         }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
     }
+    setShiftBusy(true);
     try {
-      const fs = getFirestore();
-      const userSnap = await getDoc(doc(fs, 'users', userId));
-      const teamId = userSnap.data()?.teamId || 'team-1';
-      await addDoc(collection(fs, 'shifts'), {
+      await startLiveShift({
         userId,
-        teamId,
         geofenceId: gId,
         geofenceName: gName,
-        status: 'open',
-        startAt: serverTimestamp(),
         startedBy: 'manual',
       });
       setLocalStartAt(new Date());
+      await refreshOfflineShift();
+      if (!isOnline) {
+        Alert.alert(
+          'Shift saved offline',
+          'Your shift is running on this device and will sync when you are back online.'
+        );
+      }
     } catch (err: any) {
       Alert.alert('Notice', err?.message || 'Could not start shift.');
+    } finally {
+      setShiftBusy(false);
     }
   };
 
-  const handleFirestoreEndShift = async () => {
-    if (!userId || !openShift) {
-      return;
-    }
+  const handleFirestorePauseShift = async () => {
+    if (!openShift || shiftBusy) return;
+    setShiftBusy(true);
     try {
-      const fs = getFirestore();
-      await updateDoc(doc(fs, 'shifts', openShift.id), {
-        status: 'closed',
-        endAt: serverTimestamp(),
-        endedBy: 'manual',
-      });
-      setLocalStartAt(null);
+      const result = await pauseLiveShift(openShift.id);
+      await refreshOfflineShift();
+      if (result.queued) {
+        Alert.alert('Saved offline', 'Pause will sync when you are back online.');
+      }
     } catch (err: any) {
-      Alert.alert('Notice', err?.message || 'Could not end shift.');
+      Alert.alert('Notice', err?.message || 'Could not pause shift.');
+    } finally {
+      setShiftBusy(false);
     }
+  };
+
+  const handleFirestoreResumeShift = async () => {
+    if (!openShift || shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      const result = await resumeLiveShift(openShift.id);
+      await refreshOfflineShift();
+      if (result.queued) {
+        Alert.alert('Saved offline', 'Resume will sync when you are back online.');
+      }
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Could not resume shift.');
+    } finally {
+      setShiftBusy(false);
+    }
+  };
+
+  const handleFirestoreEndShift = () => {
+    if (!openShift || shiftBusy) return;
+    Alert.alert('End shift', 'End your current shift? It will be locked.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'End shift',
+        style: 'destructive',
+        onPress: () => {
+          setShiftBusy(true);
+          void endLiveShift(openShift.id, 'manual')
+            .then(async result => {
+              setLocalStartAt(null);
+              await refreshOfflineShift();
+              if (result.queued) {
+                Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+              }
+            })
+            .catch((err: any) => Alert.alert('Notice', err?.message || 'Could not end shift.'))
+            .finally(() => setShiftBusy(false));
+        },
+      },
+    ]);
   };
 
   const openDirections = () => {
@@ -264,13 +349,9 @@ export default function ShiftSetupScreen() {
     async function initSettings() {
       const auto = await getAutoShiftEnabled();
       const notify = await getNativeNotificationsEnabled();
-      const active = await getTrackingActiveState();
-      const st = await getShiftStartTime();
-      
+
       setAutoTracking(auto);
       setAllowAlerts(notify);
-      setTrackingActive(active);
-      setStartTime(st);
     }
     initSettings();
 
@@ -313,107 +394,6 @@ export default function ShiftSetupScreen() {
     return () => unsub();
   }, []);
 
-  // 3. Timer logic
-  useEffect(() => {
-    if (!trackingActive || !startTime) {
-      setElapsed('00:00:00');
-      return;
-    }
-
-    const interval = setInterval(() => {
-      const diff = Date.now() - startTime;
-      const hours = Math.floor(diff / 3600000);
-      const mins = Math.floor((diff % 3600000) / 60000);
-      const secs = Math.floor((diff % 60000) / 1000);
-      
-      const f = (n: number) => n.toString().padStart(2, '0');
-      setElapsed(`${f(hours)}:${f(mins)}:${f(secs)}`);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [trackingActive, startTime]);
-
-  const handleStop = async () => {
-    try {
-      await setTrackingActiveState(false);
-      await setShiftStartTime(null);
-      setTrackingActive(false);
-      setStartTime(null);
-      Alert.alert('Tracking Stopped', 'Background monitoring has been disabled.');
-    } catch {
-      Alert.alert('Notice', 'Failed to stop tracking.');
-    }
-  };
-
-  const handleStart = async () => {
-    if (trackingActive) {
-      handleStop();
-      return;
-    }
-
-    if (!selectedWorksite) {
-      Alert.alert('Selection Required', 'Please select a worksite first.');
-      return;
-    }
-
-    try {
-      // 1. Persist settings
-      await setAutoShiftEnabled(autoTracking);
-      await setNativeNotificationsEnabled(allowAlerts);
-      
-      const startedAt = Date.now();
-      await setTrackingActiveState(true);
-      await setShiftStartTime(startedAt);
-      setStartTime(startedAt);
-      setTrackingActive(true);
-
-      // 2. Force Native Sync
-      await initNativeGeofencing();
-
-      // 3. Get immediate status for notification
-      Geolocation.getCurrentPosition(
-        async (pos) => {
-          const dist = getDistanceMeters(
-            { lat: pos.coords.latitude, lng: pos.coords.longitude },
-            selectedWorksite.center
-          );
-          
-          const isInside = dist <= effectiveGeofenceRadiusMeters(selectedWorksite.radiusMeters);
-          const statusText = isInside ? 'inside' : 'outside';
-
-          // 4. Send notification
-          await notifee.displayNotification({
-            title: 'Shift Tracking Active',
-            body: `You are ${statusText} the ${selectedWorksite.name} worksite. Tap to view map.`,
-            android: {
-              channelId: 'geofence-events',
-              pressAction: {
-                id: 'default',
-              },
-            },
-            data: {
-              type: 'navigation_link',
-              geofence: selectedWorksite
-            }
-          });
-
-          setTrackingActive(true);
-          // Alert.alert('Tracking Started', `System synced. You are currently ${statusText} the site.`);
-          navigation.replace('MySchedule');
-        },
-        (err) => {
-          console.warn('Location failed for setup notification', err);
-          // Alert.alert('Tracking Started', 'System synced. Unable to determine immediate proximity.');
-          navigation.replace('MySchedule');
-        },
-        { enableHighAccuracy: true, timeout: 15000 }
-      );
-    } catch (err) {
-      console.error('Setup failed:', err);
-      Alert.alert('Notice', 'Failed to synchronize settings.');
-    }
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -433,10 +413,29 @@ export default function ShiftSetupScreen() {
           <Text style={styles.timerHeader}>Current Shift Status</Text>
           {proximity && (
             <View style={styles.proximityBadge}>
-              <Text style={[styles.proximityText, proximity.isInside ? styles.textInside : styles.textOutside]}>
-                You are {proximity.isInside ? 'Inside' : 'Outside'} ({Math.round(proximity.distance)}m) the{' '}
-                {proximity.worksiteName} worksite.
-              </Text>
+              {(() => {
+                const distance = Math.round(proximity.distance);
+                const configuredRadius = Math.round(proximity.configuredRadius);
+                const effectiveRadius = Math.round(proximity.effectiveRadius);
+                const isWithinConfigured = proximity.distance <= proximity.configuredRadius;
+                const isInMonitoringBuffer = proximity.isInside && !isWithinConfigured;
+
+                if (isInMonitoringBuffer) {
+                  return (
+                    <Text style={[styles.proximityText, styles.textBuffer]}>
+                      You are near the {proximity.worksiteName} worksite ({distance}m). Core radius is{' '}
+                      {configuredRadius}m; monitoring radius is {effectiveRadius}m.
+                    </Text>
+                  );
+                }
+
+                return (
+                  <Text style={[styles.proximityText, proximity.isInside ? styles.textInside : styles.textOutside]}>
+                    You are {proximity.isInside ? 'Inside' : 'Outside'} ({distance}m) the {proximity.worksiteName}{' '}
+                    worksite.
+                  </Text>
+                );
+              })()}
               {!proximity.isInside && (
                 <TouchableOpacity onPress={openDirections} style={styles.directionsLink}>
                   <Text style={styles.directionsLinkText}>Would you like directions to the worksite?</Text>
@@ -444,20 +443,42 @@ export default function ShiftSetupScreen() {
               )}
             </View>
           )}
-          <Text style={styles.timerLabel}>You have worked:</Text>
-          <Text style={styles.timerValue}>{openShift ? formatWorkedDuration(elapsedMs) : '00:00:00'}</Text>
-          <Text style={styles.timerStatus}>
-            {openShift ? `System is monitoring ${openShift.geofenceName || 'worksite'}` : 'Not on shift'}
+          <Text style={styles.timerLabel}>{shiftPaused ? 'Pause time:' : 'Worked time:'}</Text>
+          <Text style={styles.timerValue}>
+            {openShift ? formatWorkedDuration(shiftPaused ? pauseMs : workedMs) : '00:00:00'}
           </Text>
+          <Text style={styles.timerStatus}>
+            {openShift
+              ? shiftPaused
+                ? `Worked ${formatWorkedDuration(workedMs)} • ${openShift.geofenceName || 'worksite'}`
+                : `Break ${formatWorkedDuration(breakMs)} • ${openShift.geofenceName || 'worksite'}`
+              : 'Not on shift'}
+          </Text>
+          {offlineShift ? (
+            <Text style={styles.pendingSyncText}>Shift changes pending sync</Text>
+          ) : pendingCount > 0 ? (
+            <Text style={styles.pendingSyncText}>{pendingCount} change(s) waiting to sync</Text>
+          ) : null}
           <View style={styles.timerActions}>
             {!openShift ? (
-              <TouchableOpacity style={styles.startBtn} onPress={() => void handleFirestoreStartShift()}>
-                <Text style={styles.startBtnText}>Start Shift</Text>
+              <TouchableOpacity style={styles.startBtn} onPress={() => void handleFirestoreStartShift()} disabled={shiftBusy}>
+                {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Start Shift</Text>}
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={styles.endBtn} onPress={() => void handleFirestoreEndShift()}>
-                <Text style={styles.endBtnText}>End Shift</Text>
-              </TouchableOpacity>
+              <>
+                {shiftPaused ? (
+                  <TouchableOpacity style={styles.startBtn} onPress={() => void handleFirestoreResumeShift()} disabled={shiftBusy}>
+                    {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Resume</Text>}
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity style={styles.pauseBtn} onPress={() => void handleFirestorePauseShift()} disabled={shiftBusy}>
+                    {shiftBusy ? <ActivityIndicator color="#F6EDE2" /> : <Text style={styles.pauseBtnText}>Pause</Text>}
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.endBtn} onPress={handleFirestoreEndShift} disabled={shiftBusy}>
+                  <Text style={styles.endBtnText}>End Shift</Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
           <View style={styles.autoRow}>
@@ -477,22 +498,14 @@ export default function ShiftSetupScreen() {
           </View>
         </View>
 
-        <View style={styles.introSection}>
-          <Text style={styles.introText}>
-            This app is designed to help you keep track of your shifts. It can do this automatically, 
-            by detecting your location, or you can stop and start your shifts manually.
-          </Text>
-        </View>
-
-        <TouchableOpacity 
-          style={styles.manualChoiceBtn} 
-          onPress={async () => {
-            await setAutoShiftEnabled(false);
-            navigation.replace('MySchedule');
-          }}
-        >
-          <Text style={styles.manualChoiceText}>I will start and stop shifts myself</Text>
-        </TouchableOpacity>
+        {showIntroMessage ? (
+          <View style={styles.introSection}>
+            <Text style={styles.introText}>
+              This app is designed to help you keep track of your shifts. It can do this automatically,
+              by detecting your location, or you can stop and start your shifts manually.
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.divider} />
 
@@ -534,22 +547,6 @@ export default function ShiftSetupScreen() {
           </View>
         </View>
       </ScrollView>
-      )}
-
-      {!loading && (
-      <View style={styles.footer}>
-        <Text style={styles.startHint}>
-          Click Start below to begin automatic location-based shift detection:
-        </Text>
-        <TouchableOpacity 
-          style={[styles.startButton, trackingActive && styles.trackingButton]} 
-          onPress={handleStart}
-        >
-          <Text style={styles.startButtonText}>
-            {trackingActive ? 'STOP TRACKING' : 'START'}
-          </Text>
-        </TouchableOpacity>
-      </View>
       )}
     </SafeAreaView>
   );
@@ -653,40 +650,6 @@ const styles = StyleSheet.create({
     color: '#1E1813',
     fontWeight: '700',
   },
-  footer: {
-    padding: 24,
-    borderTopWidth: 1,
-    borderTopColor: '#3A2D24',
-  },
-  startHint: {
-    color: '#A88E73',
-    fontSize: 13,
-    textAlign: 'center',
-    marginBottom: 16,
-    fontWeight: '600',
-    lineHeight: 18,
-  },
-  startButton: {
-    backgroundColor: '#C9782B',
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    shadowColor: '#C9782B',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  startButtonText: {
-    color: '#F6EDE2',
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 2,
-  },
-  trackingButton: {
-    backgroundColor: '#9E3C2E',
-    shadowColor: '#9E3C2E',
-  },
   statusWindow: {
     backgroundColor: '#1E1813',
     margin: 20,
@@ -738,21 +701,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textDecorationLine: 'underline',
   },
-  manualChoiceBtn: {
-    backgroundColor: '#3A2D24',
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#C9782B',
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-  manualChoiceText: {
-    color: '#F6EDE2',
-    fontSize: 16,
-    fontWeight: '700',
-  },
   timerCard: {
     padding: 24,
     borderRadius: 20,
@@ -782,6 +730,7 @@ const styles = StyleSheet.create({
   },
   proximityText: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
   textInside: { color: '#4CAF50' },
+  textBuffer: { color: '#D9A441' },
   textOutside: { color: '#F44336' },
   directionsLink: { marginTop: 8 },
   directionsLinkText: { color: '#C9782B', fontSize: 12, textDecorationLine: 'underline', fontWeight: 'bold' },
@@ -793,12 +742,16 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   timerStatus: { color: '#A88E73', fontSize: 12, marginTop: 8, fontStyle: 'italic' },
-  timerActions: { marginTop: 24, width: '100%' },
-  startBtn: { backgroundColor: '#C9782B', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  pendingSyncText: { color: '#C98B2E', fontSize: 12, marginTop: 6, fontWeight: '600' },
+  timerActions: { marginTop: 24, width: '100%', flexDirection: 'row', gap: 10 },
+  startBtn: { flex: 1, backgroundColor: '#C9782B', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   startBtnText: { color: '#1E1813', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
+  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#C9782B' },
+  pauseBtnText: { color: '#F6EDE2', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
   endBtn: {
+    flex: 1,
     backgroundColor: '#5C2420',
-    paddingVertical: 16,
+    paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,

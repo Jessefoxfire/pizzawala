@@ -224,6 +224,11 @@ class GeofenceModule(private val reactContext: ReactApplicationContext) : ReactC
      GeofencePrefs.setAutoShiftEnabled(reactContext, enabled)
   }
 
+  @ReactMethod
+  fun setSuppressEnterWhileOnShift(suppressed: Boolean) {
+    GeofencePrefs.setSuppressEnterWhileOnShift(reactContext, suppressed)
+  }
+
   private fun isProbablyEmulator(): Boolean {
     return Build.FINGERPRINT.startsWith("generic") ||
       Build.FINGERPRINT.startsWith("unknown") ||

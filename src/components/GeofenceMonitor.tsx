@@ -38,6 +38,7 @@ import {
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { setNativeUserName } from '../geofencing/native';
 import { processGeofenceEvent, startShift, endShift } from '../geofencing/processor';
+import { decideGeofenceNotification, onShiftEnded, onShiftStarted } from '../geofencing/notificationPolicy';
 import { showGeofenceNotification } from '../notifications/geofenceNotifications';
 import type { GeofencePromptPayload } from '../geofencing/types';
 import { normalizeGeofenceTransition } from '../geofencing/transition';
@@ -246,6 +247,14 @@ export default function GeofenceMonitor() {
   }, [userId, teamId, isOnShift]);
 
   useEffect(() => {
+    if (isOnShift) {
+      void onShiftStarted();
+    } else {
+      void onShiftEnded();
+    }
+  }, [isOnShift]);
+
+  useEffect(() => {
     const showPendingPrompt = async () => {
       if (!userId) return;
       const pending = await consumePendingPrompt();
@@ -340,19 +349,18 @@ export default function GeofenceMonitor() {
       lastNativeEventAtRef.current.set(event.geofenceId, { transition, timestamp: Date.now() });
     }
 
-    const occurredAt =
-      typeof event.timestamp === 'number' && event.timestamp > 0 ? event.timestamp : Date.now();
-    const basePayload: GeofencePromptPayload =
-      result.promptPayload ?? {
-        eventId: result.eventId,
-        geofenceId: geofence.id,
-        geofenceName: geofence.name || 'Worksite',
-        transition,
-        occurredAt,
-      };
-
     let didAutoHandle = false;
     if (transition === 'enter' || transition === 'exit') {
+      const occurredAt =
+        typeof event.timestamp === 'number' && event.timestamp > 0 ? event.timestamp : Date.now();
+      const basePayload: GeofencePromptPayload =
+        result.promptPayload ?? {
+          eventId: result.eventId,
+          geofenceId: geofence.id,
+          geofenceName: geofence.name || 'Worksite',
+          transition,
+          occurredAt,
+        };
       const shouldNotify = await shouldNotifyForEvent(result.eventId);
       const autoShift = await getAutoShiftEnabled();
       const user = nativeAuth().currentUser;
@@ -364,11 +372,14 @@ export default function GeofenceMonitor() {
         } else {
           await endShift(user.uid);
         }
-        if (shouldNotify) {
-          void showGeofenceNotification(basePayload, { variant: 'auto_result' });
+      }
+
+      if (shouldNotify && user?.uid && (didAutoHandle || result.promptPayload)) {
+        const decision = await decideGeofenceNotification(user.uid, transition);
+        if (decision.show) {
+          const variant = didAutoHandle ? 'auto_result' : 'prompt';
+          void showGeofenceNotification(basePayload, { variant });
         }
-      } else if (shouldNotify) {
-        void showGeofenceNotification(basePayload, { variant: 'prompt' });
       }
     }
 
@@ -539,11 +550,14 @@ export default function GeofenceMonitor() {
         } else {
           await endShift(user.uid);
         }
-        if (shouldNotify) {
-          void showGeofenceNotification(basePayload, { variant: 'auto_result' });
+      }
+
+      if (shouldNotify && user?.uid && (didAutoHandle || result.promptPayload)) {
+        const decision = await decideGeofenceNotification(user.uid, transition);
+        if (decision.show) {
+          const variant = didAutoHandle ? 'auto_result' : 'prompt';
+          void showGeofenceNotification(basePayload, { variant });
         }
-      } else if (shouldNotify) {
-        void showGeofenceNotification(basePayload, { variant: 'prompt' });
       }
     }
 

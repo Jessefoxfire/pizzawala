@@ -1,20 +1,18 @@
 import { Alert, Vibration } from 'react-native';
 import {
-  addDoc,
   collection,
   doc,
-  getDoc,
   getDocs,
   getFirestore,
   limit,
   query,
   serverTimestamp,
   setDoc,
-  updateDoc,
   where,
 } from '@react-native-firebase/firestore';
 import type { Geofence } from '../types';
 import type { GeofenceEventSource, GeofenceEventType, GeofencePromptPayload } from './types';
+import { endLiveShiftForUser, startLiveShift } from '../services/shifts';
 import {
   getDeviceId,
   saveLastGeofenceEvent,
@@ -80,6 +78,15 @@ export const processGeofenceEvent = async ({
     location: location ?? null,
   });
 
+  const LAST_STATE_KEY = `geofence_state_${geofence.id}`;
+  const { default: AsyncStorage } = require('@react-native-async-storage/async-storage');
+  const lastState = await AsyncStorage.getItem(LAST_STATE_KEY);
+  if (lastState === transition) {
+    console.log(`[Processor] Deduplicating ${transition} for ${geofence.name} (already in this state)`);
+    return { eventId };
+  }
+  await AsyncStorage.setItem(LAST_STATE_KEY, transition);
+
   const fs = getFirestore();
   try {
     await setDoc(
@@ -99,22 +106,6 @@ export const processGeofenceEvent = async ({
       },
       { merge: true }
     );
-
-    // STATEFUL DEDUPLICATION:
-    // If the last transition for THIS geofence was the SAME as this one,
-    // we should NOT fire notifications or prompts.
-    const LAST_STATE_KEY = `geofence_state_${geofence.id}`;
-    const { default: AsyncStorage } = require('@react-native-async-storage/async-storage');
-    const lastState = await AsyncStorage.getItem(LAST_STATE_KEY);
-    
-    if (lastState === transition) {
-      console.log(`[Processor] Deduplicating ${transition} for ${geofence.name} (already in this state)`);
-      return { eventId };
-    }
-    
-    // Update last known state
-    await AsyncStorage.setItem(LAST_STATE_KEY, transition);
-
   } catch (error) {
     // Keep local debug/notification flow alive even if Firestore is unavailable or rejected.
     console.warn('Failed to persist geofence event:', error);
@@ -193,51 +184,24 @@ export const storePendingPrompt = async (payload: GeofencePromptPayload) => {
 
 export const startShift = async (userId: string, geofenceId: string, geofenceName: string) => {
   try {
-    const fs = getFirestore();
-    const userSnap = await getDoc(doc(fs, 'users', userId));
-    const teamId = userSnap.data()?.teamId != null ? String(userSnap.data()!.teamId) : 'team-1';
-
-    const shiftsRef = collection(fs, 'shifts');
-    const openSnap = await getDocs(
-      query(shiftsRef, where('userId', '==', userId), where('status', '==', 'open'), limit(1))
-    );
-
-    if (!openSnap.empty) {
-      return;
-    }
-
-    await addDoc(shiftsRef, {
+    await startLiveShift({
       userId,
-      teamId,
       geofenceId,
       geofenceName,
-      status: 'open',
-      startAt: serverTimestamp(),
       startedBy: 'geofence',
     });
+    const { onShiftStarted } = require('./notificationPolicy');
+    await onShiftStarted();
   } catch (error) {
     console.warn('Failed to start shift:', error);
   }
 };
 
-export const endShift = async (userId: string, endTime?: Date) => {
+export const endShift = async (userId: string, _endTime?: Date) => {
   try {
-    const fs = getFirestore();
-    const shiftsRef = collection(fs, 'shifts');
-    const openSnap = await getDocs(
-      query(shiftsRef, where('userId', '==', userId), where('status', '==', 'open'), limit(1))
-    );
-
-    if (openSnap.empty) {
-      return;
-    }
-
-    const openShift = openSnap.docs[0];
-    await updateDoc(doc(fs, 'shifts', openShift.id), {
-      status: 'closed',
-      endAt: endTime || serverTimestamp(),
-      endedBy: 'geofence',
-    });
+    await endLiveShiftForUser(userId, 'geofence');
+    const { onShiftEnded } = require('./notificationPolicy');
+    await onShiftEnded();
   } catch (error) {
     console.warn('Failed to end shift:', error);
   }

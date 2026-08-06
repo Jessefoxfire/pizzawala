@@ -1,10 +1,10 @@
 import React from 'react';
 import {
   View,
-  ActivityIndicator,
   StyleSheet,
   Text,
   NativeModules,
+  Image,
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -32,6 +32,8 @@ import PresenceMonitor from '../components/PresenceMonitor';
 import LocationMonitor from '../components/LocationMonitor';
 import { navigationRef } from './navigationRef';
 import { initNativeGeofencing } from '../geofencing/native';
+import { handleGeofenceReminderAction } from '../geofencing/notificationPolicy';
+import { muteGeofenceNotificationsForMs } from '../geofencing/storage';
 import AdminOptionsScreen from '../screens/AdminOptionsScreen';
 import AdminScheduleScreen from '../screens/AdminScheduleScreen';
 import AdminCalendarScreen from '../screens/AdminCalendarScreen';
@@ -40,6 +42,12 @@ import EventsScreen from '../screens/EventsScreen';
 import AdminAvailabilityScreen from '../screens/AdminAvailabilityScreen';
 import AssignShiftsScreen from '../screens/AssignShiftsScreen';
 import ManualShiftEntryScreen from '../screens/ManualShiftEntryScreen';
+import HygieneScreen from '../screens/HygieneScreen';
+import AdminHygieneScreen from '../screens/AdminHygieneScreen';
+import TruckManagementScreen from '../screens/TruckManagementScreen';
+import DepartureChecklistScreen from '../screens/DepartureChecklistScreen';
+import RequiredDocumentsScreen from '../screens/RequiredDocumentsScreen';
+import WorkingHoursScreen from '../screens/WorkingHoursScreen';
 
 import type { Geofence } from '../types';
 import type { GeofencePromptPayload } from '../geofencing/types';
@@ -53,10 +61,10 @@ export type RootStackParamList = {
   ManageUsers: undefined;
   EditProfile: undefined;
   WorksiteFinder: { geofence: Geofence };
-  Chat: { prefillText?: string } | undefined;
+  Chat: { prefillText?: string; dmUserId?: string; eventId?: string; eventTitle?: string } | undefined;
   AwardMedal: undefined;
   HallOfFame: undefined;
-  MySchedule: { prompt?: GeofencePromptPayload } | undefined;
+  MySchedule: { prompt?: GeofencePromptPayload; initialView?: 'calendar' | 'list'; initialDate?: string } | undefined;
   ShiftSetup: undefined;
   GeofenceDebug: undefined;
   AdminOptions: undefined;
@@ -69,6 +77,12 @@ export type RootStackParamList = {
   AdminAvailability: { event?: any };
   AssignShifts: undefined;
   ManualShiftEntry: undefined;
+  Hygiene: undefined;
+  AdminHygiene: undefined;
+  TruckManagement: undefined;
+  DepartureChecklist: undefined;
+  RequiredDocuments: undefined;
+  WorkingHours: { initialDateKey?: string } | undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -82,6 +96,9 @@ import {
   flushPendingNotificationRoutes,
 } from '../notifications/notificationRouting';
 import { displayForegroundRemoteMessage } from '../notifications/displayForegroundRemoteMessage';
+import { setNativeNotificationsEnabled } from '../geofencing/native';
+import OfflineBanner from '../components/OfflineBanner';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 export default function AppNavigator() {
   const auth = useAuth();
@@ -95,12 +112,29 @@ export default function AppNavigator() {
     let tokenUnsub: (() => void) | undefined;
 
     void (async () => {
-      const unsub = await registerPushForCurrentUser();
-      if (cancelled) {
-        unsub();
-        return;
+      try {
+        // Ensure OS-level notifications are enabled for native geofence alerts.
+        await notifee.requestPermission({ alert: true, badge: true, sound: true });
+      } catch (error) {
+        console.warn('[Push] notifee permission request failed:', error);
       }
-      tokenUnsub = unsub;
+
+      try {
+        await setNativeNotificationsEnabled(true);
+      } catch (error) {
+        console.warn('[Push] failed enabling native notifications:', error);
+      }
+
+      try {
+        const unsub = await registerPushForCurrentUser();
+        if (cancelled) {
+          unsub();
+          return;
+        }
+        tokenUnsub = unsub;
+      } catch (error) {
+        console.warn('[Push] register token failed:', error);
+      }
     })();
 
     return () => {
@@ -112,7 +146,30 @@ export default function AppNavigator() {
   React.useEffect(() => {
     void initNativeGeofencing().catch(err => console.error('Init geofence failed:', err));
 
-    const unsubscribeNotifee = notifee.onForegroundEvent(({ type, detail }) => {
+    const unsubscribeNotifee = notifee.onForegroundEvent(async ({ type, detail }) => {
+      if (type === EventType.ACTION_PRESS) {
+        const actionId = detail.pressAction?.id;
+        if (actionId === 'mute_geofence_1h') {
+          await muteGeofenceNotificationsForMs(60 * 60 * 1000);
+          if (detail.notification?.id) {
+            await notifee.cancelNotification(detail.notification.id);
+          }
+          return;
+        }
+        if (actionId === 'keep_geofence_enabled') {
+          if (detail.notification?.id) {
+            await notifee.cancelNotification(detail.notification.id);
+          }
+          return;
+        }
+        if (actionId === 'keep_reminding' || actionId === 'stop_reminders') {
+          await handleGeofenceReminderAction(actionId);
+          if (detail.notification?.id) {
+            await notifee.cancelNotification(detail.notification.id);
+          }
+          return;
+        }
+      }
       const isPress = type === EventType.PRESS || type === EventType.ACTION_PRESS;
       if (isPress && detail.notification?.data) {
         routeNotificationOpen(detail.notification.data as Record<string, unknown>);
@@ -191,7 +248,11 @@ export default function AppNavigator() {
   if (auth.status === 'loading') {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator size="large" color="#F3E6D3" />
+        <Image
+          source={require('../../assets/Pizza Wala Logo.png')}
+          style={styles.loadingLogo}
+          resizeMode="contain"
+        />
         <Text style={styles.loadingText}>
           Loading your dashboard…
         </Text>
@@ -202,18 +263,20 @@ export default function AppNavigator() {
   /* ───────────────────────── NAVIGATION ───────────────────────── */
 
   return (
-    <NavigationContainer
-      ref={navigationRef}
-      onReady={() => {
-        if (auth.status === 'user' || auth.status === 'admin') {
-          flushPendingNotificationRoutes();
-        }
-      }}
-    >
-      <GeofenceMonitor />
-      <PresenceMonitor />
-      <LocationMonitor />
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <View style={styles.appRoot}>
+      <NavigationContainer
+        style={styles.navContainer}
+        ref={navigationRef}
+        onReady={() => {
+          if (auth.status === 'user' || auth.status === 'admin') {
+            flushPendingNotificationRoutes();
+          }
+        }}
+      >
+        <GeofenceMonitor />
+        <PresenceMonitor />
+        <LocationMonitor />
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
         {auth.status === 'signedOut' ? (
           <>
             <Stack.Screen name="Login" component={LoginScreen} />
@@ -249,24 +312,52 @@ export default function AppNavigator() {
             <Stack.Screen name="AdminAvailability" component={AdminAvailabilityScreen} />
             <Stack.Screen name="AssignShifts" component={AssignShiftsScreen} />
             <Stack.Screen name="ManualShiftEntry" component={ManualShiftEntryScreen} />
+            <Stack.Screen name="Hygiene" component={HygieneScreen} />
+            <Stack.Screen name="AdminHygiene" component={AdminHygieneScreen} />
+            <Stack.Screen name="TruckManagement" component={TruckManagementScreen} />
+            <Stack.Screen name="DepartureChecklist" component={DepartureChecklistScreen} />
+            <Stack.Screen name="RequiredDocuments" component={RequiredDocumentsScreen} />
+            <Stack.Screen name="WorkingHours" component={WorkingHoursScreen} />
           </>
         )}
       </Stack.Navigator>
-    </NavigationContainer>
+      </NavigationContainer>
+      <View style={styles.bannerOverlay} pointerEvents="box-none">
+        <OfflineBanner />
+      </View>
+    </View>
   );
 }
 
 /* ───────────────────────── STYLES ───────────────────────── */
 
 const styles = StyleSheet.create({
+  appRoot: {
+    flex: 1,
+    backgroundColor: PIZZA_FIRE.bgTop,
+  },
+  navContainer: {
+    flex: 1,
+  },
+  bannerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 20,
+  },
   loading: {
     flex: 1,
     backgroundColor: '#C9782B',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingLogo: {
+    width: 108,
+    height: 108,
+    marginBottom: 14,
+  },
   loadingText: {
-    marginTop: 12,
     fontSize: 16,
     color: '#F3E6D3',
     fontWeight: '500',

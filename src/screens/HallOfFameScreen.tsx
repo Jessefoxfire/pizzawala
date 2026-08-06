@@ -3,18 +3,17 @@ import {
   View,
   Text,
   StyleSheet,
-    FlatList,
+  FlatList,
   TouchableOpacity,
   ActivityIndicator,
   Image,
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, getFirestore, onSnapshot } from '@react-native-firebase/firestore';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { db } from '../services/firebase';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { Avatars, AvatarKey } from '../../assets/avatars';
+import { resolveAvatarSource } from '../utils/avatar';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'HallOfFame'>;
 
@@ -65,9 +64,10 @@ export default function HallOfFameScreen({ navigation }: Props) {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [awards, setAwards] = useState<AwardRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const fs = getFirestore();
 
   useEffect(() => {
-    const unsubUsers = onSnapshot(collection(db, 'users'), snap => {
+    const unsubUsers = onSnapshot(collection(fs, 'users'), snap => {
       if (!snap || !snap.docs) {
         setUsers([]);
         setLoading(false);
@@ -81,7 +81,7 @@ export default function HallOfFameScreen({ navigation }: Props) {
       setLoading(false);
     });
 
-    const unsubAwards = onSnapshot(collection(db, 'awards'), snap => {
+    const unsubAwards = onSnapshot(collection(fs, 'awards'), snap => {
       if (!snap || !snap.docs || snap.empty) {
         setAwards([]);
         return;
@@ -97,7 +97,7 @@ export default function HallOfFameScreen({ navigation }: Props) {
       unsubUsers();
       unsubAwards();
     };
-  }, []);
+  }, [fs]);
 
   const leaderboard = useMemo(() => {
     const countsByUser: Record<string, Record<AwardType, number>> = {};
@@ -138,7 +138,7 @@ export default function HallOfFameScreen({ navigation }: Props) {
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Image 
-            source={Avatars[(item.avatarUrl as AvatarKey) || 'man-1']} 
+            source={resolveAvatarSource(item.avatarUrl, item.customAvatarUrl)}
             style={styles.avatar} 
           />
           <View style={{ flex: 1 }}>

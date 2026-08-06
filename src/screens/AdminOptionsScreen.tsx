@@ -10,9 +10,15 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  ScrollView,
+  Image,
+  ImageSourcePropType,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import PizzaFireBackground from '../components/PizzaFireBackground';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { useOffline } from '../context/OfflineContext';
 import {
   collection,
   doc,
@@ -28,7 +34,15 @@ import { getNativeNotificationsEnabled, setNativeNotificationsEnabled } from '..
 
  type Props = NativeStackScreenProps<RootStackParamList, 'AdminOptions'>;
 
+type AdminTile = {
+  label: string;
+  icon: ImageSourcePropType;
+  onPress: () => void;
+};
+
 export default function AdminOptionsScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
+  const { syncBannerVisible } = useOffline();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
   const [adminEmail, setAdminEmail] = useState('');
   const [grantAdmin, setGrantAdmin] = useState(true);
@@ -102,75 +116,101 @@ export default function AdminOptionsScreen({ navigation }: Props) {
     ).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [users, searchQuery]);
 
+  const adminTiles: AdminTile[] = [
+    {
+      label: 'Shift Calculator',
+      icon: require('../../assets/Icons/Shift.png'),
+      onPress: () => navigation.navigate('WorksiteOverview'),
+    },
+    {
+      label: 'Create Schedule',
+      icon: require('../../assets/Icons/Schedule.png'),
+      onPress: () => navigation.navigate('AdminSchedule'),
+    },
+    {
+      label: 'Calendar',
+      icon: require('../../assets/Icons/Schedule.png'),
+      onPress: () => navigation.navigate('AdminCalendar'),
+    },
+    {
+      label: 'Worksites',
+      icon: require('../../assets/Icons/Navigate.png'),
+      onPress: () => navigation.navigate('Geofences'),
+    },
+    {
+      label: 'Users',
+      icon: require('../../assets/Icons/Profile.png'),
+      onPress: () => navigation.navigate('ManageUsers'),
+    },
+    {
+      label: 'Admin Roles',
+      icon: require('../../assets/Icons/Admin.png'),
+      onPress: () => setAdminModalVisible(true),
+    },
+    {
+      label: 'Availability',
+      icon: require('../../assets/Icons/Events.png'),
+      onPress: () => navigation.navigate('AdminAvailability'),
+    },
+    {
+      label: 'Hygiene',
+      icon: require('../../assets/Icons/Medal.png'),
+      onPress: () => navigation.navigate('Hygiene'),
+    },
+    {
+      label: 'Trucks',
+      icon: require('../../assets/Icons/Navigate.png'),
+      onPress: () => navigation.navigate('TruckManagement'),
+    },
+    {
+      label: 'Departure',
+      icon: require('../../assets/Icons/Shift.png'),
+      onPress: () => navigation.navigate('DepartureChecklist'),
+    },
+    {
+      label: 'Diagnostics',
+      icon: require('../../assets/Icons/Admin.png'),
+      onPress: () => navigation.navigate('GeofenceDebug'),
+    },
+  ];
+
+  const headerTopInset = syncBannerVisible ? insets.top + 18 : 8;
+
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+    <View style={styles.screen}>
+      <PizzaFireBackground />
+      <SafeAreaView style={styles.safe} edges={['left', 'right']}>
+      <View style={[styles.header, { paddingTop: headerTopInset }]}>
+        <TouchableOpacity onPress={() => navigation.goBack()} hitSlop={8}>
           <Text style={styles.back}>‹ Home</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Admin Options</Text>
-        <View style={{ width: 60 }} />
-      </View>
-
-      <View style={styles.content}>
         <TouchableOpacity
-          style={[styles.button, styles.buttonShift]}
-          onPress={() => navigation.navigate('WorksiteOverview')}
+          style={styles.closeBtn}
+          onPress={() => navigation.goBack()}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Close admin options"
         >
-          <Text style={styles.buttonText}>Shift Calculator</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonCreate]}
-          onPress={() => navigation.navigate('AdminSchedule')}
-        >
-          <Text style={styles.buttonText}>Create Schedule</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonCalendar]}
-          onPress={() => navigation.navigate('AdminCalendar')}
-        >
-          <Text style={styles.buttonText}>Schedule Overview (Calendar)</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonWorksites]}
-          onPress={() => navigation.navigate('Geofences')}
-        >
-          <Text style={styles.buttonText}>Manage Worksites</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonUsers]}
-          onPress={() => navigation.navigate('ManageUsers')}
-        >
-          <Text style={styles.buttonText}>Manage Users</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonAdminRoles]}
-          onPress={() => setAdminModalVisible(true)}
-        >
-          <Text style={styles.buttonText}>Manage Admin Roles</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, styles.buttonEvents]}
-          onPress={() => navigation.navigate('AdminAvailability')}
-        >
-          <Text style={styles.buttonText}>Manage Availability & Staff</Text>
-        </TouchableOpacity>
-
-        <View style={{ height: 12 }} />
-        
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          onPress={() => navigation.navigate('GeofenceDebug')}
-        >
-          <Text style={styles.secondaryButtonText}>System Diagnostics (Debug)</Text>
+          <Text style={styles.closeBtnText}>✕</Text>
         </TouchableOpacity>
       </View>
+
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.tileGrid}>
+          {adminTiles.map(tile => (
+            <TouchableOpacity
+              key={tile.label}
+              style={styles.menuTile}
+              onPress={tile.onPress}
+              activeOpacity={0.8}
+            >
+              <Image source={tile.icon} style={styles.menuIcon} resizeMode="contain" />
+              <Text style={styles.menuLabel}>{tile.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </ScrollView>
 
       <Modal visible={adminModalVisible} transparent animationType="fade">
         <View style={styles.modalBg}>
@@ -261,78 +301,77 @@ export default function AdminOptionsScreen({ navigation }: Props) {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: PIZZA_FIRE.bgTop,
+  },
   safe: {
     flex: 1,
-    backgroundColor: '#2A211B',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    padding: 16,
-    backgroundColor: '#1E1813',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: 'rgba(255, 159, 28, 0.18)',
   },
-  back: { fontSize: 18, fontWeight: 'bold', color: '#EBDCCB' },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#F6EDE2' },
+  back: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.gold, minWidth: 60 },
+  title: { flex: 1, fontSize: 20, fontWeight: '800', color: PIZZA_FIRE.textPrimary, textAlign: 'center' },
+  closeBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 159, 28, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 159, 28, 0.28)',
+  },
+  closeBtnText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: PIZZA_FIRE.gold,
+    lineHeight: 20,
+  },
   content: {
     padding: 16,
+    paddingBottom: 32,
+  },
+  tileGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
     gap: 12,
   },
-  button: {
-    paddingVertical: 14,
-    borderRadius: 12,
+  menuTile: {
+    width: '30%',
+    minWidth: 96,
     alignItems: 'center',
-  },
-  /** Warm palette: gold → orange → deep browns → bronze → sienna → coffee */
-  buttonShift: { backgroundColor: '#D9A441' },
-  buttonCreate: { backgroundColor: '#C9782B' },
-  buttonCalendar: { backgroundColor: '#3A2D24' },
-  buttonWorksites: { backgroundColor: '#8B6914' },
-  buttonUsers: { backgroundColor: '#A0522D' },
-  buttonAdminRoles: { backgroundColor: '#6D4C41' },
-  buttonEvents: { backgroundColor: '#4E342E' },
-  buttonText: {
-    color: '#FFF',
-    fontWeight: '700',
-  },
-  preferenceCard: {
-    backgroundColor: '#1E1813',
-    padding: 16,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 159, 28, 0.14)',
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: 'rgba(255, 159, 28, 0.28)',
+  },
+  menuIcon: {
+    width: 34,
+    height: 34,
     marginBottom: 8,
   },
-  prefRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  prefTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#F6EDE2',
-  },
-  prefSub: {
-    fontSize: 13,
-    color: '#C8B29A',
-    marginTop: 2,
-  },
-  secondaryButton: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  secondaryButtonText: {
-    color: '#D9A441',
-    fontWeight: '600',
-    fontSize: 14,
-    textDecorationLine: 'underline',
+  menuLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: PIZZA_FIRE.textPrimary,
+    textAlign: 'center',
+    paddingHorizontal: 4,
   },
   modalBg: {
     flex: 1,

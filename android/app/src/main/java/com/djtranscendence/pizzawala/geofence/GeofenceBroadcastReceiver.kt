@@ -77,7 +77,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
       // 1. IMMEDIATE NATIVE HANDLING
       if (transition == "enter") {
         GeofenceExitWorker.cancel(context, geofenceId)
-        GeofenceNotifier.notifyTransition(context, geofenceId, transition)
+        if (!GeofencePrefs.isSuppressEnterWhileOnShift(context)) {
+          GeofenceNotifier.notifyTransition(context, geofenceId, transition)
+        }
       } else if (transition == "exit") {
         GeofenceExitWorker.schedule(context, geofenceId, ts)
       }

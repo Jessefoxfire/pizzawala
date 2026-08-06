@@ -26,6 +26,7 @@ import {
   getFirestore,
   onSnapshot,
   query,
+  setDoc,
   serverTimestamp,
   updateDoc,
   writeBatch,
@@ -54,8 +55,13 @@ export default function GeofencesScreen({ navigation }: Props) {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [campsiteModalVisible, setCampsiteModalVisible] = useState(false);
+  const [campsiteName, setCampsiteName] = useState('Campsite');
+  const [campsiteCenter, setCampsiteCenter] = useState<{ lat: number; lng: number } | null>(null);
+  const [campsiteLocating, setCampsiteLocating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savingCampsite, setSavingCampsite] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
@@ -606,6 +612,79 @@ export default function GeofencesScreen({ navigation }: Props) {
     }
   };
 
+  const openCampsiteModal = () => {
+    setCampsiteName('Campsite');
+    setCampsiteCenter(null);
+    setCampsiteModalVisible(true);
+  };
+
+  const resetCampsiteModal = () => {
+    setCampsiteModalVisible(false);
+    setCampsiteName('Campsite');
+    setCampsiteCenter(null);
+    setCampsiteLocating(false);
+  };
+
+  const useCurrentLocationForCampsite = async () => {
+    if (campsiteLocating) return;
+    const granted = await ensureLocationPermission();
+    if (!granted) {
+      Alert.alert('Permission denied', 'Location access is required.');
+      return;
+    }
+    setCampsiteLocating(true);
+    try {
+      const coords = await new Promise<{ latitude: number; longitude: number }>((resolve, reject) => {
+        Geolocation.getCurrentPosition(
+          position =>
+            resolve({
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+            }),
+          reject,
+          {
+            enableHighAccuracy: true,
+            timeout: 20000,
+            maximumAge: 0,
+          }
+        );
+      });
+      setCampsiteCenter({ lat: coords.latitude, lng: coords.longitude });
+    } catch (err: any) {
+      Alert.alert('Location Error', err?.message || 'Unable to get current location.');
+    } finally {
+      setCampsiteLocating(false);
+    }
+  };
+
+  const saveCampsiteLocation = async () => {
+    if (savingCampsite) return;
+    const trimmedName = campsiteName.trim();
+    if (!trimmedName || !campsiteCenter) {
+      Alert.alert('Notice', 'Campsite name and location are required.');
+      return;
+    }
+    setSavingCampsite(true);
+    try {
+      await setDoc(
+        doc(getFirestore(), 'appConfig', 'campsite'),
+        {
+          name: trimmedName,
+          center: campsiteCenter,
+          updatedAt: serverTimestamp(),
+          updatedBy: user?.uid || null,
+        },
+        { merge: true }
+      );
+      Alert.alert('Success', 'Campsite location saved.');
+      resetCampsiteModal();
+    } catch (err: any) {
+      Alert.alert('Notice', `Failed to save campsite: ${err?.message || err}`);
+    } finally {
+      setSavingCampsite(false);
+    }
+  };
+
   /* ───────────────────────── list item ───────────────────────── */
 
   const renderItem = ({ item }: { item: any }) => {
@@ -699,6 +778,17 @@ export default function GeofencesScreen({ navigation }: Props) {
       )}
 
       <View style={styles.footer}>
+        <TouchableOpacity
+          style={[styles.addBtn, { marginBottom: 10, backgroundColor: '#6D4C41' }]}
+          onPress={openCampsiteModal}
+          disabled={savingCampsite}
+        >
+          {savingCampsite ? (
+            <ActivityIndicator color="#FFF" />
+          ) : (
+            <Text style={styles.addText}>+ Add Campsite Location</Text>
+          )}
+        </TouchableOpacity>
         {selectedIds.size > 0 && (
           <TouchableOpacity style={styles.deleteSelectedBtn} onPress={deleteSelected}>
             <Text style={styles.deleteSelectedText}>
@@ -786,6 +876,70 @@ export default function GeofencesScreen({ navigation }: Props) {
                   <Text style={styles.btnText}>
                     {editingId ? 'Update Worksite' : 'Save Worksite'}
                   </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      <Modal visible={campsiteModalVisible} transparent animationType="slide">
+        <View style={styles.modalBg}>
+          <View style={styles.modal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>New Campsite</Text>
+              <TouchableOpacity onPress={resetCampsiteModal} style={styles.closeBtn}>
+                <Text style={styles.closeText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Campsite Name</Text>
+            <TextInput
+              style={styles.input}
+              value={campsiteName}
+              onChangeText={setCampsiteName}
+              placeholder="e.g. Base Camp"
+            />
+
+            <View style={styles.locBtns}>
+              <TouchableOpacity style={styles.locBtn} onPress={useCurrentLocationForCampsite}>
+                {campsiteLocating ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.btnText}>Use Current Location</Text>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.locBtn, { backgroundColor: '#3D352E' }]}
+                onPress={() => {
+                  setCampsiteModalVisible(false);
+                  navigation.navigate('MapPicker', {
+                    onLocationSelected: (lat, lng) => {
+                      setCampsiteCenter({ lat, lng });
+                      setCampsiteModalVisible(true);
+                    },
+                  });
+                }}
+              >
+                <Text style={styles.btnText}>Pick on Map</Text>
+              </TouchableOpacity>
+            </View>
+
+            {campsiteCenter && <Text style={styles.ok}>✓ Location set</Text>}
+
+            <View style={styles.actions}>
+              <TouchableOpacity onPress={resetCampsiteModal}>
+                <Text>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.saveBtn}
+                onPress={saveCampsiteLocation}
+                disabled={savingCampsite}
+              >
+                {savingCampsite ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.btnText}>Save Campsite</Text>
                 )}
               </TouchableOpacity>
             </View>

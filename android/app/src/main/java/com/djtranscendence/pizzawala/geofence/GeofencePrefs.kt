@@ -24,6 +24,7 @@ object GeofencePrefs {
   private const val KEY_NATIVE_HISTORY = "native_history"
   private const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
   private const val KEY_AUTO_SHIFT_ENABLED = "auto_shift_enabled"
+  private const val KEY_SUPPRESS_ENTER_WHILE_ON_SHIFT = "suppress_enter_while_on_shift"
 
   fun setAutoShiftEnabled(context: Context, enabled: Boolean) {
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -47,6 +48,18 @@ object GeofencePrefs {
   fun isNotificationsEnabled(context: Context): Boolean {
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .getBoolean(KEY_NOTIFICATIONS_ENABLED, true) // Default to true
+  }
+
+  fun setSuppressEnterWhileOnShift(context: Context, suppressed: Boolean) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_SUPPRESS_ENTER_WHILE_ON_SHIFT, suppressed)
+      .apply()
+  }
+
+  fun isSuppressEnterWhileOnShift(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_SUPPRESS_ENTER_WHILE_ON_SHIFT, false)
   }
 
   fun appendNativeHistory(context: Context, log: String) {

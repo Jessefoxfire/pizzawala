@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Geolocation from 'react-native-geolocation-service';
-import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { doc, getFirestore, onSnapshot, serverTimestamp, updateDoc } from '@react-native-firebase/firestore';
 import nativeAuth from '@react-native-firebase/auth';
 import { ensureLocationPermission } from '../utils/geo';
 
@@ -10,13 +9,14 @@ type Coordinates = { lat: number; lng: number };
 export default function LocationMonitor() {
   const watchIdRef = useRef<number | null>(null);
   const [isOnShift, setIsOnShift] = useState(false);
+  const fs = getFirestore();
 
   useEffect(() => {
     const user = nativeAuth().currentUser;
     if (!user) return;
 
     // Listen to shift status to adjust power usage
-    const unsubProfile = onSnapshot(doc(db, 'users', user.uid), snap => {
+    const unsubProfile = onSnapshot(doc(fs, 'users', user.uid), snap => {
       if (!snap || !snap.exists()) return;
       const data = snap.data();
       const hasShift = !!data?.currentShift;
@@ -26,7 +26,7 @@ export default function LocationMonitor() {
     });
 
     return () => unsubProfile();
-  }, [isOnShift]);
+  }, [fs, isOnShift]);
 
   useEffect(() => {
     const stopWatch = () => {
@@ -67,9 +67,9 @@ export default function LocationMonitor() {
             lng: pos.coords.longitude,
           };
 
-          updateDoc(doc(db, 'users', user.uid), {
+          updateDoc(doc(fs, 'users', user.uid), {
             lastLocation: nextPosition,
-            lastLocationUpdate: new Date(),
+            lastLocationUpdate: serverTimestamp(),
           }).catch(() => undefined);
         },
         error => {
@@ -80,7 +80,7 @@ export default function LocationMonitor() {
     });
 
     return () => unsub();
-  }, [isOnShift]);
+  }, [fs, isOnShift]);
 
 
   return null;

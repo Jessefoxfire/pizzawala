@@ -101,7 +101,13 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
         setLoadingAvail(false);
         return;
       }
-      const items = snap.docs.map(d => d.data() as Availability);
+      const items = snap.docs.map(d => {
+        const data = d.data() as Availability;
+        return {
+          ...data,
+          userId: data.userId || d.id,
+        };
+      });
       setAvailability(items);
       setLoadingAvail(false);
     });
@@ -183,11 +189,11 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
           </View>
 
           {loadingAvail ? (
-            <ActivityIndicator size="medium" color="#C9782B" style={{ marginTop: 20 }} />
+            <ActivityIndicator size="small" color="#C9782B" style={{ marginTop: 20 }} />
           ) : (
             <FlatList
               data={availability}
-              keyExtractor={item => item.userId}
+              keyExtractor={(item, index) => item.userId || `availability-${index}`}
               renderItem={renderAvail}
               contentContainerStyle={styles.list}
               ListEmptyComponent={

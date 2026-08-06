@@ -11,8 +11,9 @@ import {
   ToastAndroid,
   Image,
   ScrollView,
+  KeyboardAvoidingView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   addDoc,
   collection,
@@ -56,6 +57,7 @@ const awardOptions: { type: AwardType; label: string; icon: string }[] = [
 ];
 
 export default function AwardMedalScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [selectedType, setSelectedType] = useState<AwardType>('medal');
@@ -202,99 +204,112 @@ export default function AwardMedalScreen({ navigation }: Props) {
           <ActivityIndicator size="large" color="#F3E6D3" />
         </View>
       ) : (
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <View style={styles.content}>
-          {latestAward && (
-            <TouchableOpacity 
-              style={styles.latestBanner} 
-              onPress={() => navigation.navigate('HallOfFame')}
-              activeOpacity={0.9}
-            >
-              <View style={styles.bannerLeft}>
-                <Text style={styles.bannerPre}>Current Star</Text>
-                <Text style={styles.bannerName}>{latestAward.toUserName || 'Team Star'}</Text>
-                <Text style={styles.bannerLabel}>Enter Hall of Fame ›</Text>
-              </View>
-              <View style={styles.bannerRight}>
-                <Text style={styles.bannerIcon}>⭐</Text>
-              </View>
-            </TouchableOpacity>
-          )}
-
-          <Text style={styles.sectionTitle}>Select team member</Text>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 12}
+      >
+        <View style={styles.mainArea}>
           <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.userRow}
+            style={styles.scroll}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: 210 + insets.bottom }]}
+            keyboardShouldPersistTaps="handled"
           >
-            {userList.map(item => {
-              const label = item.name || item.email || 'Teammate';
-              const isSelected = item.id === selectedUserId;
-              const avatarSrc = resolveAvatarSource(item.avatarUrl, item.customAvatarUrl);
-              return (
+            <View style={styles.content}>
+              {latestAward && (
                 <TouchableOpacity
-                  key={item.id}
-                  style={[styles.userCard, isSelected && styles.userCardActive]}
-                  onPress={() => setSelectedUserId(item.id)}
+                  style={styles.latestBanner}
+                  onPress={() => navigation.navigate('HallOfFame')}
+                  activeOpacity={0.9}
                 >
-                  <View style={styles.avatarContainer}>
-                    <Image source={avatarSrc} style={styles.userAvatar} />
-                    {isSelected && (
-                      <View style={styles.selectedBadge}>
-                        <Text style={styles.checkIcon}>✓</Text>
-                      </View>
-                    )}
+                  <View style={styles.bannerLeft}>
+                    <Text style={styles.bannerPre}>Current Star</Text>
+                    <Text style={styles.bannerName}>{latestAward.toUserName || 'Team Star'}</Text>
+                    <Text style={styles.bannerLabel}>Enter Hall of Fame ›</Text>
                   </View>
-                  <Text
-                    style={[styles.userLabel, isSelected && styles.userLabelActive]}
-                    numberOfLines={1}
-                  >
-                    {label.split(' ')[0]}
-                  </Text>
+                  <View style={styles.bannerRight}>
+                    <Text style={styles.bannerIcon}>⭐</Text>
+                  </View>
                 </TouchableOpacity>
-              );
-            })}
+              )}
+
+              <Text style={styles.sectionTitle}>Select team member</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.userRow}
+              >
+                {userList.map(item => {
+                  const label = item.name || item.email || 'Teammate';
+                  const isSelected = item.id === selectedUserId;
+                  const avatarSrc = resolveAvatarSource(item.avatarUrl, item.customAvatarUrl);
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[styles.userCard, isSelected && styles.userCardActive]}
+                      onPress={() => setSelectedUserId(item.id)}
+                    >
+                      <View style={styles.avatarContainer}>
+                        <Image source={avatarSrc} style={styles.userAvatar} />
+                        {isSelected && (
+                          <View style={styles.selectedBadge}>
+                            <Text style={styles.checkIcon}>✓</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text
+                        style={[styles.userLabel, isSelected && styles.userLabelActive]}
+                        numberOfLines={1}
+                      >
+                        {label.split(' ')[0]}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              <Text style={styles.sectionTitle}>Choose award</Text>
+              <View style={styles.awardRow}>
+                {awardOptions.map(option => {
+                  const isSelected = option.type === selectedType;
+                  return (
+                    <TouchableOpacity
+                      key={option.type}
+                      style={[styles.awardOption, isSelected && styles.awardOptionActive]}
+                      onPress={() => setSelectedType(option.type)}
+                    >
+                      <Text style={styles.awardIcon}>{option.icon}</Text>
+                      <Text style={styles.awardLabel}>{option.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
           </ScrollView>
 
-          <Text style={styles.sectionTitle}>Choose award</Text>
-          <View style={styles.awardRow}>
-            {awardOptions.map(option => {
-              const isSelected = option.type === selectedType;
-              return (
-                <TouchableOpacity
-                  key={option.type}
-                  style={[styles.awardOption, isSelected && styles.awardOptionActive]}
-                  onPress={() => setSelectedType(option.type)}
-                >
-                  <Text style={styles.awardIcon}>{option.icon}</Text>
-                  <Text style={styles.awardLabel}>{option.label}</Text>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={[styles.composer, { paddingBottom: 12 + insets.bottom }]}>
+            <Text style={styles.sectionTitle}>Why are you awarding it?</Text>
+            <TextInput
+              style={styles.reasonInput}
+              placeholder="Share the good deed"
+              value={reason}
+              onChangeText={setReason}
+              multiline
+            />
+            <TouchableOpacity
+              style={[styles.awardButton, saving && styles.awardButtonDisabled]}
+              onPress={handleAward}
+              disabled={saving}
+            >
+              {saving ? (
+                <ActivityIndicator color="#2A211B" />
+              ) : (
+                <Text style={styles.awardButtonText}>Send Award</Text>
+              )}
+            </TouchableOpacity>
           </View>
-
-          <Text style={styles.sectionTitle}>Why are you awarding it?</Text>
-          <TextInput
-            style={styles.reasonInput}
-            placeholder="Share the good deed"
-            value={reason}
-            onChangeText={setReason}
-            multiline
-          />
-
-          <TouchableOpacity
-            style={[styles.awardButton, saving && styles.awardButtonDisabled]}
-            onPress={handleAward}
-            disabled={saving}
-          >
-            {saving ? (
-              <ActivityIndicator color="#2A211B" />
-            ) : (
-              <Text style={styles.awardButtonText}>Send Award</Text>
-            )}
-          </TouchableOpacity>
         </View>
-      </ScrollView>
+      </KeyboardAvoidingView>
       )}
     </SafeAreaView>
   );
@@ -316,6 +331,7 @@ const styles = StyleSheet.create({
   back: { fontSize: 18, fontWeight: 'bold', color: '#EBDCCB' },
   title: { fontSize: 20, fontWeight: 'bold', color: '#F6EDE2' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  mainArea: { flex: 1 },
   scroll: { flex: 1 },
   scrollContent: { flexGrow: 1 },
   content: { padding: 16, gap: 16 },
@@ -427,6 +443,17 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   awardButtonText: { color: '#2A211B', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
+  composer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    backgroundColor: 'rgba(30, 24, 19, 0.97)',
+    borderTopWidth: 1,
+    borderTopColor: '#3A2D24',
+  },
   latestBanner: {
     backgroundColor: '#C9782B',
     borderRadius: 20,

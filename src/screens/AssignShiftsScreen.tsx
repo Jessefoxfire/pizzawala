@@ -11,8 +11,18 @@ import {
   Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { collection, addDoc, onSnapshot, query, orderBy, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  orderBy,
+  doc,
+  serverTimestamp,
+  writeBatch,
+  getFirestore,
+} from '@react-native-firebase/firestore';
+import { auth } from '../services/firebase';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { Icons } from '../components/Icons';
@@ -22,6 +32,7 @@ import { resolveAvatarSource } from '../utils/avatar';
 type Props = NativeStackScreenProps<RootStackParamList, 'AssignShifts'>;
 
 export default function AssignShiftsScreen({ navigation }: Props) {
+  const fs = getFirestore();
   const [users, setUsers] = useState<any[]>([]);
   const [worksites, setWorksites] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,7 +46,7 @@ export default function AssignShiftsScreen({ navigation }: Props) {
   const [endTime, setEndTime] = useState('17:00');
 
   useEffect(() => {
-    const unsubUsers = onSnapshot(query(collection(db, 'users'), orderBy('name', 'asc')), snap => {
+    const unsubUsers = onSnapshot(query(collection(fs, 'users'), orderBy('name', 'asc')), snap => {
       if (!snap || !snap.docs || snap.empty) {
         setUsers([]);
         return;
@@ -43,7 +54,7 @@ export default function AssignShiftsScreen({ navigation }: Props) {
       setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    const unsubWorksites = onSnapshot(query(collection(db, 'geofences'), orderBy('name', 'asc')), snap => {
+    const unsubWorksites = onSnapshot(query(collection(fs, 'geofences'), orderBy('name', 'asc')), snap => {
       if (!snap || !snap.docs || snap.empty) {
         setWorksites([]);
         setLoading(false);
@@ -57,7 +68,7 @@ export default function AssignShiftsScreen({ navigation }: Props) {
       unsubUsers();
       unsubWorksites();
     };
-  }, []);
+  }, [fs]);
 
   const onDayPress = (day: any) => {
     const dateStr = day.dateString;
@@ -77,11 +88,11 @@ export default function AssignShiftsScreen({ navigation }: Props) {
 
   const notifyUser = async (userId: string, title: string, body: string) => {
     try {
-      await addDoc(collection(db, `users/${userId}/notifications`), {
+      await addDoc(collection(fs, `users/${userId}/notifications`), {
         title,
         body,
         createdAt: serverTimestamp(),
-        nav: { screen: 'MySchedule' }
+        nav: { screen: 'MySchedule', view: 'calendar' }
       });
     } catch (e) {
       console.warn('Notification failed:', e);
@@ -97,9 +108,9 @@ export default function AssignShiftsScreen({ navigation }: Props) {
 
     setSaving(true);
     try {
-      const batch = writeBatch(db);
+      const batch = writeBatch(fs);
       dateKeys.forEach(d => {
-        const newDocRef = doc(collection(db, 'shifts'));
+        const newDocRef = doc(collection(fs, 'shifts'));
         batch.set(newDocRef, {
           userId: selectedUser.id,
           userName: selectedUser.name || selectedUser.email,
@@ -124,7 +135,7 @@ export default function AssignShiftsScreen({ navigation }: Props) {
       await notifyUser(
         selectedUser.id,
         'New Shifts Assigned! 🍕',
-        `You've been assigned to ${selectedWorksite.name} for ${dateRange} (${startTime} - ${endTime}).`
+        `You've been assigned to ${selectedWorksite.name} for ${dateRange} (${startTime} - ${endTime}). Click here to view your schedule.`
       );
 
       Alert.alert('Success', `Assigned ${dateKeys.length} shifts to ${selectedUser.name}.`);

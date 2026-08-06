@@ -1,17 +1,17 @@
 import { useEffect, useState } from 'react';
-import { doc, updateDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { doc, getFirestore, onSnapshot, serverTimestamp, updateDoc } from '@react-native-firebase/firestore';
 import nativeAuth from '@react-native-firebase/auth';
 
 export default function PresenceMonitor() {
   const [isOnShift, setIsOnShift] = useState(false);
+  const fs = getFirestore();
 
 
   useEffect(() => {
     const user = nativeAuth().currentUser;
     if (!user) return;
 
-    const unsubProfile = onSnapshot(doc(db, 'users', user.uid), snap => {
+    const unsubProfile = onSnapshot(doc(fs, 'users', user.uid), snap => {
       if (!snap || !snap.exists()) return;
       const data = snap.data();
       const hasShift = !!data?.currentShift;
@@ -21,7 +21,7 @@ export default function PresenceMonitor() {
     });
 
     return () => unsubProfile();
-  }, [isOnShift]);
+  }, [fs, isOnShift]);
 
   useEffect(() => {
     const unsubAuth = nativeAuth().onAuthStateChanged((user) => {
@@ -29,7 +29,7 @@ export default function PresenceMonitor() {
 
       const updatePresence = async () => {
         try {
-          await updateDoc(doc(db, 'users', user.uid), {
+          await updateDoc(doc(fs, 'users', user.uid), {
             lastSeenAt: serverTimestamp(),
             online: true,
           });
@@ -50,7 +50,7 @@ export default function PresenceMonitor() {
     });
 
     return () => unsubAuth();
-  }, [isOnShift]);
+  }, [fs, isOnShift]);
 
   return null;
 }

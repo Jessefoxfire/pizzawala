@@ -58,7 +58,12 @@ function performRoute(data: Record<string, unknown>) {
     case 'personal_notification': {
       const screen = String(data.screen || '');
       if (screen === 'MySchedule') {
-        navigate('MySchedule');
+        const view = data.view === 'calendar' ? 'calendar' : 'list';
+        navigate('MySchedule', { initialView: view });
+      } else if (screen === 'Hygiene') {
+        navigate('Hygiene');
+      } else if (screen === 'AdminHygiene') {
+        navigate('AdminHygiene');
       } else {
         navigate('Home');
       }

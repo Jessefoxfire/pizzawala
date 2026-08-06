@@ -10,9 +10,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { collection, onSnapshot } from 'firebase/firestore';
-import { db } from '../services/firebase';
-import { Avatars, AvatarKey } from '../../assets/avatars';
+import { collection, getFirestore, onSnapshot } from '@react-native-firebase/firestore';
+import { resolveAvatarSource } from '../utils/avatar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 
@@ -23,6 +22,7 @@ type UserRecord = {
   name?: string;
   email?: string;
   avatarUrl?: string;
+  customAvatarUrl?: string;
   lastLocation?: { lat: number; lng: number } | null;
   lastLocationUpdate?: any;
 };
@@ -31,11 +31,12 @@ export default function TeamMapScreen({ navigation, route }: Props) {
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const mapRef = useRef<MapView>(null);
+  const fs = getFirestore();
   
   const focusUserId = route.params?.focusUserId;
 
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'users'), snap => {
+    const unsub = onSnapshot(collection(fs, 'users'), snap => {
       if (!snap || !snap.docs) {
         setUsers([]);
         setLoading(false);
@@ -49,7 +50,7 @@ export default function TeamMapScreen({ navigation, route }: Props) {
       setLoading(false);
     });
     return () => unsub();
-  }, []);
+  }, [fs]);
 
   const activeUsers = useMemo(() => {
     return users.filter(u => {
@@ -111,7 +112,7 @@ export default function TeamMapScreen({ navigation, route }: Props) {
               >
                 <View style={styles.markerContainer}>
                   <Image
-                    source={Avatars[(user.avatarUrl as AvatarKey) || 'pizzaMaker']}
+                    source={resolveAvatarSource(user.avatarUrl, user.customAvatarUrl)}
                     style={styles.markerAvatar}
                   />
                   <View style={styles.markerArrow} />

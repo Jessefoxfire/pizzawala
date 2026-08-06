@@ -15,6 +15,7 @@ const { GeofenceModule } = NativeModules as {
     setNotificationsEnabled?: (enabled: boolean) => Promise<boolean>;
     getNotificationsEnabled?: () => Promise<boolean>;
     setAutoShiftEnabled?: (enabled: boolean) => void;
+    setSuppressEnterWhileOnShift?: (suppressed: boolean) => void;
   };
 };
 
@@ -140,6 +141,12 @@ export const getNativeNotificationsEnabled = async () => {
 export const setNativeAutoShiftEnabled = (enabled: boolean) => {
   if (GeofenceModule?.setAutoShiftEnabled) {
     GeofenceModule.setAutoShiftEnabled(enabled);
+  }
+};
+
+export const setNativeSuppressEnterNotifications = async (suppressed: boolean) => {
+  if (GeofenceModule?.setSuppressEnterWhileOnShift) {
+    GeofenceModule.setSuppressEnterWhileOnShift(suppressed);
   }
 };
 

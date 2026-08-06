@@ -12,8 +12,16 @@ const LAST_USER_NAME_KEY = 'geofence_last_user_name';
 const LAST_EVENT_DEBUG_KEY = 'geofence_last_event_debug';
 const PROMPT_ACTION_STATUS_PREFIX = 'geofence_prompt_status_';
 const AUTO_SHIFT_ENABLED_KEY = 'geofence_auto_shift_enabled';
+const SHIFT_SETUP_INTRO_SEEN_KEY = 'shift_setup_intro_seen';
 const TRACKING_ACTIVE_KEY = 'geofence_tracking_active';
 const SHIFT_START_TIME_KEY = 'geofence_shift_start_time';
+const SUPPRESS_WHILE_ON_SHIFT_KEY = 'geofence_suppress_while_on_shift';
+const REMINDERS_STOPPED_KEY = 'geofence_reminders_stopped';
+const GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY = 'geofence_notifications_muted_until';
+const GEOFENCE_NOTIFICATION_HISTORY_KEY = 'geofence_notification_history';
+const GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY = 'geofence_notification_last_mute_offer';
+const GEOFENCE_SPAM_WINDOW_MS = 30 * 60 * 1000;
+const GEOFENCE_SPAM_THRESHOLD = 4;
 
 export const setAutoShiftEnabled = async (enabled: boolean): Promise<void> => {
   await AsyncStorage.setItem(AUTO_SHIFT_ENABLED_KEY, enabled ? 'true' : 'false');
@@ -28,6 +36,15 @@ export const setAutoShiftEnabled = async (enabled: boolean): Promise<void> => {
 export const getAutoShiftEnabled = async (): Promise<boolean> => {
   const raw = await AsyncStorage.getItem(AUTO_SHIFT_ENABLED_KEY);
   return raw === 'true'; // Defaults to false
+};
+
+export const getShiftSetupIntroSeen = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(SHIFT_SETUP_INTRO_SEEN_KEY);
+  return raw === 'true';
+};
+
+export const setShiftSetupIntroSeen = async (seen = true): Promise<void> => {
+  await AsyncStorage.setItem(SHIFT_SETUP_INTRO_SEEN_KEY, seen ? 'true' : 'false');
 };
 
 const randomId = () => {
@@ -167,4 +184,75 @@ export const setShiftStartTime = async (time: number | null): Promise<void> => {
 export const getShiftStartTime = async (): Promise<number | null> => {
   const raw = await AsyncStorage.getItem(SHIFT_START_TIME_KEY);
   return raw ? parseInt(raw, 10) : null;
+};
+
+export const setSuppressGeofenceWhileOnShift = async (suppressed: boolean): Promise<void> => {
+  await AsyncStorage.setItem(SUPPRESS_WHILE_ON_SHIFT_KEY, suppressed ? 'true' : 'false');
+};
+
+export const getSuppressGeofenceWhileOnShift = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(SUPPRESS_WHILE_ON_SHIFT_KEY);
+  return raw === 'true';
+};
+
+export const setGeofenceRemindersStopped = async (stopped: boolean): Promise<void> => {
+  await AsyncStorage.setItem(REMINDERS_STOPPED_KEY, stopped ? 'true' : 'false');
+};
+
+export const getGeofenceRemindersStopped = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(REMINDERS_STOPPED_KEY);
+  return raw === 'true';
+};
+
+export const muteGeofenceNotificationsForMs = async (durationMs: number): Promise<void> => {
+  await AsyncStorage.setItem(
+    GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY,
+    String(Date.now() + Math.max(0, durationMs))
+  );
+};
+
+export const isGeofenceNotificationMuted = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY);
+  const mutedUntil = raw ? Number(raw) : 0;
+  if (!Number.isFinite(mutedUntil) || mutedUntil <= 0) {
+    return false;
+  }
+  if (mutedUntil <= Date.now()) {
+    await AsyncStorage.removeItem(GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY);
+    return false;
+  }
+  return true;
+};
+
+export const recordGeofenceNotificationShown = async (
+  timestamp = Date.now()
+): Promise<{ shouldOfferMute: boolean; countInWindow: number }> => {
+  const raw = await AsyncStorage.getItem(GEOFENCE_NOTIFICATION_HISTORY_KEY);
+  let history: number[] = [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        history = parsed.map(item => Number(item)).filter(item => Number.isFinite(item));
+      }
+    } catch {
+      history = [];
+    }
+  }
+
+  const cutoff = timestamp - GEOFENCE_SPAM_WINDOW_MS;
+  const nextHistory = [...history.filter(item => item >= cutoff), timestamp];
+  await AsyncStorage.setItem(GEOFENCE_NOTIFICATION_HISTORY_KEY, JSON.stringify(nextHistory.slice(-20)));
+
+  const lastOfferRaw = await AsyncStorage.getItem(GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY);
+  const lastOfferAt = lastOfferRaw ? Number(lastOfferRaw) : 0;
+  const shouldOfferMute =
+    nextHistory.length >= GEOFENCE_SPAM_THRESHOLD &&
+    (!Number.isFinite(lastOfferAt) || lastOfferAt < cutoff);
+
+  if (shouldOfferMute) {
+    await AsyncStorage.setItem(GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY, String(timestamp));
+  }
+
+  return { shouldOfferMute, countInWindow: nextHistory.length };
 };

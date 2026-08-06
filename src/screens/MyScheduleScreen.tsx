@@ -13,16 +13,26 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Calendar } from 'react-native-calendars';
 import {
-  addDoc,
+  endLiveShift,
+  calcBreakMs,
+  calcCurrentPauseMs,
+  calcWorkedMs,
+  calcWorkedMsInRange,
+  formatShiftDuration,
+  getTimestampMs,
+  isShiftPaused,
+  pauseLiveShift,
+  resumeLiveShift,
+  shiftOverlapsRange,
+  startLiveShift,
+  type LiveShift,
+} from '../services/shifts';
+import {
   collection,
-  doc,
-  getDoc,
   getFirestore,
   limit,
   onSnapshot,
   query,
-  serverTimestamp,
-  updateDoc,
   where,
 } from '@react-native-firebase/firestore';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -34,15 +44,7 @@ import Geolocation from 'react-native-geolocation-service';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MySchedule'>;
 
-type ShiftRecord = {
-  id: string;
-  userId: string;
-  geofenceId?: string;
-  geofenceName?: string;
-  status: 'open' | 'closed';
-  startAt?: any;
-  endAt?: any;
-};
+type ShiftRecord = LiveShift;
 
 type ScheduledShift = {
   id: string;
@@ -65,37 +67,131 @@ const getDistance = (p1: {lat:number, lng:number}, p2: {lat:number, lng:number})
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 };
 
-const formatDuration = (ms: number) => {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const pad = (value: number) => value.toString().padStart(2, '0');
-  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-};
-
 const formatTime = (value: Date) => value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const formatDate = (value: Date) => value.toLocaleDateString([], { month: 'short', day: 'numeric' });
 
+const localDateKey = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+type CompletedShiftEntry = {
+  shift: ShiftRecord;
+  workedMs: number;
+  start: Date;
+  end: Date;
+};
+
+type CompletedShiftGroup = {
+  key: string;
+  locationName: string;
+  date: Date;
+  totalWorkedMs: number;
+  shifts: CompletedShiftEntry[];
+};
+
+const buildCompletedShiftGroups = (shifts: ShiftRecord[]): CompletedShiftGroup[] => {
+  const groups = new Map<string, CompletedShiftGroup>();
+
+  shifts.forEach(shift => {
+    if (shift.status !== 'closed' || !shift.startAt || !shift.endAt) return;
+
+    const start = new Date(getTimestampMs(shift.startAt));
+    const end = new Date(getTimestampMs(shift.endAt));
+    const locationName = shift.geofenceName || shift.worksiteName || 'Worksite';
+    const key = `${localDateKey(start)}|${locationName}`;
+    const entry: CompletedShiftEntry = {
+      shift,
+      workedMs: calcWorkedMs(shift, end.getTime()),
+      start,
+      end,
+    };
+
+    const existing = groups.get(key);
+    if (existing) {
+      existing.totalWorkedMs += entry.workedMs;
+      existing.shifts.push(entry);
+      return;
+    }
+
+    groups.set(key, {
+      key,
+      locationName,
+      date: start,
+      totalWorkedMs: entry.workedMs,
+      shifts: [entry],
+    });
+  });
+
+  return Array.from(groups.values())
+    .map(group => ({
+      ...group,
+      shifts: group.shifts.sort((a, b) => b.start.getTime() - a.start.getTime()),
+    }))
+    .sort((a, b) => {
+      const aLatest = Math.max(...a.shifts.map(entry => entry.start.getTime()));
+      const bLatest = Math.max(...b.shifts.map(entry => entry.start.getTime()));
+      return bLatest - aLatest;
+    })
+    .slice(0, 20);
+};
+
 export default function MyScheduleScreen({ navigation, route }: Props) {
-  const [viewMode, setViewMode] = useState<'calendar' | 'list'>('list');
+  const initialView = route.params?.initialView === 'calendar' ? 'calendar' : 'list';
+  const initialDateParam = route.params?.initialDate;
+  const [viewMode, setViewMode] = useState<'calendar' | 'list'>(initialView);
   const [historyShifts, setHistoryShifts] = useState<ShiftRecord[]>([]);
   const [upcomingShifts, setUpcomingShifts] = useState<ScheduledShift[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(
+    initialDateParam || new Date().toISOString().split('T')[0]
+  );
   const [auditStart, setAuditStart] = useState(new Date().toISOString().split('T')[0]);
   const [auditEnd, setAuditEnd] = useState(new Date().toISOString().split('T')[0]);
   const [auditResultMs, setAuditResultMs] = useState<number | null>(null);
-  
-  // Prompt state (migrated from ShiftScreen)
+  const [shiftNowMs, setShiftNowMs] = useState(Date.now());
+  const [shiftBusy, setShiftBusy] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState<GeofencePromptPayload | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [expandedCompletedGroups, setExpandedCompletedGroups] = useState<Record<string, boolean>>({});
 
   const userId = auth.currentUser?.uid || null;
 
-  const openShift = useMemo(() => historyShifts.find(s => s.status === 'open') || null, [historyShifts]);
+  const openShift = useMemo(
+    () => historyShifts.find(s => s.status === 'open' && !s.isScheduled) || null,
+    [historyShifts]
+  );
+
+  const liveShifts = useMemo(
+    () => historyShifts.filter(s => !s.isScheduled && (s.status === 'open' || s.status === 'closed')),
+    [historyShifts]
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => setShiftNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const openShiftWorkedMs = useMemo(
+    () => (openShift ? calcWorkedMs(openShift, shiftNowMs) : 0),
+    [openShift, shiftNowMs]
+  );
+
+  const openShiftBreakMs = useMemo(
+    () => (openShift ? calcBreakMs(openShift, shiftNowMs) : 0),
+    [openShift, shiftNowMs]
+  );
+
+  const openShiftPauseMs = useMemo(
+    () => (openShift ? calcCurrentPauseMs(openShift, shiftNowMs) : 0),
+    [openShift, shiftNowMs]
+  );
+
+  const shiftPaused = openShift ? isShiftPaused(openShift) : false;
 
   useEffect(() => {
     if (!userId) {
@@ -116,7 +212,9 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
           setLoading(false);
           return;
         }
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as ShiftRecord));
+        const items = snap.docs
+          .map(d => ({ id: d.id, ...d.data() } as ShiftRecord))
+          .filter(s => !s.isScheduled);
         items.sort((a, b) => {
           const getTs = (s: any) => {
             if (!s?.startAt) return 0;
@@ -164,17 +262,22 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
   }, [userId, retryToken]);
 
   const handleStartShift = async (prompt?: GeofencePromptPayload | null) => {
-    if (!userId || openShift) return;
+    if (!userId || openShift || shiftBusy) return;
     let gId = prompt?.geofenceId || null;
     let gName = prompt?.geofenceName || null;
 
     if (!prompt) {
       try {
         const cached = await loadCachedGeofences();
-        const pos = await new Promise<Geolocation.GeoPosition | null>(resolve => Geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 5000 }));
+        const pos = await new Promise<Geolocation.GeoPosition | null>(resolve =>
+          Geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 5000 })
+        );
         if (pos && cached.length > 0) {
           const current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          const sorted = cached.filter(g => g.active).map(g => ({ ...g, dist: getDistance(current, g.center) })).sort((a, b) => a.dist - b.dist);
+          const sorted = cached
+            .filter(g => g.active)
+            .map(g => ({ ...g, dist: getDistance(current, g.center) }))
+            .sort((a, b) => a.dist - b.dist);
           if (sorted[0] && sorted[0].dist < 300) {
             gId = sorted[0].id;
             gName = sorted[0].name;
@@ -185,39 +288,95 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
       }
     }
 
+    setShiftBusy(true);
     try {
-      const fs = getFirestore();
-      const userDoc = await getDoc(doc(fs, 'users', userId));
-      const teamId = userDoc.data()?.teamId || 'team-1';
-
-      await addDoc(collection(fs, 'shifts'), { 
-        userId, 
-        teamId,
-        geofenceId: gId, 
-        geofenceName: gName, 
-        status: 'open', 
-        startAt: serverTimestamp(), 
-        startedBy: prompt ? 'geofence-prompt' : 'manual' 
+      await startLiveShift({
+        userId,
+        geofenceId: gId,
+        geofenceName: gName,
+        startedBy: prompt ? 'geofence-prompt' : 'manual',
       });
     } catch (err: any) {
-      Alert.alert('Notice', err.message);
+      Alert.alert('Notice', err?.message || 'Could not start shift.');
+    } finally {
+      setShiftBusy(false);
     }
   };
 
-  const handleEndShift = async () => {
-    if (!userId || !openShift) return;
+  const handlePauseShift = async () => {
+    if (!openShift || shiftBusy) return;
+    setShiftBusy(true);
     try {
-      const fs = getFirestore();
-      await updateDoc(doc(fs, 'shifts', openShift.id), { status: 'closed', endAt: serverTimestamp(), endedBy: 'manual' });
+      await pauseLiveShift(openShift.id);
     } catch (err: any) {
-      Alert.alert('Notice', err.message);
+      Alert.alert('Notice', err?.message || 'Could not pause shift.');
+    } finally {
+      setShiftBusy(false);
     }
+  };
+
+  const handleResumeShift = async () => {
+    if (!openShift || shiftBusy) return;
+    setShiftBusy(true);
+    try {
+      await resumeLiveShift(openShift.id);
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Could not resume shift.');
+    } finally {
+      setShiftBusy(false);
+    }
+  };
+
+  const handleEndShift = () => {
+    if (!userId || !openShift || shiftBusy) return;
+    Alert.alert('End shift', 'End your current shift? It will be locked and cannot be edited.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'End shift',
+        style: 'destructive',
+        onPress: () => {
+          setShiftBusy(true);
+          void endLiveShift(openShift.id, 'manual')
+            .catch((err: any) => Alert.alert('Notice', err?.message || 'Could not end shift.'))
+            .finally(() => setShiftBusy(false));
+        },
+      },
+    ]);
   };
 
   const upcomingForSelectedDate = useMemo(() => 
     upcomingShifts.filter(s => s.date === selectedDate), 
     [upcomingShifts, selectedDate]
   );
+
+  const upcomingFutureShifts = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return upcomingShifts.filter(s => s.date >= today);
+  }, [upcomingShifts]);
+
+  const completedShiftGroups = useMemo(
+    () => buildCompletedShiftGroups(liveShifts),
+    [liveShifts]
+  );
+
+  const toggleCompletedGroup = (groupKey: string) => {
+    setExpandedCompletedGroups(current => ({
+      ...current,
+      [groupKey]: !current[groupKey],
+    }));
+  };
+
+  useEffect(() => {
+    if (route.params?.initialView) {
+      setViewMode(route.params.initialView);
+    }
+  }, [route.params?.initialView]);
+
+  useEffect(() => {
+    if (route.params?.initialDate) {
+      setSelectedDate(route.params.initialDate);
+    }
+  }, [route.params?.initialDate]);
 
   useEffect(() => {
     const p = route.params?.prompt;
@@ -271,16 +430,17 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
       return;
     }
 
+    const rangeStartMs = start.getTime();
+    const rangeEndMs = end.getTime();
     let totalMs = 0;
-    historyShifts.forEach(s => {
-      if (s.status !== 'closed' || !s.startAt || !s.endAt) return;
-      
-      const sStart = s.startAt?.toDate?.() || new Date(s.startAt);
-      const sEnd = s.endAt?.toDate?.() || new Date(s.endAt);
+    liveShifts.forEach(s => {
+      if (s.status !== 'closed') return;
 
-      if (sStart >= start && sEnd <= end) {
-        totalMs += (sEnd.getTime() - sStart.getTime());
-      }
+      const sEndMs = getTimestampMs(s.endAt);
+      if (!sEndMs) return;
+      if (!shiftOverlapsRange(s, rangeStartMs, rangeEndMs, sEndMs)) return;
+
+      totalMs += calcWorkedMsInRange(s, rangeStartMs, rangeEndMs, sEndMs);
     });
 
     setAuditResultMs(totalMs);
@@ -361,6 +521,45 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.promptBtn} onPress={handleConfirmPrompt}>
                   <Text style={styles.promptBtnText}>Yes</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {openShift ? (
+            <View style={styles.timerCard}>
+              <Text style={styles.timerHeader}>{shiftPaused ? 'Shift paused' : 'Shift active'}</Text>
+              <Text style={styles.timerLabel}>{shiftPaused ? 'Pause time' : 'Worked time'}</Text>
+              <Text style={styles.timerValue}>
+                {formatShiftDuration(shiftPaused ? openShiftPauseMs : openShiftWorkedMs)}
+              </Text>
+              <Text style={styles.timerStatus}>
+                {shiftPaused
+                  ? `Worked ${formatShiftDuration(openShiftWorkedMs)} • ${openShift.geofenceName || 'Worksite'}`
+                  : `Break ${formatShiftDuration(openShiftBreakMs)} • ${openShift.geofenceName || 'Worksite'}`}
+              </Text>
+              <View style={styles.timerActions}>
+                {shiftPaused ? (
+                  <TouchableOpacity style={styles.startBtn} onPress={() => void handleResumeShift()} disabled={shiftBusy}>
+                    {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Resume</Text>}
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity style={styles.pauseBtn} onPress={() => void handlePauseShift()} disabled={shiftBusy}>
+                    {shiftBusy ? <ActivityIndicator color="#F6EDE2" /> : <Text style={styles.pauseBtnText}>Pause</Text>}
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={styles.endBtn} onPress={handleEndShift} disabled={shiftBusy}>
+                  <Text style={styles.endBtnText}>End shift</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.timerCard}>
+              <Text style={styles.timerHeader}>No active shift</Text>
+              <Text style={styles.timerStatus}>Start when you begin work at site.</Text>
+              <View style={styles.timerActions}>
+                <TouchableOpacity style={styles.startBtn} onPress={() => void handleStartShift()} disabled={shiftBusy}>
+                  {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Start shift</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -485,24 +684,79 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
                 )}
               </View>
 
-              {/* History List */}
+              {/* Upcoming Shifts */}
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Shift History</Text>
+                <Text style={styles.sectionTitle}>Upcoming Shifts</Text>
               </View>
               <View style={styles.historyList}>
-                {historyShifts.filter(s => s.status === 'closed').slice(0, 10).map(s => {
-                  const start = s.startAt?.toDate?.() || new Date(s.startAt);
-                  const end = s.endAt?.toDate?.() || new Date(s.endAt);
-                  return (
+                {upcomingFutureShifts.length === 0 ? (
+                  <Text style={styles.empty}>No upcoming shifts scheduled.</Text>
+                ) : (
+                  upcomingFutureShifts.slice(0, 10).map(s => (
                     <View key={s.id} style={styles.historyItem}>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.historyName}>{s.geofenceName || 'Worksite'}</Text>
-                        <Text style={styles.historyTime}>{formatDate(start)} • {formatTime(start)} - {formatTime(end)}</Text>
+                        <Text style={styles.historyName}>{s.worksiteName || 'Worksite'}</Text>
+                        <Text style={styles.historyTime}>
+                          {s.date} • {s.startTime} - {s.endTime}
+                        </Text>
                       </View>
-                      <Text style={styles.historyDuration}>{formatDuration(end.getTime() - start.getTime())}</Text>
+                      <Text style={styles.historyDuration}>Upcoming</Text>
                     </View>
-                  );
-                })}
+                  ))
+                )}
+              </View>
+
+              {/* Completed History */}
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Completed Shifts</Text>
+              </View>
+              <View style={styles.historyList}>
+                {completedShiftGroups.length === 0 ? (
+                  <Text style={styles.empty}>No completed shifts yet.</Text>
+                ) : (
+                  completedShiftGroups.map(group => {
+                    const expanded = !!expandedCompletedGroups[group.key];
+                    const shiftLabel =
+                      group.shifts.length === 1
+                        ? `${formatDate(group.date)} • ${formatTime(group.shifts[0].start)} - ${formatTime(group.shifts[0].end)}`
+                        : `${formatDate(group.date)} • ${group.shifts.length} shifts`;
+
+                    return (
+                      <View key={group.key} style={styles.historyGroupWrap}>
+                        <TouchableOpacity
+                          style={styles.historyItem}
+                          onPress={() => toggleCompletedGroup(group.key)}
+                          activeOpacity={0.75}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.historyName}>{group.locationName}</Text>
+                            <Text style={styles.historyTime}>{shiftLabel}</Text>
+                          </View>
+                          <View style={styles.historyRight}>
+                            <Text style={styles.historyDuration}>
+                              {formatShiftDuration(group.totalWorkedMs)}
+                            </Text>
+                            <Text style={styles.historyExpandHint}>{expanded ? '−' : '+'}</Text>
+                          </View>
+                        </TouchableOpacity>
+                        {expanded
+                          ? group.shifts.map(entry => (
+                              <View key={entry.shift.id} style={styles.historySubItem}>
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.historySubTime}>
+                                    {formatTime(entry.start)} - {formatTime(entry.end)}
+                                  </Text>
+                                </View>
+                                <Text style={styles.historySubDuration}>
+                                  {formatShiftDuration(entry.workedMs)}
+                                </Text>
+                              </View>
+                            ))
+                          : null}
+                      </View>
+                    );
+                  })
+                )}
               </View>
             </>
           )}
@@ -571,10 +825,12 @@ const styles = StyleSheet.create({
   timerLabel: { color: '#A88E73', fontSize: 12, marginBottom: 8 },
   timerValue: { color: '#F6EDE2', fontSize: 42, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
   timerStatus: { color: '#A88E73', fontSize: 12, marginTop: 8, fontStyle: 'italic' },
-  timerActions: { marginTop: 24, width: '100%' },
-  startBtn: { backgroundColor: '#C9782B', paddingVertical: 16, borderRadius: 12, alignItems: 'center' },
+  timerActions: { marginTop: 24, width: '100%', flexDirection: 'row', gap: 10 },
+  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#C9782B' },
+  pauseBtnText: { color: '#F6EDE2', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
+  startBtn: { flex: 1, backgroundColor: '#C9782B', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   startBtnText: { color: '#1E1813', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
-  endBtn: { backgroundColor: '#5C2420', paddingVertical: 16, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#9E3C2E' },
+  endBtn: { flex: 1, backgroundColor: '#5C2420', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#9E3C2E' },
   endBtnText: { color: '#F6EDE2', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
   auditCard: { margin: 16, padding: 20, backgroundColor: '#1E1813', borderRadius: 16, borderWidth: 1, borderColor: '#3A2D24' },
   auditTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '700', marginBottom: 16 },
@@ -591,7 +847,24 @@ const styles = StyleSheet.create({
   settingsLabel: { color: '#F6EDE2', fontWeight: 'bold' },
   settingsDesc: { color: '#A88E73', fontSize: 12, marginTop: 2 },
   historyList: { marginHorizontal: 16, gap: 10 },
+  historyGroupWrap: { gap: 6 },
   historyItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1E1813', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#3A2D24' },
+  historyRight: { alignItems: 'flex-end', gap: 4 },
+  historyExpandHint: { color: '#A88E73', fontSize: 16, fontWeight: '700', lineHeight: 16 },
+  historySubItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginLeft: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: '#171311',
+    borderWidth: 1,
+    borderColor: '#2E241D',
+  },
+  historySubTime: { color: '#C9B29A', fontSize: 12 },
+  historySubDuration: { color: '#D89A79', fontWeight: '700', fontSize: 12 },
   historyName: { color: '#F6EDE2', fontWeight: '600' },
   historyTime: { color: '#A88E73', fontSize: 11, marginTop: 2 },
   historyDuration: { color: '#C9782B', fontWeight: 'bold', fontSize: 13 },

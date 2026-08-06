@@ -9,7 +9,8 @@ import {
   getPromptActionStatus,
   getLastUserName
 } from './storage';
-import { processGeofenceEvent, storePendingPrompt, startShift, endShift } from './processor';
+import { processGeofenceEvent, storePendingPrompt, startShift, endShift, isShiftInProgress } from './processor';
+import { decideGeofenceNotification } from './notificationPolicy';
 import { showGeofenceNotification } from '../notifications/geofenceNotifications';
 import { resolveGeofenceForNativeEvent, startNativeMonitoring } from './native';
 import { normalizeGeofenceTransition } from './transition';
@@ -88,41 +89,66 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
         allowPrompt: true,
       });
 
+      const decision = await decideGeofenceNotification(userId, transition);
+      const notifyPayload =
+        result.promptPayload ?? {
+          eventId: result.eventId,
+          geofenceId: geofence!.id,
+          geofenceName: geofence!.name || 'Worksite',
+          userName: userName ?? undefined,
+          transition,
+          occurredAt: data.timestamp ?? Date.now(),
+        };
+
       if (result.promptPayload) {
         await storePendingPrompt(result.promptPayload);
-        // Display high-priority background notification
-        await showGeofenceNotification(result.promptPayload);
-        
-        // AUTO-SHIFT TIMER (60s for entry only)
-        if (transition === 'enter') {
-          const eventId = result.eventId;
-          const gName = geofence?.name;
-          const gId = geofence?.id;
+      }
 
-          setTimeout(async () => {
-            const { getAutoShiftEnabled } = require('./storage');
-            if (!(await getAutoShiftEnabled())) return;
-
-            const status = await getPromptActionStatus(eventId);
-            if (status === 'confirmed' || status === 'vetoed') return;
-
-            console.log(`[Headless] Enforcing automatic ${transition} for ${gName}`);
-            await setPromptActionStatus(eventId, 'automatic');
-            
-            if (gId && gName) {
-              await startShift(userId, gId, gName);
-            }
-          }, 60000);
+      if (decision.show && result.promptPayload) {
+        const shouldNotify = await shouldNotifyForEvent(result.eventId);
+        if (shouldNotify) {
+          await showGeofenceNotification(notifyPayload, { variant: decision.variant });
         }
+      }
+
+      if (result.promptPayload && transition === 'enter') {
+        const eventId = result.eventId;
+        const gName = geofence?.name;
+        const gId = geofence?.id;
+
+        setTimeout(async () => {
+          const { getAutoShiftEnabled } = require('./storage');
+          if (!(await getAutoShiftEnabled())) return;
+
+          const status = await getPromptActionStatus(eventId);
+          if (status === 'confirmed' || status === 'vetoed') return;
+
+          console.log(`[Headless] Enforcing automatic enter for ${gName}`);
+          await setPromptActionStatus(eventId, 'automatic');
+
+          if (gId && gName) {
+            await startShift(userId, gId, gName);
+          }
+        }, 60000);
       }
     } catch (error) {
       console.error('[Headless] Error:', error);
     }
   };
 
-  // Exit events are handled after native 30m delay.
   if (nativeTransition === 'enter') {
     await executeEvent('enter');
+    return;
+  }
+
+  if (nativeTransition === 'exit' && !data.delayed) {
+    const inProgress = await isShiftInProgress(userId);
+    const { getSuppressGeofenceWhileOnShift } = require('./storage');
+    const suppressed = await getSuppressGeofenceWhileOnShift();
+    if (inProgress || suppressed) {
+      await executeEvent('exit');
+      return;
+    }
     return;
   }
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import {
   deleteDoc,
   doc,
   getFirestore,
+  limit,
   onSnapshot,
   orderBy,
   query,
@@ -30,6 +31,8 @@ import {
 } from '@react-native-firebase/firestore';
 import { pick, types, errorCodes, isErrorWithCode } from '@react-native-documents/picker';
 import { auth } from '../services/firebase';
+import { useAuth } from '../auth/useAuth';
+import { useFocusEffect } from '@react-navigation/native';
 import { parseEventsCsv } from '../utils/parseEventsCsv';
 import { readPickedFileAsUtf8 } from '../utils/readPickedDocumentText';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -37,23 +40,39 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { Icons } from '../components/Icons';
 import { Calendar } from 'react-native-calendars';
 import { resolveAvatarSource } from '../utils/avatar';
+import {
+  type EventDay,
+  DEFAULT_EVENT_DAY_TIMES,
+  findCurrentOrUpcomingEventIndex,
+  formatDayHeading,
+  formatTimeRange,
+  isValidTimeRange,
+  normalizeEventDays,
+  pickLinkedScheduleDate,
+  sortEventsByDays,
+  timesForNewEventDay,
+} from '../utils/eventDays';
+import EventDayTimeModal from '../components/EventDayTimeModal';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Events'>;
 
 type Event = {
   id: string;
   title: string;
-  startDate: string; // "YYYY-MM-DD"
-  endDate: string; // "YYYY-MM-DD"
-  arrivalDate: string; // "YYYY-MM-DD"
-  startTime: string;
-  endTime: string;
+  days?: EventDay[];
+  sortDate?: string;
   locationName: string;
   locationUrl: string;
   staffIds: string[];
   staffNeeded: number;
   notes: string;
   createdAt: any;
+  /** @deprecated legacy fields — use days */
+  startDate?: string;
+  endDate?: string;
+  arrivalDate?: string;
+  startTime?: string;
+  endTime?: string;
 };
 
 type Availability = {
@@ -71,24 +90,24 @@ type UserProfile = {
   customAvatarUrl?: string;
 };
 
+/** Estimated card height for scroll positioning (includes margin). */
+const EVENT_CARD_ESTIMATED_HEIGHT = 430;
+
 export default function EventsScreen({ navigation }: Props) {
+  const authState = useAuth();
+  const isAdmin = authState.status === 'admin';
   const [events, setEvents] = useState<Event[]>([]);
   const [availabilityMap, setAvailabilityMap] = useState<Record<string, Availability[]>>({});
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   
   // Create/Edit Event Modal
   const [modalVisible, setModalVisible] = useState(false);
   const [title, setTitle] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [arrivalDate, setArrivalDate] = useState('');
-  const [startTime, setStartTime] = useState('');
-  const [endTime, setEndTime] = useState('');
+  const [eventDays, setEventDays] = useState<EventDay[]>([]);
   const [locationName, setLocationName] = useState('');
   const [locationUrl, setLocationUrl] = useState('');
   const [staffIds, setStaffIds] = useState<string[]>([]);
@@ -97,12 +116,75 @@ export default function EventsScreen({ navigation }: Props) {
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [csvImporting, setCsvImporting] = useState(false);
+  const [unreadByEventId, setUnreadByEventId] = useState<Record<string, number>>({});
+  const listRef = useRef<FlatList<Event>>(null);
+  const didAutoScrollRef = useRef(false);
+  const focusEventIndex = useMemo(
+    () => (events.length ? findCurrentOrUpcomingEventIndex(events) : 0),
+    [events]
+  );
 
-  // Date Picker Modal
-  const [datePickerConfig, setDatePickerConfig] = useState<{ visible: boolean; field: 'start' | 'end' | 'arrival' }>({
-    visible: false,
-    field: 'start',
-  });
+  const getItemLayout = useCallback(
+    (_: ArrayLike<Event> | null | undefined, index: number) => ({
+      length: EVENT_CARD_ESTIMATED_HEIGHT,
+      offset: EVENT_CARD_ESTIMATED_HEIGHT * index,
+      index,
+    }),
+    []
+  );
+
+  const scrollToCurrentEvent = useCallback((animated = true) => {
+    if (!events.length) return;
+    listRef.current?.scrollToIndex({
+      index: focusEventIndex,
+      animated,
+      viewPosition: 0,
+    });
+  }, [events.length, focusEventIndex]);
+
+  useEffect(() => {
+    didAutoScrollRef.current = false;
+  }, [retryToken, focusEventIndex]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (loading || events.length === 0) return undefined;
+      const timer = setTimeout(() => scrollToCurrentEvent(false), 60);
+      return () => clearTimeout(timer);
+    }, [loading, events.length, focusEventIndex, scrollToCurrentEvent])
+  );
+
+  useEffect(() => {
+    if (loading || events.length === 0 || didAutoScrollRef.current) return;
+    didAutoScrollRef.current = true;
+    requestAnimationFrame(() => {
+      scrollToCurrentEvent(false);
+      setTimeout(() => scrollToCurrentEvent(true), 80);
+    });
+  }, [loading, events.length, focusEventIndex, scrollToCurrentEvent]);
+
+  const handleListContentSizeChange = useCallback(() => {
+    if (loading || events.length === 0 || didAutoScrollRef.current) return;
+    didAutoScrollRef.current = true;
+    scrollToCurrentEvent(false);
+  }, [loading, events.length, scrollToCurrentEvent]);
+
+  const handleScrollToIndexFailed = useCallback(
+    (info: { index: number; averageItemLength: number }) => {
+      const estimated = info.averageItemLength || EVENT_CARD_ESTIMATED_HEIGHT;
+      listRef.current?.scrollToOffset({
+        offset: Math.max(0, estimated * info.index),
+        animated: false,
+      });
+      setTimeout(() => scrollToCurrentEvent(false), 50);
+      setTimeout(() => scrollToCurrentEvent(true), 180);
+    },
+    [scrollToCurrentEvent]
+  );
+
+  // Add-day calendar picker
+  const [addDayPickerVisible, setAddDayPickerVisible] = useState(false);
+  const [editingDayDate, setEditingDayDate] = useState<string | null>(null);
 
   // Availability Modal
   const [availModalVisible, setAvailModalVisible] = useState(false);
@@ -119,16 +201,12 @@ export default function EventsScreen({ navigation }: Props) {
       snap => {
         if (!snap || !snap.exists()) {
           setUserProfile(null);
-          setIsAdmin(false);
           return;
         }
-        const data = snap.data();
-        setUserProfile(data);
-        setIsAdmin(Array.isArray(data?.roles) && data.roles.includes('admin'));
+        setUserProfile(snap.data());
       },
       err => {
         setUserProfile(null);
-        setIsAdmin(false);
       }
     );
       return () => unsubProfile();
@@ -139,6 +217,44 @@ export default function EventsScreen({ navigation }: Props) {
     const fs = getFirestore();
     setLoadError(null);
     const availUnsubs: Array<() => void> = [];
+    const eventChatUnsubs: Array<() => void> = [];
+    const readMarks: Record<string, number> = {};
+    const messageTimesByEvent: Record<string, Array<{ createdAtMs: number; senderId: string | null }>> = {};
+    const currentUid = auth.currentUser?.uid || null;
+
+    const recalcUnread = () => {
+      if (!currentUid) {
+        setUnreadByEventId({});
+        return;
+      }
+      const next: Record<string, number> = {};
+      Object.entries(messageTimesByEvent).forEach(([eventId, rows]) => {
+        const readAt = readMarks[eventId] || 0;
+        next[eventId] = rows.filter(row => row.senderId !== currentUid && row.createdAtMs > readAt).length;
+      });
+      setUnreadByEventId(next);
+    };
+
+    const readUnsub = currentUid
+      ? onSnapshot(
+          collection(fs, 'users', currentUid, 'chatReads'),
+          snap => {
+            if (!snap?.docs) return;
+            Object.keys(readMarks).forEach(k => delete readMarks[k]);
+            snap.docs.forEach(d => {
+              const data = d.data() as any;
+              if (data?.scope !== 'event') return;
+              const raw = data?.lastReadAt;
+              const ms = raw?.toDate?.()?.getTime?.() ?? (raw ? new Date(raw).getTime() : 0);
+              if (Number.isFinite(ms)) readMarks[d.id] = ms;
+            });
+            recalcUnread();
+          },
+          err => {
+            console.warn('Event read markers listener:', err);
+          }
+        )
+      : () => undefined;
 
     const unsubUsers = onSnapshot(
       collection(fs, 'users'),
@@ -155,19 +271,25 @@ export default function EventsScreen({ navigation }: Props) {
       }
     );
 
-    const q = query(collection(fs, 'events'), orderBy('startDate', 'asc'));
+    const q = query(collection(fs, 'events'));
     const unsubEvents = onSnapshot(
       q,
       snap => {
         if (!snap || !snap.docs || snap.empty) {
           setEvents([]);
+          setUnreadByEventId({});
           setLoading(false);
           return;
         }
         availUnsubs.forEach(u => u());
         availUnsubs.length = 0;
+        eventChatUnsubs.forEach(u => u());
+        eventChatUnsubs.length = 0;
+        Object.keys(messageTimesByEvent).forEach(k => delete messageTimesByEvent[k]);
 
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as Event));
+        const items = sortEventsByDays(
+          snap.docs.map(d => ({ id: d.id, ...d.data() } as Event))
+        );
         setEvents(items);
         setLoading(false);
 
@@ -181,6 +303,39 @@ export default function EventsScreen({ navigation }: Props) {
             }
           );
           availUnsubs.push(u);
+
+          const eventThreadDocRef = doc(collection(doc(fs, 'chats', 'events'), 'threads'), event.id);
+          const messagesQuery = query(
+            collection(eventThreadDocRef, 'messages'),
+            orderBy('createdAt', 'desc'),
+            limit(120)
+          );
+          const chatUnsub = onSnapshot(
+            messagesQuery,
+            chatSnap => {
+              if (!chatSnap?.docs) {
+                messageTimesByEvent[event.id] = [];
+                recalcUnread();
+                return;
+              }
+              messageTimesByEvent[event.id] = chatSnap.docs.map(md => {
+                const data = md.data() as any;
+                const raw = data?.createdAt;
+                const createdAtMs = raw?.toDate?.()?.getTime?.() ?? (raw ? new Date(raw).getTime() : 0);
+                return {
+                  createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : 0,
+                  senderId: typeof data?.senderId === 'string' ? data.senderId : null,
+                };
+              });
+              recalcUnread();
+            },
+            err => {
+              console.warn(`Event chat unread listener failed for ${event.id}:`, err);
+              messageTimesByEvent[event.id] = [];
+              recalcUnread();
+            }
+          );
+          eventChatUnsubs.push(chatUnsub);
         });
       },
       err => {
@@ -192,13 +347,28 @@ export default function EventsScreen({ navigation }: Props) {
     return () => {
       unsubUsers();
       unsubEvents();
+      readUnsub();
       availUnsubs.forEach(u => u());
+      eventChatUnsubs.forEach(u => u());
     };
   }, [retryToken]);
 
   const handleSave = async () => {
-    if (!title || !startDate || !endDate || !arrivalDate || !locationName) {
-      Alert.alert('Notice', 'Title, Dates, and Location are required.');
+    if (!isAdmin) {
+      Alert.alert('Notice', 'Only admins can create or edit events.');
+      return;
+    }
+    const sortedDays = [...eventDays].sort((a, b) => a.date.localeCompare(b.date));
+    if (!title || sortedDays.length === 0 || !locationName) {
+      Alert.alert('Notice', 'Title, at least one day, and location are required.');
+      return;
+    }
+    const invalidDay = sortedDays.find(day => !isValidTimeRange(day.startTime, day.endTime));
+    if (invalidDay) {
+      Alert.alert(
+        'Invalid times',
+        `${formatDayHeading(invalidDay.date)}: finish time must be after start time.`
+      );
       return;
     }
 
@@ -206,11 +376,8 @@ export default function EventsScreen({ navigation }: Props) {
     const fs = getFirestore();
     const payload = {
       title,
-      startDate,
-      endDate,
-      arrivalDate,
-      startTime,
-      endTime,
+      days: sortedDays,
+      sortDate: sortedDays[0].date,
       locationName,
       locationUrl,
       staffIds: staffIds || [],
@@ -318,11 +485,14 @@ export default function EventsScreen({ navigation }: Props) {
         try {
           await addDoc(collection(fs, 'events'), {
             title: r.title,
-            startDate: r.startDate,
-            endDate: r.endDate,
-            arrivalDate: r.arrivalDate,
-            startTime: r.startTime,
-            endTime: r.endTime,
+            days: [
+              {
+                date: r.arrivalDate || r.startDate,
+                startTime: r.startTime || DEFAULT_EVENT_DAY_TIMES.startTime,
+                endTime: r.endTime || DEFAULT_EVENT_DAY_TIMES.endTime,
+              },
+            ],
+            sortDate: r.arrivalDate || r.startDate,
             locationName: r.locationName,
             locationUrl: r.locationUrl,
             staffIds: r.staffIds,
@@ -349,11 +519,7 @@ export default function EventsScreen({ navigation }: Props) {
 
   const resetForm = () => {
     setTitle('');
-    setStartDate('');
-    setEndDate('');
-    setArrivalDate('');
-    setStartTime('');
-    setEndTime('');
+    setEventDays([]);
     setLocationName('');
     setLocationUrl('');
     setStaffIds([]);
@@ -362,13 +528,17 @@ export default function EventsScreen({ navigation }: Props) {
     setEditingId(null);
   };
 
+  useEffect(() => {
+    if (!isAdmin && modalVisible) {
+      setModalVisible(false);
+      resetForm();
+    }
+  }, [isAdmin, modalVisible]);
+
   const openEdit = (event: Event) => {
+    if (!isAdmin) return;
     setTitle(event.title);
-    setStartDate(event.startDate);
-    setEndDate(event.endDate || event.startDate);
-    setArrivalDate(event.arrivalDate || event.startDate);
-    setStartTime(event.startTime || '');
-    setEndTime(event.endTime || '');
+    setEventDays(normalizeEventDays(event));
     setLocationName(event.locationName);
     setLocationUrl(event.locationUrl);
     setStaffIds(event.staffIds || []);
@@ -378,6 +548,37 @@ export default function EventsScreen({ navigation }: Props) {
     setModalVisible(true);
   };
 
+  const addEventDay = (dateKey: string) => {
+    let shouldPromptTimes = false;
+    setEventDays(prev => {
+      if (prev.some(day => day.date === dateKey)) return prev;
+      shouldPromptTimes = prev.length === 0;
+      const times = timesForNewEventDay(prev, dateKey);
+      return [...prev, { date: dateKey, ...times }].sort((a, b) => a.date.localeCompare(b.date));
+    });
+    setAddDayPickerVisible(false);
+    if (shouldPromptTimes) {
+      setEditingDayDate(dateKey);
+    }
+  };
+
+  const removeEventDay = (dateKey: string) => {
+    setEventDays(prev => prev.filter(day => day.date !== dateKey));
+    if (editingDayDate === dateKey) setEditingDayDate(null);
+  };
+
+  const updateEventDayTimes = (dateKey: string, startTime: string, endTime: string) => {
+    setEventDays(prev =>
+      prev
+        .map(day => (day.date === dateKey ? { ...day, startTime, endTime } : day))
+        .sort((a, b) => a.date.localeCompare(b.date))
+    );
+  };
+
+  const editingDay = editingDayDate
+    ? eventDays.find(day => day.date === editingDayDate) || null
+    : null;
+
   const openAvail = (eventId: string) => {
     const existing = availabilityMap[eventId]?.find(a => a.userId === auth.currentUser?.uid);
     setAvailNotes(existing?.notes || '');
@@ -386,17 +587,21 @@ export default function EventsScreen({ navigation }: Props) {
   };
 
   const toggleStaffSelection = (uid: string) => {
-    setStaffIds(prev => 
+    setStaffIds(prev =>
       prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]
     );
   };
 
-  const formatDate = (dateStr: string) => {
-    if (!dateStr) return 'Select';
-    try {
-      const d = new Date(dateStr);
-      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-    } catch { return dateStr; }
+  const handleDeleteEvent = (event: Event) => {
+    if (!isAdmin) return;
+    Alert.alert('Delete', 'Delete this event?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => void deleteDoc(doc(getFirestore(), 'events', event.id)),
+      },
+    ]);
   };
 
   const renderEvent = ({ item }: { item: Event }) => {
@@ -407,22 +612,26 @@ export default function EventsScreen({ navigation }: Props) {
     const confirmedCount = (item.staffIds || []).length;
     const neededCount = (item.staffNeeded || 1) - confirmedCount;
     const isComplete = neededCount <= 0;
-
-    const dateRange = item.startDate === item.endDate 
-      ? formatDate(item.startDate) 
-      : `${formatDate(item.startDate)} - ${formatDate(item.endDate)}`;
+    const days = normalizeEventDays(item);
+    const linkedDate = pickLinkedScheduleDate(item);
 
     return (
       <View style={styles.eventCard}>
         <View style={styles.eventHeader}>
-          <View style={{flex: 1}}>
-            <Text style={styles.eventTitle}>{item.title}</Text>
-            <Text style={styles.eventDateRange}>{dateRange}</Text>
-          </View>
-          <View style={styles.arrivalBox}>
-            <Text style={styles.arrivalLabel}>TEAM ARRIVAL</Text>
-            <Text style={styles.arrivalDateText}>{formatDate(item.arrivalDate)} @ {item.startTime || 'TBD'}</Text>
-          </View>
+          <Text style={styles.eventTitle}>{item.title}</Text>
+        </View>
+
+        <View style={styles.daysSection}>
+          {days.length === 0 ? (
+            <Text style={styles.dayEmpty}>No days scheduled yet.</Text>
+          ) : (
+            days.map(day => (
+              <View key={`${item.id}-${day.date}`} style={styles.dayRow}>
+                <Text style={styles.dayDate}>{formatDayHeading(day.date)}</Text>
+                <Text style={styles.dayTimes}>{formatTimeRange(day.startTime, day.endTime)}</Text>
+              </View>
+            ))
+          )}
         </View>
         
         <TouchableOpacity 
@@ -433,8 +642,29 @@ export default function EventsScreen({ navigation }: Props) {
           <Text style={[styles.locationText, item.locationUrl && styles.linkText]}>
             {item.locationName}
           </Text>
-          {item.endTime ? <Text style={styles.timeText}> • Finish: {item.endTime}</Text> : null}
         </TouchableOpacity>
+
+        <View style={styles.linkRow}>
+          <TouchableOpacity
+            style={styles.linkChip}
+            onPress={() =>
+              navigation.navigate('MySchedule', {
+                initialDate: linkedDate,
+                initialView: 'calendar',
+              })
+            }
+          >
+            <Text style={styles.linkChipText}>My Schedule</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.linkChip}
+            onPress={() =>
+              navigation.navigate('WorkingHours', linkedDate ? { initialDateKey: linkedDate } : undefined)
+            }
+          >
+            <Text style={styles.linkChipText}>Working Hours</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.staffStatusRow}>
           <View style={styles.staffRow}>
@@ -470,11 +700,23 @@ export default function EventsScreen({ navigation }: Props) {
           )}
         </View>
 
+        <TouchableOpacity
+          style={styles.eventChatBtn}
+          onPress={() => navigation.navigate('Chat', { eventId: item.id, eventTitle: item.title })}
+        >
+          <Text style={styles.eventChatBtnText}>Open Event Chat</Text>
+          {(unreadByEventId[item.id] || 0) > 0 && (
+            <View style={styles.unreadBadge}>
+              <Text style={styles.unreadBadgeText}>{unreadByEventId[item.id]}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+
         {isAdmin && (
           <View style={styles.adminActions}>
             <View style={{flexDirection: 'row', gap: 12}}>
               <TouchableOpacity onPress={() => openEdit(item)} style={styles.editBtn}><Text style={styles.editBtnText}>Edit Event</Text></TouchableOpacity>
-              <TouchableOpacity onPress={() => { Alert.alert('Delete', 'Delete this event?', [{text:'Cancel'}, {text:'Delete', style:'destructive', onPress:()=>deleteDoc(doc(getFirestore(),'events',item.id))}])}} style={styles.deleteBtn}><Text style={styles.deleteBtnText}>Delete</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => handleDeleteEvent(item)} style={styles.deleteBtn}><Text style={styles.deleteBtnText}>Delete</Text></TouchableOpacity>
             </View>
           </View>
         )}
@@ -482,18 +724,13 @@ export default function EventsScreen({ navigation }: Props) {
     );
   };
 
-  const getActiveDatePickerValue = () => {
-    if (datePickerConfig.field === 'start') return startDate;
-    if (datePickerConfig.field === 'end') return endDate;
-    if (datePickerConfig.field === 'arrival') return arrivalDate;
-    return '';
-  };
-
-  const setDateValue = (val: string) => {
-    if (datePickerConfig.field === 'start') setStartDate(val);
-    if (datePickerConfig.field === 'end') setEndDate(val);
-    if (datePickerConfig.field === 'arrival') setArrivalDate(val);
-  };
+  const markedAddDays = eventDays.reduce<Record<string, { selected: boolean; selectedColor: string }>>(
+    (acc, day) => {
+      acc[day.date] = { selected: true, selectedColor: '#C9782B' };
+      return acc;
+    },
+    {}
+  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -540,16 +777,21 @@ export default function EventsScreen({ navigation }: Props) {
         <ActivityIndicator size="large" color="#C9782B" style={{ marginTop: 40 }} />
       ) : (
         <FlatList
+          ref={listRef}
           data={events}
           keyExtractor={item => item.id}
           renderItem={renderEvent}
           contentContainerStyle={styles.list}
           ListEmptyComponent={<Text style={styles.empty}>No upcoming events.</Text>}
+          initialScrollIndex={events.length > 0 ? focusEventIndex : undefined}
+          getItemLayout={getItemLayout}
+          onScrollToIndexFailed={handleScrollToIndexFailed}
+          onContentSizeChange={handleListContentSizeChange}
         />
       )}
 
       {/* Main Modal */}
-      <Modal visible={modalVisible} animationType="slide" transparent>
+      <Modal visible={modalVisible && isAdmin} animationType="slide" transparent>
         <View style={styles.modalBg}>
           <ScrollView style={styles.modalContent}>
             <Text style={styles.modalTitle}>{editingId ? 'Edit Event' : 'New Event'}</Text>
@@ -557,44 +799,37 @@ export default function EventsScreen({ navigation }: Props) {
             <Text style={styles.label}>Event Title</Text>
             <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="e.g. Glastonbury Festival" placeholderTextColor="#5A4739" />
 
-            <View style={styles.gridRow}>
-              <View style={{flex:1}}>
-                <Text style={styles.label}>Start Date</Text>
-                <TouchableOpacity style={styles.dateBtn} onPress={() => setDatePickerConfig({ visible: true, field: 'start' })}><Text style={styles.dateBtnText}>{startDate || 'Select'}</Text></TouchableOpacity>
+            <Text style={styles.label}>Event Days</Text>
+            <Text style={styles.hintInline}>
+              Add days from the calendar. New days copy the previous day's hours. Tap a day to edit times.
+            </Text>
+            {eventDays.map(day => (
+              <View key={day.date} style={styles.dayEditorRow}>
+                <View style={styles.dayEditorHeader}>
+                  <Text style={styles.dayEditorDate}>{formatDayHeading(day.date)}</Text>
+                  <TouchableOpacity onPress={() => removeEventDay(day.date)}>
+                    <Text style={styles.dayRemoveText}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity style={styles.dayTimeButton} onPress={() => setEditingDayDate(day.date)}>
+                  <Text style={styles.dayTimeButtonValue}>{formatTimeRange(day.startTime, day.endTime)}</Text>
+                  <Text style={styles.dayTimeButtonHint}>Tap to set start & finish</Text>
+                </TouchableOpacity>
               </View>
-              <View style={{flex:1}}>
-                <Text style={styles.label}>End Date</Text>
-                <TouchableOpacity style={styles.dateBtn} onPress={() => setDatePickerConfig({ visible: true, field: 'end' })}><Text style={styles.dateBtnText}>{endDate || 'Select'}</Text></TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.gridRow}>
-              <View style={{flex:1}}>
-                <Text style={styles.label}>Team Arrival Date</Text>
-                <TouchableOpacity style={styles.dateBtn} onPress={() => setDatePickerConfig({ visible: true, field: 'arrival' })}><Text style={styles.dateBtnText}>{arrivalDate || 'Select'}</Text></TouchableOpacity>
-              </View>
-              <View style={{flex:1}}>
-                <Text style={styles.label}>Arrival Time</Text>
-                <TextInput style={styles.input} value={startTime} onChangeText={setStartTime} placeholder="e.g. 2 PM" placeholderTextColor="#5A4739" />
-              </View>
-            </View>
-
-            <View style={styles.gridRow}>
-              <View style={{flex:1}}>
-                <Text style={styles.label}>Shift End Time</Text>
-                <TextInput style={styles.input} value={endTime} onChangeText={setEndTime} placeholder="e.g. 10 PM" placeholderTextColor="#5A4739" />
-              </View>
-              <View style={{flex:1}}>
-                <Text style={styles.label}>People Needed</Text>
-                <TextInput style={styles.input} value={staffNeeded} onChangeText={setStaffNeeded} keyboardType="numeric" placeholder="1" placeholderTextColor="#5A4739" />
-              </View>
-            </View>
+            ))}
+            <TouchableOpacity style={styles.addDayBtn} onPress={() => setAddDayPickerVisible(true)}>
+              <Icons.plus color="#C9782B" width={18} height={18} />
+              <Text style={styles.addDayBtnText}>Add day</Text>
+            </TouchableOpacity>
 
             <Text style={styles.label}>Location Name</Text>
             <TextInput style={styles.input} value={locationName} onChangeText={setLocationName} placeholder="Central Park" placeholderTextColor="#5A4739" />
 
             <Text style={styles.label}>Google Maps Link</Text>
             <TextInput style={styles.input} value={locationUrl} onChangeText={setLocationUrl} placeholder="https://goo.gl/maps/..." placeholderTextColor="#5A4739" />
+
+            <Text style={styles.label}>People Needed</Text>
+            <TextInput style={styles.input} value={staffNeeded} onChangeText={setStaffNeeded} keyboardType="numeric" placeholder="1" placeholderTextColor="#5A4739" />
 
             <Text style={styles.label}>Confirmed Staff</Text>
             <View style={styles.staffPicker}>
@@ -620,24 +855,37 @@ export default function EventsScreen({ navigation }: Props) {
           </ScrollView>
         </View>
 
-        {/* Calendar Picker Modal */}
-        <Modal visible={datePickerConfig.visible} transparent animationType="fade">
+        {/* Add-day calendar */}
+        <Modal visible={addDayPickerVisible} transparent animationType="fade">
           <View style={styles.datePickerOverlay}>
             <View style={styles.calendarCard}>
-              <Text style={styles.calendarTitle}>Select {datePickerConfig.field.toUpperCase()} Date</Text>
+              <Text style={styles.calendarTitle}>Add event day</Text>
               <Calendar
                 theme={{
                   backgroundColor: '#1E1813', calendarBackground: '#1E1813', selectedDayBackgroundColor: '#C9782B',
                   dayTextColor: '#F6EDE2', monthTextColor: '#F6EDE2', textDisabledColor: '#3A2D24',
                 }}
-                onDayPress={(day: any) => { setDateValue(day.dateString); setDatePickerConfig({ ...datePickerConfig, visible: false }); }}
-                markedDates={{ [getActiveDatePickerValue()]: { selected: true, selectedColor: '#C9782B' } }}
+                onDayPress={(day: any) => addEventDay(day.dateString)}
+                markedDates={markedAddDays}
               />
-              <TouchableOpacity onPress={() => setDatePickerConfig({ ...datePickerConfig, visible: false })} style={styles.closeCalendarBtn}><Text style={styles.closeCalendarBtnText}>Close</Text></TouchableOpacity>
+              <TouchableOpacity onPress={() => setAddDayPickerVisible(false)} style={styles.closeCalendarBtn}><Text style={styles.closeCalendarBtnText}>Close</Text></TouchableOpacity>
             </View>
           </View>
         </Modal>
       </Modal>
+
+      <EventDayTimeModal
+        visible={isAdmin && editingDayDate !== null && !!editingDay}
+        dayLabel={editingDayDate ? formatDayHeading(editingDayDate) : ''}
+        startTime={editingDay?.startTime || DEFAULT_EVENT_DAY_TIMES.startTime}
+        endTime={editingDay?.endTime || DEFAULT_EVENT_DAY_TIMES.endTime}
+        onClose={() => setEditingDayDate(null)}
+        onConfirm={(startTime, endTime) => {
+          if (!editingDayDate) return;
+          updateEventDayTimes(editingDayDate, startTime, endTime);
+          setEditingDayDate(null);
+        }}
+      />
 
       {/* Availability Notes Modal */}
       <Modal visible={availModalVisible} animationType="fade" transparent>
@@ -666,15 +914,39 @@ const styles = StyleSheet.create({
   title: { color: '#F6EDE2', fontSize: 20, fontWeight: '900' },
   list: { padding: 16, paddingBottom: 40 },
   eventCard: { backgroundColor: '#1E1813', padding: 16, borderRadius: 16, marginBottom: 16, borderWidth: 1, borderColor: '#3A2D24' },
-  eventHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 14 },
-  eventTitle: { color: '#F6EDE2', fontSize: 18, fontWeight: '800', flex: 1 },
-  eventDateRange: { color: '#C9782B', fontSize: 13, fontWeight: '700', marginTop: 2 },
-  arrivalBox: { backgroundColor: '#2A211B', padding: 6, borderRadius: 8, borderWidth: 1, borderColor: '#3A2D24', alignItems: 'flex-end' },
-  arrivalLabel: { color: '#7C6854', fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-  arrivalDateText: { color: '#F6EDE2', fontSize: 11, fontWeight: '700' },
+  eventHeader: { marginBottom: 10 },
+  eventTitle: { color: '#F6EDE2', fontSize: 18, fontWeight: '800' },
+  daysSection: {
+    backgroundColor: '#2A211B',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#3A2D24',
+    gap: 8,
+  },
+  dayRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  dayDate: { color: '#EBDCCB', fontSize: 14, fontWeight: '700', flex: 1 },
+  dayTimes: { color: '#C9782B', fontSize: 13, fontWeight: '700' },
+  dayEmpty: { color: '#7C6854', fontSize: 13, fontStyle: 'italic' },
+  linkRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  linkChip: {
+    flex: 1,
+    backgroundColor: 'rgba(201, 120, 43, 0.12)',
+    borderWidth: 1,
+    borderColor: '#C9782B',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  linkChipText: { color: '#C9782B', fontSize: 12, fontWeight: '800' },
   locationRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  locationText: { color: '#EBDCCB', marginLeft: 6, fontSize: 14 },
-  timeText: { color: '#A88E73', fontSize: 12 },
+  locationText: { color: '#EBDCCB', marginLeft: 6, fontSize: 14, flex: 1 },
   linkText: { textDecorationLine: 'underline', color: '#D9A441' },
   staffStatusRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   staffRow: { flexDirection: 'row', alignItems: 'center' },
@@ -690,6 +962,42 @@ const styles = StyleSheet.create({
   availBtnActive: { backgroundColor: 'rgba(76, 175, 80, 0.1)', borderWidth: 1, borderColor: '#4CAF50' },
   availBtnText: { color: '#F6EDE2', fontSize: 11, fontWeight: '700' },
   availBtnTextActive: { color: '#4CAF50' },
+  eventChatBtn: {
+    marginTop: 12,
+    backgroundColor: 'rgba(201, 120, 43, 0.16)',
+    borderWidth: 1,
+    borderColor: '#C9782B',
+    paddingVertical: 8,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 38,
+  },
+  eventChatBtnText: {
+    color: '#C9782B',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  unreadBadge: {
+    position: 'absolute',
+    right: 10,
+    top: 8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: '#E53935',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    borderWidth: 1,
+    borderColor: '#fff',
+  },
+  unreadBadgeText: {
+    color: '#FFF',
+    fontSize: 10,
+    fontWeight: '900',
+  },
   adminActions: { marginTop: 16, gap: 12, borderTopWidth: 1, borderTopColor: '#3A2D24', paddingTop: 16 },
   viewAvailBtn: { backgroundColor: 'rgba(201, 120, 43, 0.1)', paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   viewAvailBtnText: { color: '#C9782B', fontSize: 12, fontWeight: '700' },
@@ -707,7 +1015,53 @@ const styles = StyleSheet.create({
   modalContent: { backgroundColor: '#1E1813', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '95%' },
   modalTitle: { color: '#F6EDE2', fontSize: 20, fontWeight: '900', marginBottom: 16, textAlign: 'center' },
   label: { color: '#A88E73', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 14, marginBottom: 4, letterSpacing: 1 },
+  hintInline: { color: '#7C6854', fontSize: 12, marginBottom: 8 },
   gridRow: { flexDirection: 'row', gap: 12 },
+  dayEditorRow: {
+    backgroundColor: '#2A211B',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#3A2D24',
+  },
+  dayEditorHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  dayEditorDate: { color: '#F6EDE2', fontSize: 14, fontWeight: '800' },
+  dayRemoveText: { color: '#9E3C2E', fontSize: 12, fontWeight: '700' },
+  dayTimeButton: {
+    backgroundColor: '#171311',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#4A3A30',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+  },
+  dayTimeButtonValue: {
+    color: '#C9782B',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  dayTimeButtonHint: {
+    color: '#7C6854',
+    fontSize: 11,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+  addDayBtn: {
+    marginTop: 4,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#C9782B',
+    borderRadius: 12,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(201, 120, 43, 0.1)',
+  },
+  addDayBtnText: { color: '#C9782B', fontWeight: '800', fontSize: 14 },
   input: { backgroundColor: '#2A211B', color: '#F6EDE2', padding: 12, borderRadius: 10, fontSize: 14, borderWidth: 1, borderColor: '#3A2D24' },
   dateBtn: { backgroundColor: '#2A211B', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#3A2D24', alignItems: 'center' },
   dateBtnText: { color: '#F6EDE2', fontSize: 14 },
