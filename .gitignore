@@ -22,6 +22,10 @@ DerivedData
 *.xcuserstate
 **/.xcode.env.local
 
+# Firebase Apple configuration is installed locally or by the secure build
+# environment. Do not publish its client API key in this public repository.
+ios/PizzaWala/GoogleService-Info.plist
+
 # Android/IntelliJ
 #
 build/
