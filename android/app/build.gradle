@@ -116,6 +116,9 @@ android {
     }
     buildTypes {
         debug {
+            // Keep Metro development builds installed alongside the production app.
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
             signingConfig signingConfigs.debug
         }
         release {

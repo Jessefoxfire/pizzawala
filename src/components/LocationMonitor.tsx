@@ -2,14 +2,27 @@ import { useEffect, useRef, useState } from 'react';
 import Geolocation from 'react-native-geolocation-service';
 import { doc, getFirestore, onSnapshot, serverTimestamp, updateDoc } from '@react-native-firebase/firestore';
 import nativeAuth from '@react-native-firebase/auth';
-import { ensureLocationPermission } from '../utils/geo';
+import { hasLocationPermission } from '../utils/geo';
+import {
+  getLocationFeaturesEnabled,
+  subscribeLocationFeatureSettings,
+} from '../geofencing/storage';
 
 type Coordinates = { lat: number; lng: number };
 
 export default function LocationMonitor() {
   const watchIdRef = useRef<number | null>(null);
   const [isOnShift, setIsOnShift] = useState(false);
+  const [locationFeaturesEnabled, setLocationFeaturesEnabled] = useState(false);
   const fs = getFirestore();
+
+  useEffect(() => {
+    const refresh = () => {
+      void getLocationFeaturesEnabled().then(setLocationFeaturesEnabled);
+    };
+    refresh();
+    return subscribeLocationFeatureSettings(refresh);
+  }, []);
 
   useEffect(() => {
     const user = nativeAuth().currentUser;
@@ -38,9 +51,9 @@ export default function LocationMonitor() {
 
     const unsub = nativeAuth().onAuthStateChanged(async user => {
       stopWatch();
-      if (!user?.uid) return;
+      if (!user?.uid || !locationFeaturesEnabled) return;
 
-      const allowed = await ensureLocationPermission();
+      const allowed = await hasLocationPermission();
       if (!allowed) return;
 
       // POWER SAVING LOGIC:
@@ -80,7 +93,7 @@ export default function LocationMonitor() {
     });
 
     return () => unsub();
-  }, [fs, isOnShift]);
+  }, [fs, isOnShift, locationFeaturesEnabled]);
 
 
   return null;

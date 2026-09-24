@@ -13,9 +13,11 @@ import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { 
-  ensureGeofencePermissions, 
-  ensureLocationPermission,
   ensureActivityRecognitionPermission,
+  hasActivityRecognitionPermission,
+  hasGeofencePermissions,
+  hasLocationPermission,
+  requestLocationForFeature,
 } from '../utils/geo';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Permissions'>;
@@ -30,7 +32,7 @@ export default function PermissionsScreen({ navigation }: Props) {
 
     setRequesting(true);
     try {
-      const hasLocation = await ensureLocationPermission();
+      const hasLocation = await requestLocationForFeature(true);
       if (!hasLocation) {
         Alert.alert(
           'Permission required',
@@ -47,8 +49,6 @@ export default function PermissionsScreen({ navigation }: Props) {
         );
         return;
       }
-
-
       const hasActivity = await ensureActivityRecognitionPermission();
       if (!hasActivity) {
         Alert.alert(
@@ -63,7 +63,7 @@ export default function PermissionsScreen({ navigation }: Props) {
         return;
       }
 
-      const hasBackgroundLocation = await ensureGeofencePermissions();
+      const hasBackgroundLocation = await hasGeofencePermissions();
       if (!hasBackgroundLocation) {
         Alert.alert(
           'Bulletproof mode required',
@@ -124,14 +124,9 @@ export default function PermissionsScreen({ navigation }: Props) {
   React.useEffect(() => {
     const checkExistingPermissions = async () => {
       try {
-        const hasLocation = await ensureLocationPermission();
-        const hasActivity = await ensureActivityRecognitionPermission();
-        const hasGeofence = await ensureGeofencePermissions();
-        
-        // We only skip if all three are granted. 
-        // Note: ensureGeofencePermissions might show an alert if not granted, 
-        // which might be annoying on startup. 
-        // Better to use a "check-only" version if possible.
+        const hasLocation = await hasLocationPermission();
+        const hasActivity = await hasActivityRecognitionPermission();
+        const hasGeofence = await hasGeofencePermissions();
         
         if (hasLocation && hasActivity && hasGeofence) {
           navigation.replace('Home');

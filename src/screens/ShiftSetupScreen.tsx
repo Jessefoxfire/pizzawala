@@ -17,17 +17,16 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import {
   getAutoShiftEnabled,
+  getWorksiteAlertsEnabled,
   getShiftSetupIntroSeen,
   setAutoShiftEnabled,
+  setWorksiteAlertsEnabled,
   setShiftSetupIntroSeen,
   loadCachedGeofences,
 } from '../geofencing/storage';
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
-import { 
-  getNativeNotificationsEnabled, 
-} from '../geofencing/native';
 import type { Geofence } from '../types';
-import { getDistanceMeters, normalizeLatLng } from '../utils/geo';
+import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
 import Geolocation from 'react-native-geolocation-service';
 
 import {
@@ -348,7 +347,7 @@ export default function ShiftSetupScreen() {
     // 1. Load basic settings
     async function initSettings() {
       const auto = await getAutoShiftEnabled();
-      const notify = await getNativeNotificationsEnabled();
+      const notify = await getWorksiteAlertsEnabled();
 
       setAutoTracking(auto);
       setAllowAlerts(notify);
@@ -489,8 +488,9 @@ export default function ShiftSetupScreen() {
             <Switch
               value={autoTracking}
               onValueChange={async v => {
-                setAutoTracking(v);
+                if (v && !(await requestLocationForFeature(true))) return;
                 await setAutoShiftEnabled(v);
+                setAutoTracking(v);
               }}
               trackColor={{ false: '#3A2D24', true: '#C9782B' }}
               thumbColor={autoTracking ? '#F6EDE2' : '#A88E73'}
@@ -514,7 +514,11 @@ export default function ShiftSetupScreen() {
             <Text style={styles.label}>Worksite Alerts</Text>
             <Switch 
               value={allowAlerts} 
-              onValueChange={setAllowAlerts}
+              onValueChange={async v => {
+                if (v && !(await requestLocationForFeature(true))) return;
+                await setWorksiteAlertsEnabled(v);
+                setAllowAlerts(v);
+              }}
               trackColor={{ false: '#3A2D24', true: '#C9782B' }}
             />
           </View>

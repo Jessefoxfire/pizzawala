@@ -13,13 +13,13 @@ import {
 import type { Geofence } from '../types';
 import {
   ensureActivityRecognitionPermission,
-  ensureGeofencePermissions,
-  ensureLocationPermission,
+  hasGeofencePermissions,
   checkAndPromptBatteryOptimization,
   normalizeLatLng,
 } from '../utils/geo';
 import {
   getNativeAvailability,
+  initNativeGeofencing,
   resolveGeofenceForNativeEvent,
   shouldUseJsFallback,
   startNativeMonitoring,
@@ -34,6 +34,8 @@ import {
   setLastUserName,
   shouldNotifyForEvent,
   getAutoShiftEnabled,
+  getLocationFeaturesEnabled,
+  subscribeLocationFeatureSettings,
 } from '../geofencing/storage';
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { setNativeUserName } from '../geofencing/native';
@@ -94,16 +96,29 @@ export default function GeofenceMonitor() {
   const [teamId, setTeamId] = useState<string | null>(null);
   const [isOnShift, setIsOnShift] = useState(false);
   const [useJsFallback, setUseJsFallback] = useState(false);
+  const [locationFeaturesEnabled, setLocationFeaturesEnabled] = useState(false);
   const geofencesRef = useRef<Geofence[]>([]);
   const watchIdRef = useRef<number | null>(null);
   const jsStateRef = useRef<Map<string, boolean>>(new Map());
   const lastNativeRegSigRef = useRef<string>('');
   const useJsFallbackRef = useRef(false);
+  const locationFeaturesEnabledRef = useRef(false);
   const lastNativeEventAtRef = useRef<Map<string, { transition: string; timestamp: number }>>(new Map());
 
   useEffect(() => {
     useJsFallbackRef.current = useJsFallback;
   }, [useJsFallback]);
+
+  useEffect(() => {
+    const refresh = () => {
+      void getLocationFeaturesEnabled().then(enabled => {
+        locationFeaturesEnabledRef.current = enabled;
+        setLocationFeaturesEnabled(enabled);
+      });
+    };
+    refresh();
+    return subscribeLocationFeatureSettings(refresh);
+  }, []);
 
   useEffect(() => {
     let unsubProfile: (() => void) | null = null;
@@ -134,6 +149,7 @@ export default function GeofenceMonitor() {
 
     const handleStateChange = (nextState: AppStateStatus) => {
       if (nextState === 'active') {
+        if (!locationFeaturesEnabledRef.current) return;
         console.log('[GeofenceMonitor] App foregrounded, refreshing registration...');
         refreshNativeRegistration().catch(err => console.error('Auto-refresh failed:', err));
       }
@@ -173,7 +189,7 @@ export default function GeofenceMonitor() {
       geofencesRef.current = items;
       void cacheGeofences(items);
       // Removed the !useJsFallback check - we want BOTH running for maximum redundancy.
-      if (items.length > 0) {
+      if (items.length > 0 && locationFeaturesEnabledRef.current) {
         void refreshNativeRegistration();
       }
     });
@@ -185,14 +201,15 @@ export default function GeofenceMonitor() {
     let cleanupNative: () => void = () => {};
 
     const init = async () => {
-      if (!userId) return;
-      const hasForegroundLocation = await ensureLocationPermission();
-      if (!hasForegroundLocation) {
-        console.warn(
-          '[GeofenceMonitor] Location permission is required for foreground geofence checks.'
-        );
+      if (!userId || !locationFeaturesEnabled) {
+        await stopNativeMonitoring();
         return;
       }
+
+      const hasBackgroundLocation = await hasGeofencePermissions();
+      if (!hasBackgroundLocation) return;
+
+      await initNativeGeofencing();
 
       try {
         const notifSettings = await notifee.requestPermission({
@@ -213,15 +230,6 @@ export default function GeofenceMonitor() {
       }
 
       startJsFallback();
-
-      const hasBackgroundLocation = await ensureGeofencePermissions();
-      if (!hasBackgroundLocation) {
-        setUseJsFallback(true);
-        console.warn(
-          '[GeofenceMonitor] Background location not granted; foreground geofence checks are active, native background geofencing is disabled.'
-        );
-        return;
-      }
       await ensureActivityRecognitionPermission();
       await checkAndPromptBatteryOptimization();
 
@@ -244,7 +252,7 @@ export default function GeofenceMonitor() {
       cleanupNative();
       stopJsFallback();
     };
-  }, [userId, teamId, isOnShift]);
+  }, [userId, teamId, isOnShift, locationFeaturesEnabled]);
 
   useEffect(() => {
     if (isOnShift) {
@@ -274,6 +282,7 @@ export default function GeofenceMonitor() {
       .join('|');
 
   const refreshNativeRegistration = async () => {
+    if (!locationFeaturesEnabledRef.current) return;
     const geofences = geofencesRef.current;
     if (geofences.length === 0) {
       console.log('GeofenceMonitor: Geofences list is empty, skipping registration (preserving previous state if any)');

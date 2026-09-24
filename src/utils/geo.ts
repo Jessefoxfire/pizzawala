@@ -2,11 +2,33 @@
 
 import { PermissionsAndroid, Platform, Alert, Linking, NativeModules } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
-import { startNativeMonitoring, getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
+import { getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 
 const { GeofenceModule } = NativeModules;
 
 export type LatLng = { lat: number; lng: number };
+
+export function requestLocationForFeature(requireBackground = false): Promise<boolean> {
+  return new Promise(resolve => {
+    Alert.alert(
+      'Location required',
+      'Please allow location access to use this feature.',
+      [
+        { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
+        {
+          text: 'Allow Location',
+          onPress: () => {
+            const request = requireBackground
+              ? ensureGeofencePermissions()
+              : ensureLocationPermission();
+            void request.then(resolve).catch(() => resolve(false));
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) }
+    );
+  });
+}
 
 export async function ensureLocationPermission(): Promise<boolean> {
   if (Platform.OS === 'ios') {
@@ -25,7 +47,6 @@ export async function ensureLocationPermission(): Promise<boolean> {
   );
 
   if (fine !== PermissionsAndroid.RESULTS.GRANTED) {
-    Alert.alert('Location Permission', 'Please enable location in Settings');
     return false;
   }
 
@@ -211,5 +232,3 @@ export const getDistanceMeters = (from: LatLng, to: LatLng) => {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return earthRadius * c;
 };
-
-

@@ -178,7 +178,17 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Password</Text>
                 <View style={styles.passwordContainer}>
-                  <TextInput placeholder="Min. 6 characters" value={password} onChangeText={setPassword} style={styles.passwordInput} secureTextEntry={!showPassword} placeholderTextColor="#8F6A48" />
+                  <TextInput
+                    placeholder="Min. 6 characters"
+                    value={password}
+                    onChangeText={setPassword}
+                    style={styles.passwordInput}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    placeholderTextColor="#8F6A48"
+                  />
                   <TouchableOpacity onPress={() => setShowPassword(!showPassword)} style={styles.eyeIcon}>
                     {showPassword ? <Icons.eyeOff color="#fff" width={20} height={20} /> : <Icons.eye color="#fff" width={20} height={20} />}
                   </TouchableOpacity>

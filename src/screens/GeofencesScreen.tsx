@@ -10,7 +10,6 @@ import {
   Modal,
   TextInput,
     ActivityIndicator,
-  PermissionsAndroid,
   Platform,
   ToastAndroid,
 } from 'react-native';
@@ -36,8 +35,8 @@ import { auth } from '../services/firebase';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { Icons } from '../components/Icons';
 import { cacheGeofences, loadCachedGeofences } from '../geofencing/storage';
-import { normalizeLatLng } from '../utils/geo';
-import { startNativeMonitoring, getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
+import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
+import { getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 import { useIsFocused } from '@react-navigation/native';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Geofences'>;
@@ -247,55 +246,12 @@ export default function GeofencesScreen({ navigation }: Props) {
     }
   }, [modalVisible, saving]);
 
-  /* ───────────────────────── permissions ───────────────────────── */
-
-  const ensureLocationPermission = async () => {
-    console.log('Checking location permission...');
-    
-    if (Platform.OS === 'ios') {
-      try {
-        const authStatus = await Geolocation.requestAuthorization('whenInUse');
-        console.log('iOS auth status:', authStatus);
-        
-        if (authStatus === 'granted') {
-          return true;
-        }
-        
-        Alert.alert(
-          'Location Permission Required',
-          'Please enable location access in Settings > PizzaWala > Location',
-          [{ text: 'OK' }]
-        );
-        return false;
-      } catch (err) {
-        console.error('iOS permission error:', err);
-        return false;
-      }
-    }
-
-    if (Platform.OS !== 'android') return true;
-
-    const result = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      {
-        title: 'Location Access',
-        message: 'Location is required to set a worksite center.',
-        buttonPositive: 'Allow',
-        buttonNegative: 'Cancel',
-      }
-    );
-
-    const granted = result === PermissionsAndroid.RESULTS.GRANTED;
-    console.log('Android permission granted:', granted);
-    return granted;
-  };
-
   /* ───────────────────────── location ───────────────────────── */
 
   const getCurrentLocation = async () => {
     if (locating) return;
 
-    const granted = await ensureLocationPermission();
+    const granted = await requestLocationForFeature();
     if (!granted) {
       Alert.alert('Permission denied', 'Location access is required.');
       return;
@@ -627,7 +583,7 @@ export default function GeofencesScreen({ navigation }: Props) {
 
   const useCurrentLocationForCampsite = async () => {
     if (campsiteLocating) return;
-    const granted = await ensureLocationPermission();
+    const granted = await requestLocationForFeature();
     if (!granted) {
       Alert.alert('Permission denied', 'Location access is required.');
       return;

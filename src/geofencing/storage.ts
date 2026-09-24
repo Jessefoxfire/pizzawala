@@ -12,6 +12,7 @@ const LAST_USER_NAME_KEY = 'geofence_last_user_name';
 const LAST_EVENT_DEBUG_KEY = 'geofence_last_event_debug';
 const PROMPT_ACTION_STATUS_PREFIX = 'geofence_prompt_status_';
 const AUTO_SHIFT_ENABLED_KEY = 'geofence_auto_shift_enabled';
+const WORKSITE_ALERTS_ENABLED_KEY = 'geofence_worksite_alerts_enabled';
 const SHIFT_SETUP_INTRO_SEEN_KEY = 'shift_setup_intro_seen';
 const TRACKING_ACTIVE_KEY = 'geofence_tracking_active';
 const SHIFT_START_TIME_KEY = 'geofence_shift_start_time';
@@ -23,6 +24,20 @@ const GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY = 'geofence_notification_last_mu
 const GEOFENCE_SPAM_WINDOW_MS = 30 * 60 * 1000;
 const GEOFENCE_SPAM_THRESHOLD = 4;
 
+type LocationFeatureSettingsListener = () => void;
+const locationFeatureSettingsListeners = new Set<LocationFeatureSettingsListener>();
+
+const notifyLocationFeatureSettingsChanged = () => {
+  locationFeatureSettingsListeners.forEach(listener => listener());
+};
+
+export const subscribeLocationFeatureSettings = (
+  listener: LocationFeatureSettingsListener
+): (() => void) => {
+  locationFeatureSettingsListeners.add(listener);
+  return () => locationFeatureSettingsListeners.delete(listener);
+};
+
 export const setAutoShiftEnabled = async (enabled: boolean): Promise<void> => {
   await AsyncStorage.setItem(AUTO_SHIFT_ENABLED_KEY, enabled ? 'true' : 'false');
   try {
@@ -31,11 +46,36 @@ export const setAutoShiftEnabled = async (enabled: boolean): Promise<void> => {
   } catch (err) {
     console.warn('Failed to sync auto shift to native:', err);
   }
+  notifyLocationFeatureSettingsChanged();
 };
 
 export const getAutoShiftEnabled = async (): Promise<boolean> => {
   const raw = await AsyncStorage.getItem(AUTO_SHIFT_ENABLED_KEY);
   return raw === 'true'; // Defaults to false
+};
+
+export const setWorksiteAlertsEnabled = async (enabled: boolean): Promise<void> => {
+  await AsyncStorage.setItem(WORKSITE_ALERTS_ENABLED_KEY, enabled ? 'true' : 'false');
+  try {
+    const { setNativeNotificationsEnabled } = require('./native');
+    await setNativeNotificationsEnabled(enabled);
+  } catch (err) {
+    console.warn('Failed to sync worksite alerts to native:', err);
+  }
+  notifyLocationFeatureSettingsChanged();
+};
+
+export const getWorksiteAlertsEnabled = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(WORKSITE_ALERTS_ENABLED_KEY);
+  return raw === 'true'; // Location-backed features are opt-in.
+};
+
+export const getLocationFeaturesEnabled = async (): Promise<boolean> => {
+  const [autoShift, worksiteAlerts] = await Promise.all([
+    getAutoShiftEnabled(),
+    getWorksiteAlertsEnabled(),
+  ]);
+  return autoShift || worksiteAlerts;
 };
 
 export const getShiftSetupIntroSeen = async (): Promise<boolean> => {
