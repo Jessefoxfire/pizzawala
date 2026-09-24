@@ -116,7 +116,30 @@ This is a standalone Release build. Xcode embeds `main.jsbundle` in the app, so 
 
 If App Store Connect says build `17` was already used, increment **Current Project Version** to the next unused integer for both Debug and Release configurations, commit that change, then archive again. Do not change the `2.6` marketing version unless the intended App Store version is different.
 
-## 7. Create the TestFlight installation URL
+## 7. Restore the permanent PizzaWala download page
+
+The intended permanent address is:
+
+`https://pizzawala-admin.vercel.app`
+
+It currently returns Vercel's `DEPLOYMENT_NOT_FOUND` response. Before changing or replacing anything, Jesse must identify what the existing project was used for:
+
+1. Sign in to Vercel and select the team/account that originally owned PizzaWala.
+2. Search **Projects** for `pizzawala-admin`.
+3. If it exists, open **Deployments** and inspect the last successful production deployment. Do not overwrite an admin dashboard with a new landing page.
+4. Open **Settings → Domains** and confirm `pizzawala-admin.vercel.app` is assigned to that project.
+5. If the project is intact, redeploy its last known-good production deployment.
+6. If the project is absent, find its source Git repository before creating a replacement. Send Dylan the repository URL and current Vercel production URL.
+7. Confirm the address opens from a private browser window and an iPhone without showing `DEPLOYMENT_NOT_FOUND`.
+
+If this is an existing admin dashboard, add a small **Download app** page or card without removing its current functionality. A dedicated route such as `/download` is preferable. The page should eventually contain:
+
+- **Install PizzaWala for iPhone** → the TestFlight public link
+- **Install PizzaWala for Android** → the existing approved Android Release APK link, if desired
+
+The Vercel page is the permanent branded address. It does not bypass Apple's signing or install the `.ipa` itself.
+
+## 8. Create the TestFlight installation URL
 
 In App Store Connect:
 
@@ -125,13 +148,16 @@ In App Store Connect:
 3. Under **External Testing**, create a group such as `PizzaWala Testing`.
 4. Add the uploaded build, enter concise **What to Test** notes, and submit it for TestFlight App Review. The first externally shared build requires approval.
 5. After approval, open the external group, choose **Create Public Link**, set a small tester limit, and copy the generated URL.
-6. Send Dylan that URL. Dylan installs Apple's **TestFlight** app on the iPhone, opens the link, accepts the invitation, and taps **Install**.
+6. Test the URL on an iPhone: install Apple's **TestFlight** app, open the link, accept the invitation, and tap **Install**.
+7. Update the Vercel page's **Install PizzaWala for iPhone** button to use this TestFlight URL and deploy it to production.
+8. Verify the complete route from a private iPhone browser: Vercel page → TestFlight → PizzaWala installation.
+9. Send Dylan the permanent Vercel page URL. If restoring Vercel is delayed, send the TestFlight URL directly as a temporary fallback.
 
 For future builds, increment the build number, upload the archive, and add it to the same external group. The group link can remain the same.
 
 The faster alternative is to add Dylan as an App Store Connect user and internal tester, but that sends an account/email invitation rather than the requested public installation URL.
 
-## 8. Required TestFlight smoke test
+## 9. Required TestFlight smoke test
 
 After installing from TestFlight, verify all of the following on the physical iPhone:
 
@@ -148,7 +174,7 @@ After installing from TestFlight, verify all of the following on the physical iP
 
 Known intentional gap: Android's compact shift-status chip is Android-native. The iOS ActivityKit/Live Activity equivalent is not included in this baseline build and should be a separate follow-up after this build is stable.
 
-## 9. Return the Mac-side results
+## 10. Return the Mac-side results
 
 Send Dylan:
 
@@ -156,6 +182,7 @@ Send Dylan:
 - The first failing Xcode error in full, if any.
 - Whether Firebase login/data and a push notification worked.
 - Whether TestFlight App Review accepted the build and the public link works.
+- Whether `https://pizzawala-admin.vercel.app` was restored, which repository supplies it, and whether its iPhone install button works.
 - Output of `git status --short` and `git diff -- ios` before committing Xcode-generated project changes.
 
 Do not use Xcode's automatic **Perform Changes** migration on the first pass unless a build error specifically requires it; it can create a large unrelated project diff.
