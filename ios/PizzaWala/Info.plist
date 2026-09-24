@@ -36,11 +36,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>PizzaWala needs camera access so you can take a profile photo or share pictures in chat.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>PizzaWala needs background location access to detect worksite entry and exit when the app is closed.</string>
+	<string>Allow background location only when you enable Auto-Tracking or Worksite Alerts, so PizzaWala can detect worksite entry and exit while the app is closed.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>PizzaWala needs background location access to detect worksite entry and exit when the app is closed.</string>
+	<string>Allow background location only when you enable Auto-Tracking or Worksite Alerts, so PizzaWala can detect worksite entry and exit while the app is closed.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>PizzaWala uses your location to detect worksite entry and exit for shift tracking.</string>
+	<string>Allow location only when you choose to use Auto-Tracking, Worksite Alerts, or another location-based feature.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>PizzaWala can save photos you take to your library when you use the camera.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
