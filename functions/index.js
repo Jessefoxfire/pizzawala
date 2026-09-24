@@ -3,6 +3,13 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const sharp = require('sharp');
+const {
+  birthdayMonthDay,
+  datePartsInTimeZone,
+  dateKeyFromParts,
+  firstName,
+  birthdayNotificationTitle,
+} = require('./birthday');
 
 admin.initializeApp();
 
@@ -174,6 +181,61 @@ exports.hygieneEducationReminderSweep = onSchedule(
         reminderSentForDateKey: dueKey,
         reminderSentAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+    }
+  }
+);
+
+exports.birthdayNotificationSweep = onSchedule(
+  {
+    region: REGION,
+    schedule: '0 9 * * *',
+    timeZone: 'Europe/Berlin',
+  },
+  async () => {
+    const fs = admin.firestore();
+    const today = datePartsInTimeZone(new Date(), 'Europe/Berlin');
+    const todayKey = dateKeyFromParts(today);
+    const usersSnap = await fs.collection('users').get();
+    const users = usersSnap.docs
+      .map(userDoc => ({ ...userDoc.data(), id: userDoc.id, ref: userDoc.ref }))
+      .filter(user => user.disabled !== true);
+
+    const birthdayUsers = users.filter(user => {
+      const birthday = birthdayMonthDay(user.germanCompliance?.birthDate);
+      return birthday?.month === today.month && birthday?.day === today.day;
+    });
+
+    for (const birthdayUser of birthdayUsers) {
+      const teamId = typeof birthdayUser.teamId === 'string' && birthdayUser.teamId.trim()
+        ? birthdayUser.teamId.trim()
+        : 'team-1';
+      const birthdayName = firstName(birthdayUser.name) || firstName(birthdayUser.displayName);
+      const notificationId = `birthday_${todayKey}_${birthdayUser.id}`;
+      const recipients = users.filter(user => {
+        if (user.id === birthdayUser.id) return false;
+        const recipientTeamId = typeof user.teamId === 'string' && user.teamId.trim()
+          ? user.teamId.trim()
+          : 'team-1';
+        return recipientTeamId === teamId;
+      });
+
+      await Promise.all(recipients.map(async recipient => {
+        const notificationRef = recipient.ref.collection('notifications').doc(notificationId);
+        try {
+          await notificationRef.create({
+            title: birthdayNotificationTitle(birthdayName),
+            body: '',
+            kind: 'birthday',
+            birthdayUserId: birthdayUser.id,
+            birthdayDateKey: todayKey,
+            nav: { screen: 'Home' },
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } catch (error) {
+          if (error?.code === 6 || error?.code === 'already-exists') return;
+          throw error;
+        }
+      }));
     }
   }
 );

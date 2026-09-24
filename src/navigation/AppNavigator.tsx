@@ -103,6 +103,7 @@ import {
 import { displayForegroundRemoteMessage } from '../notifications/displayForegroundRemoteMessage';
 import { setNativeNotificationsEnabled } from '../geofencing/native';
 import OfflineBanner from '../components/OfflineBanner';
+import BirthdayGreeting from '../components/BirthdayGreeting';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
@@ -358,6 +359,7 @@ export default function AppNavigator() {
       <View style={styles.bannerOverlay} pointerEvents="box-none">
         <OfflineBanner />
       </View>
+      {auth.status === 'user' || auth.status === 'admin' ? <BirthdayGreeting /> : null}
     </View>
   );
 }
