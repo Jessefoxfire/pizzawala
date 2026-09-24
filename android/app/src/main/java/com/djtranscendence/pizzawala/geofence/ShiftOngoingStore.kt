@@ -71,6 +71,13 @@ object ShiftOngoingStore {
     }
   }
 
+  fun formatBodyElapsed(ms: Long): String {
+    val totalMinutes = (ms / 60_000L).coerceAtLeast(0L)
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m"
+  }
+
   fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val mgr = context.getSystemService(NotificationManager::class.java) ?: return
@@ -95,7 +102,7 @@ object ShiftOngoingStore {
     val appCtx = context.applicationContext
     val status = label(appCtx)
     val elapsed = elapsedMs(appCtx)
-    val text = "$status · ${formatHms(elapsed)}"
+    val elapsedText = formatBodyElapsed(elapsed)
     val launch = Intent(appCtx, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
       putExtra("screen", "Home")
@@ -108,9 +115,8 @@ object ShiftOngoingStore {
     )
     val notification = NotificationCompat.Builder(appCtx, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_shift_clock)
-      .setContentTitle(appCtx.getString(R.string.app_name))
-      .setContentText(text)
-      .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+      .setContentTitle(status)
+      .setContentText(elapsedText)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setSilent(true)
