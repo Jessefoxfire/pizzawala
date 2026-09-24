@@ -14,9 +14,11 @@ import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import {
-  ensureGeofencePermissions, 
-  ensureLocationPermission,
   ensureActivityRecognitionPermission,
+  hasActivityRecognitionPermission,
+  hasGeofencePermissions,
+  hasLocationPermission,
+  requestLocationForFeature,
 } from '../utils/geo';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Permissions'>;
@@ -31,7 +33,7 @@ export default function PermissionsScreen({ navigation }: Props) {
 
     setRequesting(true);
     try {
-      const hasLocation = await ensureLocationPermission();
+      const hasLocation = await requestLocationForFeature(true);
       if (!hasLocation) {
         Alert.alert(
           'Permission required',
@@ -64,7 +66,7 @@ export default function PermissionsScreen({ navigation }: Props) {
         return;
       }
 
-      const hasBackgroundLocation = await ensureGeofencePermissions();
+      const hasBackgroundLocation = await hasGeofencePermissions();
       if (!hasBackgroundLocation) {
         Alert.alert(
           'Bulletproof mode required',
@@ -125,9 +127,9 @@ export default function PermissionsScreen({ navigation }: Props) {
   React.useEffect(() => {
     const checkExistingPermissions = async () => {
       try {
-        const hasLocation = await ensureLocationPermission();
-        const hasActivity = await ensureActivityRecognitionPermission();
-        const hasGeofence = await ensureGeofencePermissions();
+        const hasLocation = await hasLocationPermission();
+        const hasActivity = await hasActivityRecognitionPermission();
+        const hasGeofence = await hasGeofencePermissions();
         
         // We only skip if all three are granted. 
         // Note: ensureGeofencePermissions might show an alert if not granted, 

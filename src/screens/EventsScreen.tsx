@@ -13,7 +13,6 @@ import {
   ScrollView,
   Image,
   Platform,
-  PermissionsAndroid,
   Pressable,
   Switch,
 } from 'react-native';
@@ -65,7 +64,7 @@ import {
   trimOpeningNote,
 } from '../utils/eventDays';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import { normalizeLatLng } from '../utils/geo';
+import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
 import type { Geofence } from '../types';
 import { getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
@@ -534,31 +533,9 @@ export default function EventsScreen({ navigation, route }: Props) {
     };
   }, [retryToken]);
 
-  const ensureLocationPermission = async () => {
-    if (Platform.OS === 'ios') {
-      try {
-        const authStatus = await Geolocation.requestAuthorization('whenInUse');
-        return authStatus === 'granted';
-      } catch {
-        return false;
-      }
-    }
-    if (Platform.OS !== 'android') return true;
-    const result = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      {
-        title: 'Location Access',
-        message: 'Location is required to set the event worksite.',
-        buttonPositive: 'Allow',
-        buttonNegative: 'Cancel',
-      }
-    );
-    return result === PermissionsAndroid.RESULTS.GRANTED;
-  };
-
   const getCurrentWorksiteLocation = async () => {
     if (locating) return;
-    const granted = await ensureLocationPermission();
+    const granted = await requestLocationForFeature();
     if (!granted) {
       Alert.alert('Permission denied', 'Location access is required.');
       return;

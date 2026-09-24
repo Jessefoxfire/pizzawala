@@ -21,7 +21,7 @@ import {
   shouldNotifyForEvent,
   type LastGeofenceEvent,
 } from '../geofencing/storage';
-import { ensureLocationPermission, normalizeLatLng } from '../utils/geo';
+import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
 import { auth } from '../services/firebase';
 import { processGeofenceEvent, notifyGeofenceTransition } from '../geofencing/processor';
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
@@ -142,7 +142,7 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
     };
 
     const startWatch = async () => {
-      const allowed = await ensureLocationPermission();
+      const allowed = await requestLocationForFeature();
       if (!allowed) {
         setLocating(false);
         setLocationError('Location permission denied.');
@@ -244,7 +244,7 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
         return;
       }
 
-      const allowed = await ensureLocationPermission();
+      const allowed = await requestLocationForFeature();
       if (!allowed) {
         if (source === 'debug-manual') {
           setLocationError('Location permission denied.');
@@ -409,7 +409,7 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
                 onPress={() => {
                   if (forcing) return;
                   setForcing(true);
-                  ensureLocationPermission()
+                  requestLocationForFeature()
                     .then(allowed => {
                       if (!allowed) {
                         setLocating(false);

@@ -122,6 +122,9 @@ export default function LoginScreen({ navigation }: Props) {
                     placeholder="Password"
                     placeholderTextColor="#8F6A48"
                     secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    spellCheck={false}
                     value={password}
                     onChangeText={setPassword}
                   />

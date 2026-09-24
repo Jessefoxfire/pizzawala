@@ -3,8 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  PermissionsAndroid,
-  Platform,
   ActivityIndicator,
   Animated,
   TouchableOpacity,
@@ -20,6 +18,7 @@ import { openUserProfile } from '../navigation/openUserProfile';
 import { auth, db } from '../services/firebase';
 import { doc, onSnapshot, collection, query, where, updateDoc } from 'firebase/firestore';
 import { resolveAvatarSource } from '../utils/avatar';
+import { requestLocationForFeature } from '../utils/geo';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'WorksiteFinder'>;
@@ -178,23 +177,8 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
   useEffect(() => {
     let watchId: number | null = null;
 
-    const ensureLocationPermission = async () => {
-      if (Platform.OS === 'ios') {
-        const auth = await Geolocation.requestAuthorization('whenInUse');
-        console.log('iOS location auth status:', auth);
-        return auth === 'granted';
-      }
-      if (Platform.OS !== 'android') return true;
-      console.log('Requesting Android location permission');
-      const fine = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-      );
-      console.log('Android location permission result:', fine);
-      return fine === PermissionsAndroid.RESULTS.GRANTED;
-    };
-
     const startWatching = async () => {
-      const allowed = await ensureLocationPermission();
+      const allowed = await requestLocationForFeature();
       console.log('Location permission allowed:', allowed);
       if (!allowed) {
         console.error('Location permission denied - check Settings');

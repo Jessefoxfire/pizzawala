@@ -31,7 +31,8 @@ import ShiftEndReminderSync from '../components/ShiftEndReminderSync';
 import PresenceMonitor from '../components/PresenceMonitor';
 import LocationMonitor from '../components/LocationMonitor';
 import { navigationRef } from './navigationRef';
-import { initNativeGeofencing } from '../geofencing/native';
+import { initNativeGeofencing, stopNativeMonitoring } from '../geofencing/native';
+import { getLocationFeaturesEnabled } from '../geofencing/storage';
 import AdminOptionsScreen from '../screens/AdminOptionsScreen';
 import AdminScheduleScreen from '../screens/AdminScheduleScreen';
 import AdminCalendarScreen from '../screens/AdminCalendarScreen';
@@ -193,7 +194,9 @@ export default function AppNavigator() {
   }, [auth.status]);
 
   React.useEffect(() => {
-    void initNativeGeofencing().catch(err => console.error('Init geofence failed:', err));
+    void getLocationFeaturesEnabled()
+      .then(enabled => (enabled ? initNativeGeofencing() : stopNativeMonitoring()))
+      .catch(err => console.error('Init geofence failed:', err));
 
     const unsubscribeNotifee = notifee.onForegroundEvent(async ({ type, detail }) => {
       const isPress = type === EventType.PRESS || type === EventType.ACTION_PRESS;
@@ -318,8 +321,8 @@ export default function AppNavigator() {
           </>
         ) : (
           <>
-            <Stack.Screen name="Permissions" component={PermissionsScreen} />
             <Stack.Screen name="Home" component={HomeScreen} />
+            <Stack.Screen name="Permissions" component={PermissionsScreen} />
             <Stack.Screen name="Geofences" component={GeofencesScreen} />
             <Stack.Screen name="ManageUsers" component={ManageUsersScreen} />
             <Stack.Screen name="EditProfile" component={EditProfileScreen} />

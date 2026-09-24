@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Geolocation from 'react-native-geolocation-service';
-import { ensureLocationPermission } from '../utils/geo';
+import { requestLocationForFeature } from '../utils/geo';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 
@@ -68,7 +68,7 @@ export default function MapPickerScreen({ route, navigation }: any) {
                 return;
             }
 
-            const allowed = await ensureLocationPermission();
+            const allowed = await requestLocationForFeature();
             if (cancelled) return;
             if (!allowed) {
                 setLocating(false);

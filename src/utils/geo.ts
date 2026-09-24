@@ -8,6 +8,28 @@ const { GeofenceModule } = NativeModules;
 
 export type LatLng = { lat: number; lng: number };
 
+export function requestLocationForFeature(requireBackground = false): Promise<boolean> {
+  return new Promise(resolve => {
+    Alert.alert(
+      'Location required',
+      'Please allow location access to use this feature.',
+      [
+        { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
+        {
+          text: 'Allow Location',
+          onPress: () => {
+            const request = requireBackground
+              ? ensureGeofencePermissions()
+              : ensureLocationPermission();
+            void request.then(resolve).catch(() => resolve(false));
+          },
+        },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) }
+    );
+  });
+}
+
 export async function ensureLocationPermission(): Promise<boolean> {
   if (Platform.OS === 'ios') {
     try {
