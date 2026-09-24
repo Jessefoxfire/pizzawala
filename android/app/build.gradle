@@ -94,8 +94,8 @@ android {
         applicationId "com.djtranscendence.pizzawala"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 15
-        versionName "2.4"
+        versionCode 16
+        versionName "2.5"
         resValue "string", "google_maps_key", pizzaWalaMapsApiKey
     }
     signingConfigs {

@@ -60,6 +60,17 @@ object ShiftOngoingStore {
     return String.format("%02d:%02d:%02d", hours, minutes, seconds)
   }
 
+  fun formatChipElapsed(ms: Long): String {
+    val totalMinutes = (ms / 60_000L).coerceAtLeast(0L)
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) {
+      "${hours.coerceAtMost(99L)}h${minutes.toString().padStart(2, '0')}"
+    } else {
+      "${minutes}m"
+    }
+  }
+
   fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val mgr = context.getSystemService(NotificationManager::class.java) ?: return
@@ -120,7 +131,7 @@ object ShiftOngoingStore {
     notification.extras.putBoolean("android.requestPromotedOngoing", true)
     notification.extras.putString(
       "android.shortCriticalText",
-      if (status == "Break") "BREAK" else "WORK"
+      formatChipElapsed(elapsed)
     )
     return notification
   }
