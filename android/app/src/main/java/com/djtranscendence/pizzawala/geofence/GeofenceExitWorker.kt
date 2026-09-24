@@ -2,8 +2,6 @@ package com.djtranscendence.pizzawala.geofence
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import androidx.core.content.ContextCompat
 import com.facebook.react.HeadlessJsTaskService
 import androidx.work.*
 import java.util.concurrent.TimeUnit
@@ -31,7 +29,7 @@ class GeofenceExitWorker(context: Context, params: WorkerParameters) : Worker(co
                 ExistingWorkPolicy.REPLACE,
                 workRequest
             )
-            android.util.Log.d(WORK_TAG, "Scheduled exit notification for $geofenceId in 30 minutes")
+            android.util.Log.d(WORK_TAG, "Scheduled delayed auto-stop for $geofenceId in 30 minutes")
         }
 
         fun cancel(context: Context, geofenceId: String) {
@@ -50,12 +48,11 @@ class GeofenceExitWorker(context: Context, params: WorkerParameters) : Worker(co
         )
 
         if (!autoShiftEnabled) {
-            android.util.Log.d(WORK_TAG, "Triggering delayed exit notification for $geofenceId")
+            android.util.Log.d(WORK_TAG, "Delayed exit worker idle for $geofenceId (leave already notified)")
             GeofencePrefs.appendNativeHistory(
                 applicationContext,
-                "exit_worker|notify_only|$geofenceId|$timestamp"
+                "exit_worker|idle|$geofenceId|$timestamp"
             )
-            GeofenceNotifier.notifyTransition(applicationContext, geofenceId, "exit", timestamp)
             return Result.success()
         }
 
@@ -74,11 +71,7 @@ class GeofenceExitWorker(context: Context, params: WorkerParameters) : Worker(co
         }
 
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.startForegroundService(applicationContext, serviceIntent)
-            } else {
-                applicationContext.startService(serviceIntent)
-            }
+            GeofenceHeadlessFg.startEventService(applicationContext, serviceIntent)
             HeadlessJsTaskService.acquireWakeLockNow(applicationContext)
             GeofencePrefs.appendNativeHistory(
                 applicationContext,

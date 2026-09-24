@@ -5,6 +5,7 @@ import {
   Text,
   NativeModules,
   Image,
+  Alert,
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -14,12 +15,9 @@ import { useAuth } from '../auth/useAuth';
 import LoginScreen from '../screens/LoginScreen';
 import CreateAccountScreen from '../screens/CreateAccountScreen';
 import HomeScreen from '../screens/HomeScreen';
-import GeofencesScreen from '../screens/GeofencesScreen';
 import WorksiteFinderScreen from '../screens/WorksiteFinderScreen';
 import ChatScreen from '../screens/ChatScreen';
 import TeamMapScreen from '../screens/TeamMapScreen';
-import AwardMedalScreen from '../screens/AwardMedalScreen';
-import HallOfFameScreen from '../screens/HallOfFameScreen';
 import ShiftSetupScreen from '../screens/ShiftSetupScreen';
 import GeofenceDebugScreen from '../screens/GeofenceDebugScreen';
 import MapPickerScreen from '../screens/MapPickerScreen';
@@ -28,17 +26,18 @@ import ManageUsersScreen from '../screens/ManageUsersScreen';
 import EditProfileScreen from '../screens/EditProfileScreen';
 import WorksiteOverviewScreen from '../screens/WorksiteOverviewScreen';
 import GeofenceMonitor from '../components/GeofenceMonitor';
+import ShiftOngoingSync from '../components/ShiftOngoingSync';
+import ShiftEndReminderSync from '../components/ShiftEndReminderSync';
 import PresenceMonitor from '../components/PresenceMonitor';
 import LocationMonitor from '../components/LocationMonitor';
 import { navigationRef } from './navigationRef';
 import { initNativeGeofencing } from '../geofencing/native';
-import { handleGeofenceReminderAction } from '../geofencing/notificationPolicy';
-import { muteGeofenceNotificationsForMs } from '../geofencing/storage';
 import AdminOptionsScreen from '../screens/AdminOptionsScreen';
 import AdminScheduleScreen from '../screens/AdminScheduleScreen';
 import AdminCalendarScreen from '../screens/AdminCalendarScreen';
 import MyScheduleScreen from '../screens/MyScheduleScreen';
 import EventsScreen from '../screens/EventsScreen';
+import GeofencesScreen from '../screens/GeofencesScreen';
 import AdminAvailabilityScreen from '../screens/AdminAvailabilityScreen';
 import AssignShiftsScreen from '../screens/AssignShiftsScreen';
 import ManualShiftEntryScreen from '../screens/ManualShiftEntryScreen';
@@ -47,7 +46,9 @@ import AdminHygieneScreen from '../screens/AdminHygieneScreen';
 import TruckManagementScreen from '../screens/TruckManagementScreen';
 import DepartureChecklistScreen from '../screens/DepartureChecklistScreen';
 import RequiredDocumentsScreen from '../screens/RequiredDocumentsScreen';
+import ReceiptsExpensesScreen from '../screens/ReceiptsExpensesScreen';
 import WorkingHoursScreen from '../screens/WorkingHoursScreen';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 
 import type { Geofence } from '../types';
 import type { GeofencePromptPayload } from '../geofencing/types';
@@ -57,13 +58,12 @@ export type RootStackParamList = {
   CreateAccount: undefined;
   Permissions: undefined;
   Home: undefined;
+  Events: { eventId?: string } | undefined;
   Geofences: undefined;
   ManageUsers: undefined;
-  EditProfile: undefined;
+  EditProfile: { userId?: string; userName?: string } | undefined;
   WorksiteFinder: { geofence: Geofence };
   Chat: { prefillText?: string; dmUserId?: string; eventId?: string; eventTitle?: string } | undefined;
-  AwardMedal: undefined;
-  HallOfFame: undefined;
   MySchedule: { prompt?: GeofencePromptPayload; initialView?: 'calendar' | 'list'; initialDate?: string } | undefined;
   ShiftSetup: undefined;
   GeofenceDebug: undefined;
@@ -72,23 +72,27 @@ export type RootStackParamList = {
   AdminSchedule: undefined;
   AdminCalendar: undefined;
   TeamMap: { focusUserId?: string } | undefined;
-  MapPicker: { onLocationSelected: (lat: number, lng: number) => void };
-  Events: undefined;
+  MapPicker: {
+    onLocationSelected: (lat: number, lng: number) => void;
+    initialLocation?: { lat: number; lng: number };
+  };
   AdminAvailability: { event?: any };
-  AssignShifts: undefined;
+  AssignShifts: { eventId?: string; userId?: string } | undefined;
   ManualShiftEntry: undefined;
   Hygiene: undefined;
   AdminHygiene: undefined;
   TruckManagement: undefined;
   DepartureChecklist: undefined;
   RequiredDocuments: undefined;
-  WorkingHours: { initialDateKey?: string } | undefined;
+  ReceiptsExpenses: undefined;
+  WorkingHours: { initialDateKey?: string; employeeUserId?: string; employeeName?: string } | undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 import notifee, { EventType } from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
+import { collection, doc, getDoc, getDocs, getFirestore, query, where } from '@react-native-firebase/firestore';
 import { nativeAuth } from '../services/firebase';
 import { registerPushForCurrentUser } from '../services/pushRegistration';
 import {
@@ -98,10 +102,12 @@ import {
 import { displayForegroundRemoteMessage } from '../notifications/displayForegroundRemoteMessage';
 import { setNativeNotificationsEnabled } from '../geofencing/native';
 import OfflineBanner from '../components/OfflineBanner';
+import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 export default function AppNavigator() {
   const auth = useAuth();
+  const pendingInvitePromptedForUidRef = React.useRef<string | null>(null);
 
   /* ───────────────────────── NOTIFICATIONS ───────────────────────── */
 
@@ -144,32 +150,52 @@ export default function AppNavigator() {
   }, [auth.status]);
 
   React.useEffect(() => {
+    if (auth.status !== 'user' && auth.status !== 'admin') return undefined;
+    const user = nativeAuth().currentUser;
+    if (!user?.uid || pendingInvitePromptedForUidRef.current === user.uid) return undefined;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const fs = getFirestore();
+        const eventsSnap = await getDocs(
+          query(collection(fs, 'events'), where('staffIds', 'array-contains', user.uid))
+        );
+        const events = eventsSnap.docs
+          .map(eventDoc => ({ id: eventDoc.id, ...(eventDoc.data() as any) }))
+          .sort((a, b) => String(a.sortDate || a.startDate || '').localeCompare(String(b.sortDate || b.startDate || '')));
+        const pending: Array<{ id: string; title: string }> = [];
+        for (const event of events) {
+          const response = await getDoc(doc(fs, 'events', event.id, 'availability', user.uid));
+          if (!response.data()?.attendanceStatus) {
+            pending.push({ id: event.id, title: String(event.title || 'an event') });
+          }
+        }
+        if (cancelled) return;
+        pendingInvitePromptedForUidRef.current = user.uid;
+        if (pending.length === 0) return;
+        const first = pending[0];
+        Alert.alert(
+          'Event confirmation needed',
+          pending.length === 1
+            ? `Please respond to ${first.title}.`
+            : `You have ${pending.length} event invitations awaiting a response.`,
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'View event', onPress: () => navigationRef.navigate('Events', { eventId: first.id }) },
+          ]
+        );
+      } catch (error) {
+        console.warn('[Events] failed checking pending invitations:', error);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [auth.status]);
+
+  React.useEffect(() => {
     void initNativeGeofencing().catch(err => console.error('Init geofence failed:', err));
 
     const unsubscribeNotifee = notifee.onForegroundEvent(async ({ type, detail }) => {
-      if (type === EventType.ACTION_PRESS) {
-        const actionId = detail.pressAction?.id;
-        if (actionId === 'mute_geofence_1h') {
-          await muteGeofenceNotificationsForMs(60 * 60 * 1000);
-          if (detail.notification?.id) {
-            await notifee.cancelNotification(detail.notification.id);
-          }
-          return;
-        }
-        if (actionId === 'keep_geofence_enabled') {
-          if (detail.notification?.id) {
-            await notifee.cancelNotification(detail.notification.id);
-          }
-          return;
-        }
-        if (actionId === 'keep_reminding' || actionId === 'stop_reminders') {
-          await handleGeofenceReminderAction(actionId);
-          if (detail.notification?.id) {
-            await notifee.cancelNotification(detail.notification.id);
-          }
-          return;
-        }
-      }
       const isPress = type === EventType.PRESS || type === EventType.ACTION_PRESS;
       if (isPress && detail.notification?.data) {
         routeNotificationOpen(detail.notification.data as Record<string, unknown>);
@@ -192,16 +218,18 @@ export default function AppNavigator() {
     });
 
     const unsubForeground = messaging().onMessage(async remoteMessage => {
-      const uid = nativeAuth().currentUser?.uid;
       const data = remoteMessage.data;
       const type = data?.type;
+      if (
+        !SHOW_DEBUG_ONLY_OPERATIONS &&
+        (type === 'chat_message' || type === 'broadcast')
+      ) {
+        return;
+      }
       if (
         (type === 'chat_message' || type === 'broadcast') &&
         navigationRef.getCurrentRoute()?.name === 'Chat'
       ) {
-        return;
-      }
-      if (type === 'award_received' && data?.toUserId && data.toUserId !== uid) {
         return;
       }
       await displayForegroundRemoteMessage(remoteMessage);
@@ -248,6 +276,7 @@ export default function AppNavigator() {
   if (auth.status === 'loading') {
     return (
       <View style={styles.loading}>
+        <PizzaFireBackground />
         <Image
           source={require('../../assets/Pizza Wala Logo.png')}
           style={styles.loadingLogo}
@@ -274,6 +303,8 @@ export default function AppNavigator() {
         }}
       >
         <GeofenceMonitor />
+        <ShiftOngoingSync />
+        <ShiftEndReminderSync />
         <PresenceMonitor />
         <LocationMonitor />
         <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -296,8 +327,6 @@ export default function AppNavigator() {
               name="WorksiteFinder"
               component={WorksiteFinderScreen}
             />
-            <Stack.Screen name="AwardMedal" component={AwardMedalScreen} />
-            <Stack.Screen name="HallOfFame" component={HallOfFameScreen} />
             <Stack.Screen name="MySchedule" component={MyScheduleScreen} />
             <Stack.Screen name="ShiftSetup" component={ShiftSetupScreen} />
             <Stack.Screen name="GeofenceDebug" component={GeofenceDebugScreen} />
@@ -306,7 +335,7 @@ export default function AppNavigator() {
             <Stack.Screen name="AdminSchedule" component={AdminScheduleScreen} />
             <Stack.Screen name="AdminCalendar" component={AdminCalendarScreen} />
             <Stack.Screen name="TeamMap" component={TeamMapScreen} />
-            <Stack.Screen name="Chat" component={ChatScreen} />
+            {SHOW_DEBUG_ONLY_OPERATIONS ? <Stack.Screen name="Chat" component={ChatScreen} /> : null}
             <Stack.Screen name="MapPicker" component={MapPickerScreen} />
             <Stack.Screen name="Events" component={EventsScreen} />
             <Stack.Screen name="AdminAvailability" component={AdminAvailabilityScreen} />
@@ -314,9 +343,10 @@ export default function AppNavigator() {
             <Stack.Screen name="ManualShiftEntry" component={ManualShiftEntryScreen} />
             <Stack.Screen name="Hygiene" component={HygieneScreen} />
             <Stack.Screen name="AdminHygiene" component={AdminHygieneScreen} />
-            <Stack.Screen name="TruckManagement" component={TruckManagementScreen} />
-            <Stack.Screen name="DepartureChecklist" component={DepartureChecklistScreen} />
+            {SHOW_DEBUG_ONLY_OPERATIONS ? <Stack.Screen name="TruckManagement" component={TruckManagementScreen} /> : null}
+            {SHOW_DEBUG_ONLY_OPERATIONS ? <Stack.Screen name="DepartureChecklist" component={DepartureChecklistScreen} /> : null}
             <Stack.Screen name="RequiredDocuments" component={RequiredDocumentsScreen} />
+            <Stack.Screen name="ReceiptsExpenses" component={ReceiptsExpensesScreen} />
             <Stack.Screen name="WorkingHours" component={WorkingHoursScreen} />
           </>
         )}
@@ -348,7 +378,7 @@ const styles = StyleSheet.create({
   },
   loading: {
     flex: 1,
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.bgTop,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -359,7 +389,7 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 16,
-    color: '#F3E6D3',
+    color: PIZZA_FIRE.textPrimary,
     fontWeight: '500',
   },
 });

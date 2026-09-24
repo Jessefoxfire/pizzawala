@@ -11,8 +11,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
-  StatusBar,
-  ImageBackground,
 } from 'react-native';
 import { createAccountWithEmail, uploadStorageRef, uploadStorageRefFallback } from '../services/firebase';
 import { doc, getFirestore, updateDoc } from '@react-native-firebase/firestore';
@@ -23,6 +21,8 @@ import { Icons } from '../components/Icons';
 import { Avatars, type AvatarKey } from '../../assets/avatars';
 import { ensureImagePickerPermission } from '../utils/imagePickerPermissions';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type CreateAccountScreenProps = NativeStackScreenProps<RootStackParamList, 'CreateAccount'>;
 
@@ -114,9 +114,7 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
-      <ImageBackground source={require('../../assets/Flames background.png')} style={styles.background} resizeMode="cover">
+    <PizzaFireScreen>
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
             <View style={styles.card}>
@@ -144,9 +142,9 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
                     {localUri ? (
                       <Image source={{ uri: localUri }} style={styles.customPreview} />
                     ) : (
-                      <View style={styles.cameraIconBg}><Icons.camera color="#C9782B" width={24} height={24} /></View>
+                      <View style={styles.cameraIconBg}><Icons.camera color={PIZZA_FIRE.accent} width={24} height={24} /></View>
                     )}
-                    <Text style={[styles.uploadText, localUri && {color: '#F6EDE2'}]}>{localUri ? 'Photo Selected ✓' : 'Upload Real Photo'}</Text>
+                    <Text style={[styles.uploadText, localUri && {color: PIZZA_FIRE.textPrimary}]}>{localUri ? 'Photo Selected ✓' : 'Upload Real Photo'}</Text>
                   </TouchableOpacity>
 
                   <Text style={styles.orText}>— or pick an icon —</Text>
@@ -186,7 +184,7 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
               </View>
 
               <TouchableOpacity style={styles.button} onPress={handleCreateAccount} disabled={isLoading}>
-                {isLoading ? <ActivityIndicator color="#F6EDE2" /> : <Text style={styles.buttonText}>Join the Team</Text>}
+                {isLoading ? <ActivityIndicator color={PIZZA_FIRE.textPrimary} /> : <Text style={styles.buttonText}>Join the Team</Text>}
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
@@ -195,43 +193,40 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
-      </ImageBackground>
-    </View>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A211B' },
-  background: { flex: 1 },
   flex: { flex: 1 },
   scrollContainer: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, paddingVertical: 60 },
-  card: { width: '100%', maxWidth: 380, backgroundColor: '#1E1813', paddingHorizontal: 24, paddingVertical: 32, borderRadius: 24, alignItems: 'center', elevation: 5, borderWidth: 1, borderColor: '#3A2D24' },
-  homeButton: { alignSelf: 'flex-start', marginBottom: 16, backgroundColor: '#3A2D24', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginTop: -8 },
+  card: { width: '100%', maxWidth: 380, backgroundColor: PIZZA_FIRE.surfaceInset, paddingHorizontal: 24, paddingVertical: 32, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
+  homeButton: { alignSelf: 'flex-start', marginBottom: 16, backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginTop: -8 },
   homeButtonContent: { flexDirection: 'row', alignItems: 'center' },
-  homeButtonText: { fontSize: 13, color: '#EBDCCB', fontWeight: '600', marginLeft: 6 },
-  title: { fontSize: 26, fontWeight: '900', color: '#F6EDE2', marginBottom: 4 },
-  subtitle: { fontSize: 15, color: '#C8B29A', marginBottom: 24, textAlign: 'center' },
+  homeButtonText: { fontSize: 13, color: PIZZA_FIRE.textSecondary, fontWeight: '600', marginLeft: 6 },
+  title: { fontSize: 26, fontWeight: '900', color: PIZZA_FIRE.textPrimary, marginBottom: 4 },
+  subtitle: { fontSize: 15, color: PIZZA_FIRE.textSecondary, marginBottom: 24, textAlign: 'center' },
   avatarSection: { width: '100%', marginBottom: 20, alignItems: 'center' },
   avatarGrid: { width: '100%', alignItems: 'center' },
-  uploadPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#2A211B', padding: 10, borderRadius: 40, borderWidth: 1, borderColor: '#3A2D24', marginBottom: 12, width: '100%', justifyContent: 'center' },
-  avatarSelectedPill: { borderColor: '#C9782B', backgroundColor: 'rgba(201, 120, 43, 0.1)' },
-  cameraIconBg: { backgroundColor: '#3A2D24', padding: 10, borderRadius: 20, marginRight: 12 },
-  customPreview: { width: 44, height: 44, borderRadius: 22, marginRight: 12, borderWidth: 2, borderColor: '#C9782B' },
-  uploadText: { color: '#C9782B', fontWeight: 'bold', fontSize: 15 },
-  orText: { color: '#3A2D24', fontSize: 11, fontWeight: '900', marginVertical: 12, textTransform: 'uppercase' },
+  uploadPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: PIZZA_FIRE.inputBg, padding: 10, borderRadius: 40, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginBottom: 12, width: '100%', justifyContent: 'center' },
+  avatarSelectedPill: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accentSoft },
+  cameraIconBg: { backgroundColor: PIZZA_FIRE.inputBg, padding: 10, borderRadius: 20, marginRight: 12 },
+  customPreview: { width: 44, height: 44, borderRadius: 22, marginRight: 12, borderWidth: 2, borderColor: PIZZA_FIRE.accent },
+  uploadText: { color: PIZZA_FIRE.accent, fontWeight: 'bold', fontSize: 15 },
+  orText: { color: PIZZA_FIRE.textMuted, fontSize: 11, fontWeight: '900', marginVertical: 12, textTransform: 'uppercase' },
   iconGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 10 },
-  avatarWrapper: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#3A2D24', justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'transparent' },
+  avatarWrapper: { width: 50, height: 50, borderRadius: 25, backgroundColor: PIZZA_FIRE.inputBg, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: 'transparent' },
   avatarImage: { width: 36, height: 36 },
-  avatarSelected: { borderColor: '#C9782B', backgroundColor: '#C9782B' },
+  avatarSelected: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accent },
   inputGroup: { width: '100%', marginBottom: 16 },
-  label: { fontSize: 12, fontWeight: '800', color: '#A88E73', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
-  input: { width: '100%', backgroundColor: '#3A2D24', paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, fontSize: 16, color: '#EBDCCB' },
-  passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#3A2D24', borderRadius: 12, width: '100%' },
-  passwordInput: { flex: 1, paddingVertical: 14, paddingHorizontal: 16, fontSize: 16, color: '#EBDCCB' },
+  label: { fontSize: 12, fontWeight: '800', color: PIZZA_FIRE.textMuted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
+  input: { width: '100%', backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, fontSize: 16, color: PIZZA_FIRE.textSecondary },
+  passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 12, width: '100%' },
+  passwordInput: { flex: 1, paddingVertical: 14, paddingHorizontal: 16, fontSize: 16, color: PIZZA_FIRE.textSecondary },
   eyeIcon: { paddingRight: 16 },
-  button: { backgroundColor: '#C9782B', padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10, width: '100%', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 4 },
-  buttonText: { fontWeight: '900', fontSize: 16, color: '#F6EDE2', textTransform: 'uppercase' },
+  button: { backgroundColor: PIZZA_FIRE.accent, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10, width: '100%', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 4 },
+  buttonText: { fontWeight: '900', fontSize: 16, color: PIZZA_FIRE.textPrimary, textTransform: 'uppercase' },
   backButton: { marginTop: 24 },
-  backButtonText: { color: '#A88E73', fontSize: 14, textAlign: 'center' },
-  underline: { color: '#C9782B', fontWeight: 'bold', textDecorationLine: 'underline' },
+  backButtonText: { color: PIZZA_FIRE.textMuted, fontSize: 14, textAlign: 'center' },
+  underline: { color: PIZZA_FIRE.accent, fontWeight: 'bold', textDecorationLine: 'underline' },
 });

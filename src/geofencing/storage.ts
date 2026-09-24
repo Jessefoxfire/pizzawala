@@ -16,12 +16,8 @@ const SHIFT_SETUP_INTRO_SEEN_KEY = 'shift_setup_intro_seen';
 const TRACKING_ACTIVE_KEY = 'geofence_tracking_active';
 const SHIFT_START_TIME_KEY = 'geofence_shift_start_time';
 const SUPPRESS_WHILE_ON_SHIFT_KEY = 'geofence_suppress_while_on_shift';
-const REMINDERS_STOPPED_KEY = 'geofence_reminders_stopped';
-const GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY = 'geofence_notifications_muted_until';
-const GEOFENCE_NOTIFICATION_HISTORY_KEY = 'geofence_notification_history';
-const GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY = 'geofence_notification_last_mute_offer';
-const GEOFENCE_SPAM_WINDOW_MS = 30 * 60 * 1000;
-const GEOFENCE_SPAM_THRESHOLD = 4;
+const ENTER_HANDLED_PREFIX = 'geofence_enter_handled_';
+const GEOFENCE_STATE_PREFIX = 'geofence_state_';
 
 export const setAutoShiftEnabled = async (enabled: boolean): Promise<void> => {
   await AsyncStorage.setItem(AUTO_SHIFT_ENABLED_KEY, enabled ? 'true' : 'false');
@@ -195,64 +191,49 @@ export const getSuppressGeofenceWhileOnShift = async (): Promise<boolean> => {
   return raw === 'true';
 };
 
-export const setGeofenceRemindersStopped = async (stopped: boolean): Promise<void> => {
-  await AsyncStorage.setItem(REMINDERS_STOPPED_KEY, stopped ? 'true' : 'false');
+const syncEnterHandledToNative = (geofenceId: string, handled: boolean) => {
+  try {
+    const { setNativeEnterHandledForVisit } = require('./native');
+    setNativeEnterHandledForVisit(geofenceId, handled);
+  } catch (err) {
+    console.warn('Failed to sync enter-handled flag to native:', err);
+  }
 };
 
-export const getGeofenceRemindersStopped = async (): Promise<boolean> => {
-  const raw = await AsyncStorage.getItem(REMINDERS_STOPPED_KEY);
+/** Persist that this dwell/visit already had a start-shift prompt (or a shift ended while still inside). */
+export const markEnterHandledForVisit = async (geofenceId: string): Promise<void> => {
+  if (!geofenceId) return;
+  await AsyncStorage.setItem(ENTER_HANDLED_PREFIX + geofenceId, 'true');
+  syncEnterHandledToNative(geofenceId, true);
+};
+
+export const clearEnterHandledForVisit = async (geofenceId: string): Promise<void> => {
+  if (!geofenceId) return;
+  await AsyncStorage.removeItem(ENTER_HANDLED_PREFIX + geofenceId);
+  syncEnterHandledToNative(geofenceId, false);
+};
+
+export const isEnterHandledForVisit = async (geofenceId: string): Promise<boolean> => {
+  if (!geofenceId) return false;
+  const raw = await AsyncStorage.getItem(ENTER_HANDLED_PREFIX + geofenceId);
   return raw === 'true';
 };
 
-export const muteGeofenceNotificationsForMs = async (durationMs: number): Promise<void> => {
-  await AsyncStorage.setItem(
-    GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY,
-    String(Date.now() + Math.max(0, durationMs))
+/** After ending a shift while still inside, treat every currently-inside geofence visit as processed. */
+export const markEnterHandledForInsideVisits = async (
+  extraGeofenceId?: string | null
+): Promise<void> => {
+  const ids = new Set<string>();
+  if (extraGeofenceId) ids.add(extraGeofenceId);
+  const keys = await AsyncStorage.getAllKeys();
+  await Promise.all(
+    keys
+      .filter(key => key.startsWith(GEOFENCE_STATE_PREFIX))
+      .map(async key => {
+        const value = await AsyncStorage.getItem(key);
+        if (value !== 'enter') return;
+        ids.add(key.slice(GEOFENCE_STATE_PREFIX.length));
+      })
   );
-};
-
-export const isGeofenceNotificationMuted = async (): Promise<boolean> => {
-  const raw = await AsyncStorage.getItem(GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY);
-  const mutedUntil = raw ? Number(raw) : 0;
-  if (!Number.isFinite(mutedUntil) || mutedUntil <= 0) {
-    return false;
-  }
-  if (mutedUntil <= Date.now()) {
-    await AsyncStorage.removeItem(GEOFENCE_NOTIFICATIONS_MUTED_UNTIL_KEY);
-    return false;
-  }
-  return true;
-};
-
-export const recordGeofenceNotificationShown = async (
-  timestamp = Date.now()
-): Promise<{ shouldOfferMute: boolean; countInWindow: number }> => {
-  const raw = await AsyncStorage.getItem(GEOFENCE_NOTIFICATION_HISTORY_KEY);
-  let history: number[] = [];
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        history = parsed.map(item => Number(item)).filter(item => Number.isFinite(item));
-      }
-    } catch {
-      history = [];
-    }
-  }
-
-  const cutoff = timestamp - GEOFENCE_SPAM_WINDOW_MS;
-  const nextHistory = [...history.filter(item => item >= cutoff), timestamp];
-  await AsyncStorage.setItem(GEOFENCE_NOTIFICATION_HISTORY_KEY, JSON.stringify(nextHistory.slice(-20)));
-
-  const lastOfferRaw = await AsyncStorage.getItem(GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY);
-  const lastOfferAt = lastOfferRaw ? Number(lastOfferRaw) : 0;
-  const shouldOfferMute =
-    nextHistory.length >= GEOFENCE_SPAM_THRESHOLD &&
-    (!Number.isFinite(lastOfferAt) || lastOfferAt < cutoff);
-
-  if (shouldOfferMute) {
-    await AsyncStorage.setItem(GEOFENCE_NOTIFICATION_LAST_MUTE_OFFER_KEY, String(timestamp));
-  }
-
-  return { shouldOfferMute, countInWindow: nextHistory.length };
+  await Promise.all([...ids].map(id => markEnterHandledForVisit(id)));
 };

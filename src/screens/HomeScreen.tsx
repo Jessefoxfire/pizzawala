@@ -28,7 +28,6 @@ import { setLastUserName } from '../geofencing/storage';
 import { resolveAvatarSource } from '../utils/avatar';
 import { useAuth } from '../auth/useAuth';
 import Geolocation from 'react-native-geolocation-service';
-import { startShift } from '../geofencing/processor';
 import {
   calcCurrentPauseMs,
   calcWorkedMs,
@@ -37,18 +36,27 @@ import {
   offlineOpenShiftToLiveShift,
   pauseLiveShift,
   resumeLiveShift,
+  startLiveShift,
   type LiveShift,
 } from '../services/shifts';
 import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
 import CircularShiftTimer from '../components/CircularShiftTimer';
 import HomeBottomNav from '../components/HomeBottomNav';
+import DaySummaryModal from '../components/DaySummaryModal';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { Icons } from '../components/Icons';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import type { Geofence } from '../types';
 import { getDistanceMeters, normalizeLatLng } from '../utils/geo';
-import { getMissingRequiredDocuments, getRequiredDocumentTypesForUser } from '../constants/germanEmployeeCompliance';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
+import {
+  getMissingComplianceFields,
+  getMissingRequiredDocuments,
+  getRequiredDocumentTypesForUser,
+  readGermanCompliance,
+  type GermanComplianceProfile,
+} from '../constants/germanEmployeeCompliance';
 
 type ShiftDoc = LiveShift & {
   worksiteName?: string;
@@ -66,7 +74,7 @@ const QUICK_LINKS: QuickLink[] = [
   { label: 'Schedule', icon: require('../../assets/Icons/Schedule.png'), route: 'MySchedule' },
   { label: 'Events', icon: require('../../assets/Icons/Events.png'), route: 'Events' },
   { label: 'Chat', icon: require('../../assets/Icons/Chat.png'), route: 'Chat' },
-  { label: 'My Docs', icon: require('../../assets/Icons/Profile.png'), route: 'RequiredDocuments' },
+  { label: 'Documents', icon: require('../../assets/Icons/Profile.png'), route: 'RequiredDocuments' },
   { label: 'Profile', icon: require('../../assets/Icons/Profile.png'), route: 'EditProfile' },
 ];
 
@@ -82,11 +90,18 @@ export default function HomeScreen() {
   const [openShift, setOpenShift] = useState<ShiftDoc | null>(null);
   const [offlineShift, setOfflineShift] = useState<ShiftDoc | null>(null);
   const [worksites, setWorksites] = useState<Geofence[]>([]);
+  const [selectedWorksite, setSelectedWorksite] = useState<Geofence | null>(null);
+  const [selectedWorkCategory, setSelectedWorkCategory] = useState<'driving' | null>(null);
+  const [worksitePickerOpen, setWorksitePickerOpen] = useState(false);
+  const [insideWorksiteId, setInsideWorksiteId] = useState<string | null>(null);
   const [shiftActionBusy, setShiftActionBusy] = useState(false);
+  const [daySummaryOpen, setDaySummaryOpen] = useState(false);
   const [shiftNowMs, setShiftNowMs] = useState(() => Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
   const [requiredDocuments, setRequiredDocuments] = useState<string[]>([]);
   const [userCredentials, setUserCredentials] = useState<any[]>([]);
+  const [credentialsLoaded, setCredentialsLoaded] = useState(false);
+  const [profileFields, setProfileFields] = useState<{ name: string; email: string; compliance: GermanComplianceProfile } | null>(null);
   const requiredDocsPromptedRef = useRef(false);
 
   const isAdmin = authState.status === 'admin' || profileIsAdmin;
@@ -119,16 +134,26 @@ export default function HomeScreen() {
       if (!user) {
         setProfileIsAdmin(false);
         setSessionUid(null);
+        setProfileFields(null);
+        setRequiredDocuments([]);
+        setUserCredentials([]);
+        setCredentialsLoaded(false);
+        requiredDocsPromptedRef.current = false;
         return;
       }
 
       setSessionUid(user.uid);
+      requiredDocsPromptedRef.current = false;
+      setProfileFields(null);
+      setRequiredDocuments([]);
+      setCredentialsLoaded(false);
 
       const fs = getFirestore();
       const profileRef = doc(fs, 'users', user.uid);
       unsubProfile = onSnapshot(profileRef, snap => {
         if (!snap?.exists()) {
           setProfileIsAdmin(false);
+          setProfileFields({ name: '', email: '', compliance: {} });
           return;
         }
         const data = snap.data();
@@ -147,6 +172,11 @@ export default function HomeScreen() {
         setAvatarUrl(typeof data?.avatarUrl === 'string' ? data.avatarUrl : null);
         setCustomAvatarUrl(typeof data?.customAvatarUrl === 'string' ? data.customAvatarUrl : null);
         setRequiredDocuments(requiredDocs);
+        setProfileFields({
+          name: typeof data?.name === 'string' ? data.name.trim() : '',
+          email: typeof data?.email === 'string' ? data.email.trim() : '',
+          compliance: readGermanCompliance(data),
+        });
       });
     });
 
@@ -159,12 +189,14 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!sessionUid) {
       setUserCredentials([]);
+      setCredentialsLoaded(false);
       return;
     }
     const fs = getFirestore();
     const credentialQuery = query(collection(fs, 'hygieneCredentials'), where('employeeUid', '==', sessionUid));
     const unsub = onSnapshot(credentialQuery, snap => {
       setUserCredentials(snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
+      setCredentialsLoaded(true);
     });
     return () => unsub();
   }, [sessionUid]);
@@ -174,18 +206,33 @@ export default function HomeScreen() {
     return getMissingRequiredDocuments(required, userCredentials);
   }, [requiredDocuments, userCredentials]);
 
+  const missingProfileFields = useMemo(() => {
+    if (!profileFields) return [];
+    const missing: string[] = [];
+    if (!profileFields.name) missing.push('Name');
+    if (!profileFields.email) missing.push('Email');
+    return [...missing, ...getMissingComplianceFields(profileFields.compliance)];
+  }, [profileFields]);
+
   useEffect(() => {
-    if (!sessionUid || missingRequiredDocuments.length === 0 || requiredDocsPromptedRef.current) return;
+    if (
+      !sessionUid ||
+      !profileFields ||
+      !credentialsLoaded ||
+      (missingProfileFields.length === 0 && missingRequiredDocuments.length === 0) ||
+      requiredDocsPromptedRef.current
+    ) return;
     requiredDocsPromptedRef.current = true;
+    const missingCount = missingProfileFields.length + missingRequiredDocuments.length;
     Alert.alert(
-      'Required documents',
-      `Hi! For German employment records, please upload ${missingRequiredDocuments.length} missing document${missingRequiredDocuments.length === 1 ? '' : 's'}.`,
+      'Please complete profile',
+      `Your profile is missing ${missingCount} required item${missingCount === 1 ? '' : 's'}.`,
       [
         { text: 'Later', style: 'cancel' },
-        { text: 'Open Profile', onPress: () => navigation.navigate('EditProfile') },
+        { text: 'Complete profile', onPress: () => navigation.navigate('EditProfile') },
       ]
     );
-  }, [missingRequiredDocuments, navigation, sessionUid]);
+  }, [credentialsLoaded, missingProfileFields, missingRequiredDocuments, navigation, profileFields, sessionUid]);
 
   useEffect(() => {
     const fs = getFirestore();
@@ -230,7 +277,7 @@ export default function HomeScreen() {
         .filter(s => !s.isScheduled)
         .sort((a, b) => {
           const toMs = (v: any) => v?.toDate?.()?.getTime?.() ?? (v ? new Date(v as any).getTime() : 0);
-          return toMs(b.startAt) - toMs(a.startAt);
+          return toMs(b.startAt || b.workPeriods?.[0]?.startIso) - toMs(a.startAt || a.workPeriods?.[0]?.startIso);
         })[0];
       setOpenShift(best || null);
     });
@@ -243,6 +290,19 @@ export default function HomeScreen() {
   }, []);
 
   const activeShift = useMemo(() => offlineShift || openShift, [offlineShift, openShift]);
+  const activeWorksites = useMemo(() => worksites.filter(worksite => worksite.active !== false), [worksites]);
+  const insideWorksite = useMemo(
+    () => activeWorksites.find(worksite => worksite.id === insideWorksiteId) || null,
+    [activeWorksites, insideWorksiteId]
+  );
+  const otherActiveWorksites = useMemo(
+    () => activeWorksites.filter(worksite => worksite.id !== insideWorksite?.id),
+    [activeWorksites, insideWorksite]
+  );
+  const displayedWorksite = activeShift
+    ? activeWorksites.find(worksite => worksite.id === activeShift.geofenceId) || null
+    : selectedWorksite;
+  const displayedWorkCategory = activeShift?.workCategory ?? selectedWorkCategory;
   const shiftPaused = activeShift ? isShiftPaused(activeShift) : false;
   const timerElapsedMs = useMemo(() => {
     if (!activeShift) return 0;
@@ -250,9 +310,15 @@ export default function HomeScreen() {
     return calcWorkedMs(activeShift, shiftNowMs);
   }, [activeShift, shiftPaused, shiftNowMs]);
 
-  const timerLabel = activeShift ? (shiftPaused ? 'Break' : 'Working') : 'Ready';
+  const timerLabel = activeShift
+    ? shiftPaused
+      ? 'Break'
+      : activeShift.workCategory === 'driving'
+        ? 'Driving'
+        : 'Working'
+    : 'Ready';
 
-  const timerState = !activeShift ? 'idle' : shiftPaused ? 'pause' : 'working';
+  const timerState = !activeShift ? 'idle' : shiftPaused ? 'pause' : activeShift.workCategory === 'driving' ? 'driving' : 'working';
 
   const tapHint = activeShift
     ? shiftPaused
@@ -260,11 +326,69 @@ export default function HomeScreen() {
       : 'Tap the timer for a break'
     : 'Tap the timer to start your shift';
 
-  const statusText = activeShift
-    ? shiftPaused
-      ? null
-      : 'You are working.'
-    : 'Ready to start your shift.';
+  const statusText = activeShift && !shiftPaused ? 'You are working here:' : null;
+
+  const openWorksitePicker = () => {
+    setWorksitePickerOpen(true);
+    setInsideWorksiteId(null);
+    new Promise<Geolocation.GeoPosition | null>(resolve =>
+      Geolocation.getCurrentPosition(resolve, () => resolve(null), {
+        enableHighAccuracy: true,
+        timeout: 8000,
+        maximumAge: 0,
+      })
+    ).then(position => {
+      if (!position) return;
+      const location = { lat: position.coords.latitude, lng: position.coords.longitude };
+      const inside = activeWorksites
+        .map(worksite => ({
+          worksite,
+          distance: getDistanceMeters(location, worksite.center),
+          radius: typeof worksite.radiusMeters === 'number' && worksite.radiusMeters > 0 ? worksite.radiusMeters : 150,
+        }))
+        .filter(candidate => candidate.distance <= candidate.radius)
+        .sort((a, b) => a.distance - b.distance)[0];
+      setInsideWorksiteId(inside?.worksite.id || null);
+    });
+  };
+
+  const chooseWorksite = async (worksite: Geofence | null, workCategory: 'driving' | null = null) => {
+    if (activeShift) {
+      const sameWorksite = (activeShift.geofenceId || null) === (worksite?.id || null);
+      const sameCategory = (activeShift.workCategory || null) === workCategory;
+      if (sameWorksite && sameCategory) {
+        setWorksitePickerOpen(false);
+        return;
+      }
+      setShiftActionBusy(true);
+      try {
+        await endLiveShift(activeShift.id, 'manual');
+        await startLiveShift({
+          userId: sessionUid || activeShift.userId,
+          geofenceId: worksite?.id ?? null,
+          geofenceName: worksite?.name ?? null,
+          workCategory,
+          startedBy: 'manual',
+        });
+        if (worksite?.id) {
+          const { markEnterHandledForVisit } = require('../geofencing/storage');
+          void markEnterHandledForVisit(worksite.id);
+        }
+        const { onShiftStarted } = require('../geofencing/notificationPolicy');
+        void onShiftStarted();
+        await refreshOfflineShift();
+      } catch (err: any) {
+        Alert.alert('Notice', err?.message || 'Could not switch worksite.');
+      } finally {
+        setShiftActionBusy(false);
+        setWorksitePickerOpen(false);
+      }
+      return;
+    }
+    setSelectedWorksite(worksite);
+    setSelectedWorkCategory(workCategory);
+    setWorksitePickerOpen(false);
+  };
 
   const handleStartShift = async () => {
     if (!sessionUid) {
@@ -272,37 +396,20 @@ export default function HomeScreen() {
       return;
     }
     if (activeShift) return;
-    if (!worksites.length) {
-      Alert.alert('No worksites', 'Add a worksite first, then start shift.');
-      return;
-    }
-
-    const activeWorksites = worksites.filter(w => w.active !== false);
-    let target = activeWorksites[0] || worksites[0];
-
-    try {
-      const pos = await new Promise<Geolocation.GeoPosition | null>(resolve =>
-        Geolocation.getCurrentPosition(p => resolve(p), () => resolve(null), {
-          enableHighAccuracy: true,
-          timeout: 8000,
-          maximumAge: 0,
-        })
-      );
-      if (pos) {
-        const me = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        const nearest = [...activeWorksites]
-          .map(w => ({ worksite: w, d: getDistanceMeters(me, w.center) }))
-          .sort((a, b) => a.d - b.d)[0];
-        if (nearest?.worksite) target = nearest.worksite;
-      }
-    } catch {
-      /* fallback worksite */
-    }
-
     setShiftActionBusy(true);
     try {
-      await startShift(sessionUid, target.id, target.name);
+      await startLiveShift({
+        userId: sessionUid,
+        geofenceId: selectedWorksite?.id ?? null,
+        geofenceName: selectedWorksite?.name ?? null,
+        workCategory: selectedWorkCategory,
+        startedBy: 'manual',
+      });
       await refreshOfflineShift();
+      const { markEnterHandledForVisit } = require('../geofencing/storage');
+      const { onShiftStarted } = require('../geofencing/notificationPolicy');
+      if (selectedWorksite?.id) void markEnterHandledForVisit(selectedWorksite.id);
+      void onShiftStarted();
     } catch (err: any) {
       Alert.alert('Notice', err?.message || 'Could not start shift.');
     } finally {
@@ -330,38 +437,22 @@ export default function HomeScreen() {
 
   const handleEndShift = () => {
     if (!activeShift?.id || shiftActionBusy) return;
-    Alert.alert('End shift', 'End your current shift? It will be locked.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'End',
-        style: 'destructive',
-        onPress: () => {
-          setShiftActionBusy(true);
-          void endLiveShift(activeShift.id, 'manual')
-            .then(async result => {
-              await refreshOfflineShift();
-              if (result.queued) {
-                Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
-              }
-            })
-            .catch((err: any) => Alert.alert('Notice', err?.message || 'Could not end shift.'))
-            .finally(() => setShiftActionBusy(false));
-        },
-      },
-    ]);
+    setDaySummaryOpen(true);
   };
 
   const navigateQuickLink = (route: keyof RootStackParamList) => {
     setMenuOpen(false);
     navigation.navigate(route as any);
   };
+  const visibleQuickLinks = QUICK_LINKS.filter(link => SHOW_DEBUG_ONLY_OPERATIONS || link.route !== 'Chat');
+  const hasSingleFinalMenuItem = (visibleQuickLinks.length + 1) % 3 === 1;
 
   return (
     <View style={styles.screen}>
       <PizzaFireBackground />
 
       <SafeAreaView style={styles.safe} edges={['left', 'right']}>
-        <View style={[styles.content, { paddingTop: Math.max(insets.top, 18) + 10 }]}>
+        <View style={[styles.content, { paddingTop: insets.top + 10 }]}>
           <View style={styles.header}>
             <TouchableOpacity
               onPress={() => navigation.navigate('EditProfile')}
@@ -413,16 +504,17 @@ export default function HomeScreen() {
             <Text style={styles.tapHint}>{tapHint}</Text>
 
             <View style={styles.statusBlock}>
-              {activeShift?.geofenceName ? (
-                <View style={styles.worksiteRow}>
-                  <Icons.location color={PIZZA_FIRE.gold} width={14} height={14} />
-                  <Text style={styles.worksiteText}>{activeShift.geofenceName}</Text>
-                </View>
-              ) : null}
-
-              <Text style={[styles.statusText, !statusText && styles.statusTextHidden]}>
-                {statusText || ' '}
-              </Text>
+              {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
+              <TouchableOpacity style={styles.selectWorksiteButton} onPress={openWorksitePicker} activeOpacity={0.82}>
+                <Icons.location color={PIZZA_FIRE.gold} width={16} height={16} />
+                <Text style={styles.selectWorksiteText}>
+                  {displayedWorkCategory === 'driving'
+                    ? 'Driving'
+                    : displayedWorksite
+                      ? displayedWorksite.name
+                      : 'No worksite'}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -447,6 +539,20 @@ export default function HomeScreen() {
         onEndShift={handleEndShift}
       />
 
+      <DaySummaryModal
+        visible={daySummaryOpen}
+        userId={sessionUid}
+        activeShift={activeShift}
+        onCancel={() => setDaySummaryOpen(false)}
+        onConfirmed={async result => {
+          setDaySummaryOpen(false);
+          await refreshOfflineShift();
+          if (result.queued) {
+            Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+          }
+        }}
+      />
+
       <Modal visible={menuOpen} transparent animationType="slide" onRequestClose={() => setMenuOpen(false)}>
         <View style={styles.menuBackdrop}>
           <Pressable
@@ -462,7 +568,7 @@ export default function HomeScreen() {
               <Text style={styles.menuSubtitle}>Jump to your most-used tools</Text>
             </View>
             <ScrollView contentContainerStyle={styles.menuGrid} showsVerticalScrollIndicator={false}>
-              {QUICK_LINKS.map(link => (
+          {visibleQuickLinks.map(link => (
                 <TouchableOpacity
                   key={link.label}
                   style={styles.menuTile}
@@ -476,7 +582,7 @@ export default function HomeScreen() {
                 </TouchableOpacity>
               ))}
               <TouchableOpacity
-                style={[styles.menuTile, styles.menuTileDanger]}
+                style={[styles.menuTile, styles.menuTileDanger, hasSingleFinalMenuItem && styles.menuTileCentered]}
                 onPress={() => {
                   setMenuOpen(false);
                   Alert.alert('Logout', 'Are you sure you want to sign out?', [
@@ -496,6 +602,59 @@ export default function HomeScreen() {
                   <Image source={require('../../assets/Icons/Logout.png')} style={styles.menuIcon} resizeMode="contain" />
                 </View>
                 <Text style={[styles.menuLabel, styles.menuLabelDanger]}>Logout</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={worksitePickerOpen} transparent animationType="slide" onRequestClose={() => setWorksitePickerOpen(false)}>
+        <View style={styles.worksitePickerBackdrop}>
+          <Pressable style={styles.menuDismissArea} onPress={() => setWorksitePickerOpen(false)} />
+          <View style={styles.worksitePickerSheet}>
+            <View style={styles.menuHandle} />
+            <Text style={styles.worksitePickerTitle}>Select Worksite</Text>
+            <Text style={styles.worksitePickerSubtitle}>Optional — you can start without one.</Text>
+            <ScrollView style={styles.worksitePickerList} contentContainerStyle={styles.worksitePickerListContent}>
+              {insideWorksite ? (
+                <TouchableOpacity
+                  style={[styles.worksiteOption, displayedWorksite?.id === insideWorksite.id && styles.worksiteOptionSelected]}
+                  onPress={() => void chooseWorksite(insideWorksite)}
+                >
+                  <View style={styles.worksiteOptionText}>
+                    <Text style={styles.worksiteOptionTitle}>📍 {insideWorksite.name}</Text>
+                    <Text style={styles.worksiteOptionHint}>Inside geofence</Text>
+                  </View>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={[styles.worksiteOption, displayedWorkCategory === 'driving' && styles.worksiteOptionSelected]}
+                onPress={() => void chooseWorksite(null, 'driving')}
+              >
+                <View style={styles.worksiteOptionText}>
+                  <Text style={styles.worksiteOptionTitle}>Driving</Text>
+                  <Text style={styles.worksiteOptionHint}>Track driving time separately</Text>
+                </View>
+              </TouchableOpacity>
+              {otherActiveWorksites.map(worksite => (
+                <TouchableOpacity
+                  key={worksite.id}
+                  style={[styles.worksiteOption, displayedWorksite?.id === worksite.id && styles.worksiteOptionSelected]}
+                  onPress={() => void chooseWorksite(worksite)}
+                >
+                  <View style={styles.worksiteOptionText}>
+                    <Text style={styles.worksiteOptionTitle}>{worksite.name}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={[styles.worksiteOption, !displayedWorksite && !displayedWorkCategory && styles.worksiteOptionSelected]}
+                onPress={() => void chooseWorksite(null)}
+              >
+                <View style={styles.worksiteOptionText}>
+                  <Text style={styles.worksiteOptionTitle}>No worksite</Text>
+                  <Text style={styles.worksiteOptionHint}>Track time without assigning a site</Text>
+                </View>
               </TouchableOpacity>
             </ScrollView>
           </View>
@@ -557,6 +716,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: 0.2,
   },
+  selectWorksiteButton: {
+    marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.cardBorder,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: PIZZA_FIRE.inputBg,
+  },
+  selectWorksiteText: {
+    color: PIZZA_FIRE.gold,
+    fontWeight: '800',
+    fontSize: 14,
+  },
   statusBlock: {
     marginTop: 18,
     width: '100%',
@@ -583,9 +759,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 21,
   },
-  statusTextHidden: {
-    opacity: 0,
-  },
   adminButton: {
     alignItems: 'center',
     justifyContent: 'center',
@@ -607,15 +780,16 @@ const styles = StyleSheet.create({
   menuBackdrop: {
     flex: 1,
     justifyContent: 'flex-end',
+    backgroundColor: PIZZA_FIRE.overlay,
   },
   menuDismissArea: {
     flex: 1,
     width: '100%',
     minHeight: 48,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    backgroundColor: 'transparent',
   },
   menuSheet: {
-    backgroundColor: '#5A2414',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
@@ -623,7 +797,68 @@ const styles = StyleSheet.create({
     paddingBottom: 28,
     maxHeight: '72%',
     borderTopWidth: 1,
-    borderColor: 'rgba(255, 159, 28, 0.32)',
+    borderColor: PIZZA_FIRE.qlBorder,
+  },
+  worksitePickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'flex-end',
+  },
+  worksitePickerSheet: {
+    maxHeight: '72%',
+    backgroundColor: PIZZA_FIRE.bgMid,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 28,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.cardBorder,
+  },
+  worksitePickerTitle: {
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 20,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  worksitePickerSubtitle: {
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 14,
+  },
+  worksitePickerList: {
+    maxHeight: 420,
+  },
+  worksitePickerListContent: {
+    gap: 10,
+    paddingBottom: 4,
+  },
+  worksiteOption: {
+    backgroundColor: PIZZA_FIRE.crustDark,
+    borderColor: PIZZA_FIRE.cardBorder,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+  },
+  worksiteOptionSelected: {
+    borderColor: PIZZA_FIRE.gold,
+    backgroundColor: 'rgba(255, 190, 79, 0.12)',
+  },
+  worksiteOptionText: {
+    flex: 1,
+  },
+  worksiteOptionTitle: {
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  worksiteOptionHint: {
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 3,
   },
   menuSheetHeader: {
     alignItems: 'center',
@@ -671,6 +906,9 @@ const styles = StyleSheet.create({
   menuTileDanger: {
     backgroundColor: 'rgba(255, 69, 58, 0.08)',
     borderColor: 'rgba(255, 69, 58, 0.22)',
+  },
+  menuTileCentered: {
+    marginLeft: '35%',
   },
   menuIconWrap: {
     width: 48,

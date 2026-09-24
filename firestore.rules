@@ -10,13 +10,16 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    function userExists() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
     function userTeamId() {
-      return signedIn() && userDoc().exists() ? userDoc().data.teamId : null;
+      return userExists() ? userDoc().data.teamId : null;
     }
 
     function isAdmin() {
-      return signedIn() &&
-        userDoc().exists() &&
+      return userExists() &&
         userDoc().data.roles is list &&
         userDoc().data.roles.hasAny(['admin']);
     }
@@ -36,16 +39,40 @@ service cloud.firestore {
       allow read, write: if signedIn() && (
         isAdmin() ||
         (
-          get(/databases/$(database)/documents/events/$(eventId)).exists() &&
-          get(/databases/$(database)/documents/events/$(eventId)).data.staffIds is list &&
-          get(/databases/$(database)/documents/events/$(eventId)).data.staffIds.hasAny([request.auth.uid])
+          exists(/databases/$(database)/documents/events/$(eventId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.staffIds
         )
       );
     }
 
-    // Keep non-chat collections available to signed-in app users.
-    match /{document=**} {
-      allow read, write: if signedIn();
+    // Events are private to assigned staff and admins. This also covers event
+    // availability records, so a client cannot bypass the Events UI filter.
+    function canAccessEvent(eventId) {
+      return isAdmin() || (
+        signedIn() &&
+        exists(/databases/$(database)/documents/events/$(eventId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.staffIds
+      );
+    }
+
+    match /events/{eventId} {
+      allow read: if isAdmin() || (
+        signedIn() &&
+        request.auth.uid in resource.data.staffIds
+      );
+      allow create, update, delete: if isAdmin();
+
+      match /availability/{availabilityId} {
+        allow read: if canAccessEvent(eventId);
+        allow create, update, delete: if isAdmin() || (
+          canAccessEvent(eventId) && availabilityId == request.auth.uid
+        );
+      }
+    }
+
+    // Keep non-event collections available to signed-in app users.
+    match /{rootCollection}/{document=**} {
+      allow read, write: if signedIn() && rootCollection != 'events';
     }
   }
 }

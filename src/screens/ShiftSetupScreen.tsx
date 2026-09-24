@@ -11,7 +11,6 @@ import {
   Platform,
   Linking,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
@@ -43,6 +42,7 @@ import {
   startLiveShift,
   type LiveShift,
 } from '../services/shifts';
+import DaySummaryModal from '../components/DaySummaryModal';
 import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
 import { useOffline } from '../context/OfflineContext';
@@ -55,6 +55,8 @@ import {
   where,
 } from '@react-native-firebase/firestore';
 import { auth } from '../services/firebase';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 
 type ShiftRecord = LiveShift;
 
@@ -78,8 +80,10 @@ export default function ShiftSetupScreen() {
   const [autoTracking, setAutoTracking] = useState(false);
   const [worksites, setWorksites] = useState<Geofence[]>([]);
   const [selectedWorksite, setSelectedWorksite] = useState<Geofence | null>(null);
+  const [selectedWorkCategory, setSelectedWorkCategory] = useState<'driving' | null>(null);
   const [loading, setLoading] = useState(true);
   const [shiftBusy, setShiftBusy] = useState(false);
+  const [daySummaryOpen, setDaySummaryOpen] = useState(false);
   const [showIntroMessage, setShowIntroMessage] = useState(false);
 
   const userId = auth.currentUser?.uid ?? null;
@@ -90,12 +94,26 @@ export default function ShiftSetupScreen() {
     isInside: boolean;
     distance: number;
     worksiteName: string;
+    worksiteId: string;
     configuredRadius: number;
     effectiveRadius: number;
     center?: { lat: number; lng: number };
   } | null>(null);
   const [offlineShift, setOfflineShift] = useState<LiveShift | null>(null);
   const { isOnline, pendingCount } = useOffline();
+  const activeWorksites = useMemo(() => worksites.filter(worksite => worksite.active !== false), [worksites]);
+  const displayedWorksite = openShift
+    ? activeWorksites.find(worksite => worksite.id === openShift.geofenceId) || null
+    : selectedWorksite;
+  const displayedWorkCategory = openShift?.workCategory ?? selectedWorkCategory;
+  const insideWorksite = useMemo(
+    () => (proximity?.isInside ? activeWorksites.find(worksite => worksite.id === proximity.worksiteId) || null : null),
+    [activeWorksites, proximity]
+  );
+  const otherActiveWorksites = useMemo(
+    () => activeWorksites.filter(worksite => worksite.id !== insideWorksite?.id),
+    [activeWorksites, insideWorksite]
+  );
 
   const refreshOfflineShift = React.useCallback(async () => {
     const offline = await getOfflineOpenShift();
@@ -191,6 +209,7 @@ export default function ShiftSetupScreen() {
                 isInside: dist <= threshold,
                 distance: dist,
                 worksiteName: target.name,
+                worksiteId: target.id,
                 configuredRadius,
                 effectiveRadius: threshold,
                 center: target.center,
@@ -232,35 +251,13 @@ export default function ShiftSetupScreen() {
       return;
     }
     if (openShift || shiftBusy) return;
-    let gId: string | null = selectedWorksite?.id || null;
-    let gName: string | null = selectedWorksite?.name || null;
-    if (!gId) {
-      try {
-        const cached = await loadCachedGeofences();
-        const pos = await new Promise<Geolocation.GeoPosition | null>(resolve =>
-          Geolocation.getCurrentPosition(resolve, () => resolve(null), { enableHighAccuracy: true, timeout: 5000 })
-        );
-        if (pos && cached.length > 0) {
-          const current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          const sorted = cached
-            .filter(g => g.active !== false)
-            .map(g => ({ ...g, dist: distanceM(current, g.center) }))
-            .sort((a, b) => a.dist - b.dist);
-          if (sorted[0] && sorted[0].dist < 300) {
-            gId = sorted[0].id;
-            gName = sorted[0].name;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
     setShiftBusy(true);
     try {
       await startLiveShift({
         userId,
-        geofenceId: gId,
-        geofenceName: gName,
+        geofenceId: selectedWorksite?.id ?? null,
+        geofenceName: selectedWorksite?.name ?? null,
+        workCategory: selectedWorkCategory,
         startedBy: 'manual',
       });
       setLocalStartAt(new Date());
@@ -312,26 +309,34 @@ export default function ShiftSetupScreen() {
 
   const handleFirestoreEndShift = () => {
     if (!openShift || shiftBusy) return;
-    Alert.alert('End shift', 'End your current shift? It will be locked.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'End shift',
-        style: 'destructive',
-        onPress: () => {
-          setShiftBusy(true);
-          void endLiveShift(openShift.id, 'manual')
-            .then(async result => {
-              setLocalStartAt(null);
-              await refreshOfflineShift();
-              if (result.queued) {
-                Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
-              }
-            })
-            .catch((err: any) => Alert.alert('Notice', err?.message || 'Could not end shift.'))
-            .finally(() => setShiftBusy(false));
-        },
-      },
-    ]);
+    setDaySummaryOpen(true);
+  };
+
+  const selectWorksite = async (worksite: Geofence | null, workCategory: 'driving' | null = null) => {
+    if (!openShift) {
+      setSelectedWorksite(worksite);
+      setSelectedWorkCategory(workCategory);
+      return;
+    }
+    if ((openShift.geofenceId || null) === (worksite?.id || null) && (openShift.workCategory || null) === workCategory) {
+      return;
+    }
+    setShiftBusy(true);
+    try {
+      await endLiveShift(openShift.id, 'manual');
+      await startLiveShift({
+        userId: userId || openShift.userId,
+        geofenceId: worksite?.id ?? null,
+        geofenceName: worksite?.name ?? null,
+        workCategory,
+        startedBy: 'manual',
+      });
+      await refreshOfflineShift();
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Could not switch worksite.');
+    } finally {
+      setShiftBusy(false);
+    }
   };
 
   const openDirections = () => {
@@ -378,11 +383,7 @@ export default function ShiftSetupScreen() {
         const sorted = items.sort((a, b) => a.name.localeCompare(b.name));
         setWorksites(sorted);
 
-        setSelectedWorksite(prev => {
-          if (sorted.length === 0) return null;
-          if (prev && sorted.some(w => w.id === prev.id)) return prev;
-          return sorted[0];
-        });
+        setSelectedWorksite(prev => (prev && sorted.some(w => w.id === prev.id) ? prev : null));
         setLoading(false);
       },
       err => {
@@ -395,7 +396,8 @@ export default function ShiftSetupScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <PizzaFireScreen>
+    <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <Text style={styles.backText}>← Back</Text>
@@ -405,7 +407,7 @@ export default function ShiftSetupScreen() {
 
       {loading ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color="#D9A441" />
+          <ActivityIndicator size="large" color={PIZZA_FIRE.gold} />
         </View>
       ) : (
       <ScrollView style={styles.content}>
@@ -462,17 +464,17 @@ export default function ShiftSetupScreen() {
           <View style={styles.timerActions}>
             {!openShift ? (
               <TouchableOpacity style={styles.startBtn} onPress={() => void handleFirestoreStartShift()} disabled={shiftBusy}>
-                {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Start Shift</Text>}
+                {shiftBusy ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : <Text style={styles.startBtnText}>Start Shift</Text>}
               </TouchableOpacity>
             ) : (
               <>
                 {shiftPaused ? (
                   <TouchableOpacity style={styles.startBtn} onPress={() => void handleFirestoreResumeShift()} disabled={shiftBusy}>
-                    {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Resume</Text>}
+                    {shiftBusy ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : <Text style={styles.startBtnText}>Resume</Text>}
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity style={styles.pauseBtn} onPress={() => void handleFirestorePauseShift()} disabled={shiftBusy}>
-                    {shiftBusy ? <ActivityIndicator color="#F6EDE2" /> : <Text style={styles.pauseBtnText}>Pause</Text>}
+                    {shiftBusy ? <ActivityIndicator color={PIZZA_FIRE.textPrimary} /> : <Text style={styles.pauseBtnText}>Pause</Text>}
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity style={styles.endBtn} onPress={handleFirestoreEndShift} disabled={shiftBusy}>
@@ -492,7 +494,7 @@ export default function ShiftSetupScreen() {
                 setAutoTracking(v);
                 await setAutoShiftEnabled(v);
               }}
-              trackColor={{ false: '#3A2D24', true: '#C9782B' }}
+              trackColor={{ false: PIZZA_FIRE.inputBg, true: PIZZA_FIRE.accent }}
               thumbColor={autoTracking ? '#F6EDE2' : '#A88E73'}
             />
           </View>
@@ -515,7 +517,7 @@ export default function ShiftSetupScreen() {
             <Switch 
               value={allowAlerts} 
               onValueChange={setAllowAlerts}
-              trackColor={{ false: '#3A2D24', true: '#C9782B' }}
+              trackColor={{ false: PIZZA_FIRE.inputBg, true: PIZZA_FIRE.accent }}
             />
           </View>
           <Text style={styles.hint}>Receive notifications when arriving at or leaving a worksite.</Text>
@@ -525,37 +527,78 @@ export default function ShiftSetupScreen() {
 
         <View style={styles.section}>
           <Text style={styles.label}>Select Worksite</Text>
-          <Text style={styles.hint}>Choose the site you are working at today.</Text>
+          <Text style={styles.hint}>Optional — choose a site, Driving, or start without one.</Text>
           <View style={styles.worksiteList}>
-            {worksites.map(ws => (
+            {insideWorksite ? (
+              <TouchableOpacity
+                onPress={() => void selectWorksite(insideWorksite)}
+                style={[styles.worksitePill, displayedWorksite?.id === insideWorksite.id && styles.worksitePillSelected]}
+              >
+                <Text style={[styles.worksiteText, displayedWorksite?.id === insideWorksite.id && styles.worksiteTextSelected]}>
+                  📍 {insideWorksite.name} · Inside geofence
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              onPress={() => void selectWorksite(null, 'driving')}
+              style={[styles.worksitePill, displayedWorkCategory === 'driving' && styles.worksitePillSelected]}
+            >
+              <Text style={[styles.worksiteText, displayedWorkCategory === 'driving' && styles.worksiteTextSelected]}>
+                Driving
+              </Text>
+            </TouchableOpacity>
+            {otherActiveWorksites.map(ws => (
               <TouchableOpacity 
                 key={ws.id} 
-                onPress={() => setSelectedWorksite(ws)}
+                onPress={() => void selectWorksite(ws)}
                 style={[
                   styles.worksitePill,
-                  selectedWorksite?.id === ws.id && styles.worksitePillSelected
+                  displayedWorksite?.id === ws.id && styles.worksitePillSelected
                 ]}
               >
                 <Text style={[
                   styles.worksiteText,
-                  selectedWorksite?.id === ws.id && styles.worksiteTextSelected
+                  displayedWorksite?.id === ws.id && styles.worksiteTextSelected
                 ]}>
                   {ws.name}
                 </Text>
               </TouchableOpacity>
             ))}
+            <TouchableOpacity
+              onPress={() => void selectWorksite(null)}
+              style={[styles.worksitePill, !displayedWorksite && !displayedWorkCategory && styles.worksitePillSelected]}
+            >
+              <Text style={[styles.worksiteText, !displayedWorksite && !displayedWorkCategory && styles.worksiteTextSelected]}>
+                No worksite
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
       )}
-    </SafeAreaView>
+      <DaySummaryModal
+        visible={daySummaryOpen}
+        userId={userId}
+        activeShift={openShift}
+        onCancel={() => setDaySummaryOpen(false)}
+        onConfirmed={async result => {
+          setDaySummaryOpen(false);
+          setLocalStartAt(null);
+          await refreshOfflineShift();
+          if (result.queued) {
+            Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+          }
+        }}
+      />
+    </View>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
   },
   loadingWrap: {
     flex: 1,
@@ -567,32 +610,32 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
   backButton: {
     padding: 8,
     marginRight: 10,
   },
   backText: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 16,
     fontWeight: '600',
   },
   title: {
     fontSize: 20,
     fontWeight: '800',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
   },
   introSection: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     padding: 16,
     borderRadius: 12,
     marginBottom: 24,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
   },
   introText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '500',
@@ -612,16 +655,16 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
   },
   hint: {
     fontSize: 14,
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     marginTop: 4,
   },
   divider: {
     height: 1,
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     marginVertical: 20,
   },
   worksiteList: {
@@ -634,24 +677,24 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 20,
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   worksitePillSelected: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     borderColor: '#F3E6D3',
   },
   worksiteText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontWeight: '600',
   },
   worksiteTextSelected: {
-    color: '#1E1813',
+    color: PIZZA_FIRE.charcoal,
     fontWeight: '700',
   },
   statusWindow: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surface,
     margin: 20,
     marginBottom: 0,
     padding: 20,
@@ -673,23 +716,23 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   timerContainer: {
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
     marginBottom: 12,
   },
   timerText: {
     fontSize: 42,
     fontWeight: '900',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   statusSub: {
     fontSize: 14,
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     fontWeight: '500',
   },
   stopLink: {
@@ -704,14 +747,14 @@ const styles = StyleSheet.create({
   timerCard: {
     padding: 24,
     borderRadius: 20,
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     marginBottom: 20,
   },
   timerHeader: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontSize: 13,
     fontWeight: '800',
     textTransform: 'uppercase',
@@ -719,54 +762,70 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   proximityBadge: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     padding: 12,
     borderRadius: 12,
     marginBottom: 16,
     width: '100%',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   proximityText: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
   textInside: { color: '#4CAF50' },
-  textBuffer: { color: '#D9A441' },
+  textBuffer: { color: PIZZA_FIRE.gold },
   textOutside: { color: '#F44336' },
   directionsLink: { marginTop: 8 },
-  directionsLinkText: { color: '#C9782B', fontSize: 12, textDecorationLine: 'underline', fontWeight: 'bold' },
-  timerLabel: { color: '#A88E73', fontSize: 12, marginBottom: 8 },
+  directionsLinkText: { color: PIZZA_FIRE.accent, fontSize: 12, textDecorationLine: 'underline', fontWeight: 'bold' },
+  timerLabel: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginBottom: 8 },
   timerValue: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 42,
     fontWeight: '900',
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
-  timerStatus: { color: '#A88E73', fontSize: 12, marginTop: 8, fontStyle: 'italic' },
+  timerStatus: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginTop: 8, fontStyle: 'italic' },
   pendingSyncText: { color: '#C98B2E', fontSize: 12, marginTop: 6, fontWeight: '600' },
   timerActions: { marginTop: 24, width: '100%', flexDirection: 'row', gap: 10 },
-  startBtn: { flex: 1, backgroundColor: '#C9782B', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  startBtnText: { color: '#1E1813', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
-  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#C9782B' },
-  pauseBtnText: { color: '#F6EDE2', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
-  endBtn: {
+  startBtn: {
     flex: 1,
-    backgroundColor: '#5C2420',
+    backgroundColor: PIZZA_FIRE.hotAccent,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 16,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#9E3C2E',
+    borderColor: PIZZA_FIRE.hotAccentBorder,
   },
-  endBtnText: { color: '#F6EDE2', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
+  startBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '800', textTransform: 'uppercase' },
+  pauseBtn: {
+    flex: 1,
+    backgroundColor: PIZZA_FIRE.qlFill,
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.qlBorder,
+  },
+  pauseBtnText: { color: PIZZA_FIRE.textSecondary, fontSize: 16, fontWeight: '800', textTransform: 'uppercase' },
+  endBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(255, 69, 58, 0.12)',
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.28)',
+  },
+  endBtnText: { color: '#FF8A80', fontSize: 16, fontWeight: '800', textTransform: 'uppercase' },
   autoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 20,
     paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: '#3A2D24',
+    borderTopColor: PIZZA_FIRE.divider,
     width: '100%',
   },
-  autoLabel: { color: '#F6EDE2', fontWeight: 'bold' },
-  autoDesc: { color: '#A88E73', fontSize: 12, marginTop: 2 },
+  autoLabel: { color: PIZZA_FIRE.textPrimary, fontWeight: 'bold' },
+  autoDesc: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginTop: 2 },
 });

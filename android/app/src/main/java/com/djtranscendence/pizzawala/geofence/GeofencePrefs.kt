@@ -25,6 +25,9 @@ object GeofencePrefs {
   private const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
   private const val KEY_AUTO_SHIFT_ENABLED = "auto_shift_enabled"
   private const val KEY_SUPPRESS_ENTER_WHILE_ON_SHIFT = "suppress_enter_while_on_shift"
+  private const val KEY_ENTER_HANDLED_PREFIX = "enter_handled_"
+  private const val KEY_EXIT_NOTIFIED_PREFIX = "exit_notified_"
+  private const val KEY_REGISTERED_SIGNATURE = "registered_signature"
 
   fun setAutoShiftEnabled(context: Context, enabled: Boolean) {
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -60,6 +63,52 @@ object GeofencePrefs {
   fun isSuppressEnterWhileOnShift(context: Context): Boolean {
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .getBoolean(KEY_SUPPRESS_ENTER_WHILE_ON_SHIFT, false)
+  }
+
+  fun setEnterHandledForVisit(context: Context, geofenceId: String, handled: Boolean) {
+    if (geofenceId.isBlank()) return
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (handled) {
+      prefs.putBoolean(KEY_ENTER_HANDLED_PREFIX + geofenceId, true)
+    } else {
+      prefs.remove(KEY_ENTER_HANDLED_PREFIX + geofenceId)
+    }
+    prefs.apply()
+  }
+
+  fun isEnterHandledForVisit(context: Context, geofenceId: String): Boolean {
+    if (geofenceId.isBlank()) return false
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_ENTER_HANDLED_PREFIX + geofenceId, false)
+  }
+
+  fun setExitNotifiedForVisit(context: Context, geofenceId: String, notified: Boolean) {
+    if (geofenceId.isBlank()) return
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (notified) {
+      prefs.putBoolean(KEY_EXIT_NOTIFIED_PREFIX + geofenceId, true)
+    } else {
+      prefs.remove(KEY_EXIT_NOTIFIED_PREFIX + geofenceId)
+    }
+    prefs.apply()
+  }
+
+  fun isExitNotifiedForVisit(context: Context, geofenceId: String): Boolean {
+    if (geofenceId.isBlank()) return false
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_EXIT_NOTIFIED_PREFIX + geofenceId, false)
+  }
+
+  fun setRegisteredSignature(context: Context, signature: String) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_REGISTERED_SIGNATURE, signature)
+      .apply()
+  }
+
+  fun getRegisteredSignature(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_REGISTERED_SIGNATURE, null)
   }
 
   fun appendNativeHistory(context: Context, log: String) {

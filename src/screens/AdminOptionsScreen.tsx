@@ -18,6 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import { useOffline } from '../context/OfflineContext';
 import {
   collection,
@@ -118,12 +119,12 @@ export default function AdminOptionsScreen({ navigation }: Props) {
 
   const adminTiles: AdminTile[] = [
     {
-      label: 'Shift Calculator',
+      label: 'Shift Audit',
       icon: require('../../assets/Icons/Shift.png'),
       onPress: () => navigation.navigate('WorksiteOverview'),
     },
     {
-      label: 'Create Schedule',
+      label: 'Team Schedule',
       icon: require('../../assets/Icons/Schedule.png'),
       onPress: () => navigation.navigate('AdminSchedule'),
     },
@@ -133,20 +134,27 @@ export default function AdminOptionsScreen({ navigation }: Props) {
       onPress: () => navigation.navigate('AdminCalendar'),
     },
     {
+      label: 'Events',
+      icon: require('../../assets/Icons/Events.png'),
+      onPress: () => navigation.navigate('Events'),
+    },
+    {
       label: 'Worksites',
       icon: require('../../assets/Icons/Navigate.png'),
       onPress: () => navigation.navigate('Geofences'),
     },
     {
-      label: 'Users',
+      label: 'Members',
       icon: require('../../assets/Icons/Profile.png'),
       onPress: () => navigation.navigate('ManageUsers'),
     },
-    {
-      label: 'Admin Roles',
-      icon: require('../../assets/Icons/Admin.png'),
-      onPress: () => setAdminModalVisible(true),
-    },
+    ...(!SHOW_DEBUG_ONLY_OPERATIONS
+      ? [{
+          label: 'Admin Roles',
+          icon: require('../../assets/Icons/Admin.png'),
+          onPress: () => setAdminModalVisible(true),
+        }]
+      : []),
     {
       label: 'Availability',
       icon: require('../../assets/Icons/Events.png'),
@@ -157,16 +165,20 @@ export default function AdminOptionsScreen({ navigation }: Props) {
       icon: require('../../assets/Icons/Medal.png'),
       onPress: () => navigation.navigate('Hygiene'),
     },
-    {
-      label: 'Trucks',
-      icon: require('../../assets/Icons/Navigate.png'),
-      onPress: () => navigation.navigate('TruckManagement'),
-    },
-    {
-      label: 'Departure',
-      icon: require('../../assets/Icons/Shift.png'),
-      onPress: () => navigation.navigate('DepartureChecklist'),
-    },
+    ...(SHOW_DEBUG_ONLY_OPERATIONS
+      ? [
+          {
+            label: 'Trucks',
+            icon: require('../../assets/Icons/Navigate.png'),
+            onPress: () => navigation.navigate('TruckManagement'),
+          },
+          {
+            label: 'Departure',
+            icon: require('../../assets/Icons/Shift.png'),
+            onPress: () => navigation.navigate('DepartureChecklist'),
+          },
+        ]
+      : []),
     {
       label: 'Diagnostics',
       icon: require('../../assets/Icons/Admin.png'),
@@ -174,7 +186,7 @@ export default function AdminOptionsScreen({ navigation }: Props) {
     },
   ];
 
-  const headerTopInset = syncBannerVisible ? insets.top + 18 : 8;
+  const headerTopInset = insets.top + (syncBannerVisible ? 18 : 8);
 
   return (
     <View style={styles.screen}>
@@ -198,10 +210,13 @@ export default function AdminOptionsScreen({ navigation }: Props) {
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.tileGrid}>
-          {adminTiles.map(tile => (
+          {adminTiles.map((tile, index) => (
             <TouchableOpacity
               key={tile.label}
-              style={styles.menuTile}
+              style={[
+                styles.menuTile,
+                adminTiles.length % 3 === 1 && index === adminTiles.length - 1 && styles.menuTileCentered,
+              ]}
               onPress={tile.onPress}
               activeOpacity={0.8}
             >
@@ -361,6 +376,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 159, 28, 0.28)',
   },
+  menuTileCentered: {
+    marginLeft: '35%',
+  },
   menuIcon: {
     width: 34,
     height: 34,
@@ -380,63 +398,63 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     margin: 20,
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#F6EDE2' },
-  modalSub: { marginTop: 6, color: '#C8B29A' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
+  modalSub: { marginTop: 6, color: PIZZA_FIRE.textSecondary },
   pickerTrigger: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     padding: 14,
     borderRadius: 12,
     marginTop: 16,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   pickerTriggerText: {
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 15,
     fontWeight: '600',
   },
   placeholderText: {
-    color: '#7C6854',
+    color: PIZZA_FIRE.textMuted,
   },
   pickerArrow: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 12,
   },
   searchInput: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     padding: 12,
     borderRadius: 10,
     marginTop: 12,
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   userItem: {
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
   userItemName: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 15,
     fontWeight: '600',
   },
   userItemEmail: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 13,
     marginTop: 2,
   },
   emptyText: {
-    color: '#7C6854',
+    color: PIZZA_FIRE.textMuted,
     textAlign: 'center',
     marginTop: 20,
     fontStyle: 'italic',
@@ -447,17 +465,17 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   closePickerBtnText: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontWeight: '700',
   },
   input: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     padding: 12,
     borderRadius: 8,
     marginTop: 16,
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   toggleRow: {
     flexDirection: 'row',
@@ -465,7 +483,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 16,
   },
-  toggleLabel: { fontSize: 14, color: '#C8B29A' },
+  toggleLabel: { fontSize: 14, color: PIZZA_FIRE.textSecondary },
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -473,9 +491,9 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   modalLink: { padding: 8 },
-  modalLinkText: { color: '#D9A441', fontWeight: '600' },
+  modalLinkText: { color: PIZZA_FIRE.gold, fontWeight: '600' },
   modalButton: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,

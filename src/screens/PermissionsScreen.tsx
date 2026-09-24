@@ -8,11 +8,12 @@ import {
   Pressable,
   TouchableOpacity,
   } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { 
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import {
   ensureGeofencePermissions, 
   ensureLocationPermission,
   ensureActivityRecognitionPermission,
@@ -144,7 +145,7 @@ export default function PermissionsScreen({ navigation }: Props) {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <PizzaFireScreen>
       <View style={styles.container}>
         <Text style={styles.title}>Location and notifications</Text>
         <Text style={styles.text}>
@@ -174,66 +175,57 @@ export default function PermissionsScreen({ navigation }: Props) {
             style={{ marginTop: 20 }} 
             onPress={() => navigation.replace('Home')}
           >
-            <Text style={{ color: '#4E3A2A', textDecorationLine: 'underline', textAlign: 'center' }}>
+            <Text style={{ color: PIZZA_FIRE.textMuted, textDecorationLine: 'underline', textAlign: 'center' }}>
               Enter Anyway
             </Text>
           </TouchableOpacity>
         )}
       </View>
-    </SafeAreaView>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#D27A34',
-  },
   container: {
     flex: 1,
     padding: 24,
     justifyContent: 'center',
-    backgroundColor: '#D27A34',
+    backgroundColor: 'transparent',
   },
   title: {
     fontSize: 20,
     fontWeight: '600',
     marginBottom: 12,
-    color: '#2F1E12',
+    color: PIZZA_FIRE.textPrimary,
     textAlign: 'center',
   },
   text: {
     fontSize: 15,
     lineHeight: 22,
     marginBottom: 10,
-    color: '#4E3A2A',
+    color: PIZZA_FIRE.textSecondary,
     textAlign: 'center',
   },
   subtext: {
     fontSize: 14,
     lineHeight: 20,
     marginBottom: 24,
-    color: '#6A5546',
+    color: PIZZA_FIRE.textMuted,
     textAlign: 'center',
   },
   button: {
-    backgroundColor: '#1E1813',
-    borderRadius: 14,
+    backgroundColor: PIZZA_FIRE.hotAccent,
+    borderRadius: 16,
     paddingVertical: 14,
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#F6EDE2',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 6,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.hotAccentBorder,
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
-    color: '#FFF8F0',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 18,
     fontWeight: '700',
     letterSpacing: 0.3,

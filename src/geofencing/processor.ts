@@ -18,6 +18,9 @@ import {
   saveLastGeofenceEvent,
   savePendingPrompt,
   shouldPromptForEvent,
+  isEnterHandledForVisit,
+  markEnterHandledForVisit,
+  clearEnterHandledForVisit,
 } from './storage';
 const BUCKET_MS = 2 * 60 * 1000;
 
@@ -81,11 +84,22 @@ export const processGeofenceEvent = async ({
   const LAST_STATE_KEY = `geofence_state_${geofence.id}`;
   const { default: AsyncStorage } = require('@react-native-async-storage/async-storage');
   const lastState = await AsyncStorage.getItem(LAST_STATE_KEY);
+  if (transition === 'enter' && (await isEnterHandledForVisit(geofence.id))) {
+    if (lastState !== 'enter') {
+      await AsyncStorage.setItem(LAST_STATE_KEY, 'enter');
+    }
+    console.log(`[Processor] Skipping enter for ${geofence.name}: visit already handled until a real exit`);
+    return { eventId };
+  }
   if (lastState === transition) {
     console.log(`[Processor] Deduplicating ${transition} for ${geofence.name} (already in this state)`);
     return { eventId };
   }
   await AsyncStorage.setItem(LAST_STATE_KEY, transition);
+
+  if (transition === 'exit') {
+    await clearEnterHandledForVisit(geofence.id);
+  }
 
   const fs = getFirestore();
   try {
@@ -112,6 +126,9 @@ export const processGeofenceEvent = async ({
   }
 
   let promptPayload: GeofencePromptPayload | undefined;
+  if (geofence.active === false) {
+    return { eventId };
+  }
   if (allowPrompt && (transition === 'enter' || transition === 'exit')) {
     const shouldPrompt = await shouldPromptForEvent(eventId);
     if (shouldPrompt) {
@@ -119,9 +136,14 @@ export const processGeofenceEvent = async ({
       // 1. Don't prompt "Start shift" if a shift is already in progress.
       // 2. Don't prompt "End shift" if NO shift is in progress.
       const inProgress = await isShiftInProgress(userId);
-      
+
       if (transition === 'enter' && inProgress) {
         console.log('[Processor] Suppressing "Start shift" prompt: Shift already in progress.');
+        await markEnterHandledForVisit(geofence.id);
+        return { eventId };
+      }
+      if (transition === 'enter' && (await isEnterHandledForVisit(geofence.id))) {
+        console.log('[Processor] Suppressing "Start shift" prompt: visit already processed until exit.');
         return { eventId };
       }
       if (transition === 'exit' && !inProgress) {
@@ -137,6 +159,9 @@ export const processGeofenceEvent = async ({
         transition,
         occurredAt,
       };
+      if (transition === 'enter') {
+        await markEnterHandledForVisit(geofence.id);
+      }
     }
   }
 
@@ -191,6 +216,8 @@ export const startShift = async (userId: string, geofenceId: string, geofenceNam
       startedBy: 'geofence',
     });
     const { onShiftStarted } = require('./notificationPolicy');
+    const { markEnterHandledForVisit } = require('./storage');
+    await markEnterHandledForVisit(geofenceId);
     await onShiftStarted();
   } catch (error) {
     console.warn('Failed to start shift:', error);

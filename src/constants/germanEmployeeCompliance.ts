@@ -1,4 +1,4 @@
-export type Salutation = 'Mr' | 'Ms' | 'Mrs';
+export type Salutation = 'Mr' | 'Mrs' | 'Other';
 
 export type GermanComplianceProfile = {
   salutation?: Salutation | '';
@@ -24,7 +24,7 @@ export const GERMAN_COMPLIANCE_FIELDS: Array<{
   keyboardType?: 'default' | 'numeric';
 }> = [
   { key: 'address', label: 'Address', placeholder: 'Street, postal code, city', multiline: true },
-  { key: 'birthDate', label: 'Birth date', placeholder: 'YYYY-MM-DD' },
+  { key: 'birthDate', label: 'Birthday', placeholder: 'DD.MM.YYYY' },
   { key: 'birthPlace', label: 'Birthplace', placeholder: 'City, country' },
   {
     key: 'socialSecurityNumber',
@@ -39,34 +39,49 @@ export const GERMAN_COMPLIANCE_FIELDS: Array<{
   },
 ];
 
-export const GERMAN_COMPLIANCE_DOCUMENTS = [
+export type GermanComplianceDocument = {
+  type: string;
+  shortLabel: string;
+  required: boolean;
+  helpTitle?: string;
+  helpText?: string;
+};
+
+export const GERMAN_COMPLIANCE_DOCUMENTS: readonly GermanComplianceDocument[] = [
   {
     type: 'Identification (passport / EU ID card) — front',
     shortLabel: 'ID — front',
+    required: true,
   },
   {
     type: 'Identification (passport / EU ID card) — back',
     shortLabel: 'ID — back',
+    required: true,
   },
   {
     type: 'Health insurance proof',
     shortLabel: 'Health insurance',
+    required: true,
   },
   {
     type: 'Signed checklist',
     shortLabel: 'Signed checklist',
     helpTitle: 'Signed checklist',
     helpText: CHECKLIST_HELP,
+    required: false,
   },
   {
     type: 'Signed contract',
     shortLabel: 'Signed contract',
+    required: false,
   },
-] as const;
+];
 
-export const GERMAN_COMPLIANCE_DOCUMENT_TYPES = GERMAN_COMPLIANCE_DOCUMENTS.map(doc => doc.type);
+export const GERMAN_COMPLIANCE_REQUIRED_DOCUMENT_TYPES = GERMAN_COMPLIANCE_DOCUMENTS
+  .slice(0, 3)
+  .map(doc => doc.type);
 
-export const SALUTATION_OPTIONS: Salutation[] = ['Mr', 'Ms', 'Mrs'];
+export const SALUTATION_OPTIONS: Salutation[] = ['Mr', 'Mrs', 'Other'];
 
 export function readGermanCompliance(data: Record<string, unknown> | null | undefined): GermanComplianceProfile {
   const raw = data?.germanCompliance;
@@ -75,7 +90,9 @@ export function readGermanCompliance(data: Record<string, unknown> | null | unde
   }
   const typed = raw as GermanComplianceProfile;
   return {
-    salutation: typed.salutation || '',
+    salutation: typed.salutation === 'Mr' || typed.salutation === 'Mrs' || typed.salutation === 'Other'
+      ? typed.salutation
+      : '',
     address: typed.address || '',
     birthDate: typed.birthDate || '',
     birthPlace: typed.birthPlace || '',
@@ -86,9 +103,8 @@ export function readGermanCompliance(data: Record<string, unknown> | null | unde
 
 export function getMissingComplianceFields(compliance: GermanComplianceProfile) {
   const missing: string[] = [];
-  if (!compliance.salutation) missing.push('Title (Mr / Ms / Mrs)');
-  if (!String(compliance.address || '').trim()) missing.push('Address');
-  if (!String(compliance.birthDate || '').trim()) missing.push('Birth date');
+  if (!compliance.salutation) missing.push('Title (Mr / Mrs / Other)');
+  if (!String(compliance.birthDate || '').trim()) missing.push('Birthday');
   if (!String(compliance.birthPlace || '').trim()) missing.push('Birthplace');
   if (!String(compliance.socialSecurityNumber || '').trim()) missing.push('German social security number');
   if (!String(compliance.taxIdNumber || '').trim()) missing.push('Tax ID number');
@@ -99,7 +115,7 @@ export function getRequiredDocumentTypesForUser(requiredDocuments?: string[] | n
   const extra = Array.isArray(requiredDocuments)
     ? requiredDocuments.map(value => String(value || '').trim()).filter(Boolean)
     : [];
-  return Array.from(new Set([...GERMAN_COMPLIANCE_DOCUMENT_TYPES, ...extra]));
+  return Array.from(new Set([...GERMAN_COMPLIANCE_REQUIRED_DOCUMENT_TYPES, ...extra]));
 }
 
 export function getMissingRequiredDocuments(

@@ -12,19 +12,100 @@ import {
     Keyboard,
     Alert,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Geolocation from 'react-native-geolocation-service';
 import { ensureLocationPermission } from '../utils/geo';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+
+const REGION_DELTA = {
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
+};
+
+type LatLng = { lat: number; lng: number };
+
+function isValidLocation(value: unknown): value is LatLng {
+    if (!value || typeof value !== 'object') return false;
+    const { lat, lng } = value as LatLng;
+    return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+}
 
 export default function MapPickerScreen({ route, navigation }: any) {
     const onLocationSelected = route?.params?.onLocationSelected;
-    const [selectedLocation, setSelectedLocation] = useState<{lat: number, lng: number} | null>(null);
+    const routeLocation = route?.params?.initialLocation as LatLng | undefined;
+    const initialLocation = isValidLocation(routeLocation) ? routeLocation : undefined;
+    const [selectedLocation, setSelectedLocation] = useState<LatLng | null>(initialLocation ?? null);
     const [query, setQuery] = useState('');
     const [results, setResults] = useState<any[]>([]);
     const [searching, setSearching] = useState(false);
+    const [locating, setLocating] = useState(!initialLocation);
+    const [mapReady, setMapReady] = useState(false);
+    const [mapLoadTimedOut, setMapLoadTimedOut] = useState(false);
     const mapRef = useRef<MapView | null>(null);
-    const insets = useSafeAreaInsets();
+    const pendingRegionRef = useRef<{ latitude: number; longitude: number } | null>(
+        initialLocation
+            ? { latitude: initialLocation.lat, longitude: initialLocation.lng }
+            : null
+    );
+
+    const moveMapTo = (lat: number, lng: number) => {
+        const region = {
+            latitude: lat,
+            longitude: lng,
+            ...REGION_DELTA,
+        };
+        pendingRegionRef.current = { latitude: lat, longitude: lng };
+        mapRef.current?.animateToRegion(region, 400);
+    };
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const focusMap = async () => {
+            if (initialLocation) {
+                setLocating(false);
+                return;
+            }
+
+            const allowed = await ensureLocationPermission();
+            if (cancelled) return;
+            if (!allowed) {
+                setLocating(false);
+                return;
+            }
+
+            Geolocation.getCurrentPosition(
+                pos => {
+                    if (cancelled) return;
+                    const lat = pos.coords.latitude;
+                    const lng = pos.coords.longitude;
+                    setSelectedLocation({ lat, lng });
+                    moveMapTo(lat, lng);
+                    setLocating(false);
+                },
+                () => {
+                    if (!cancelled) setLocating(false);
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 12000,
+                    maximumAge: 15000,
+                }
+            );
+        };
+
+        void focusMap();
+        return () => {
+            cancelled = true;
+        };
+    }, [initialLocation]);
+
+    useEffect(() => {
+        if (mapReady) return undefined;
+        const timeout = setTimeout(() => setMapLoadTimedOut(true), 12000);
+        return () => clearTimeout(timeout);
+    }, [mapReady]);
 
     const handleConfirm = () => {
         if (selectedLocation) {
@@ -48,11 +129,9 @@ export default function MapPickerScreen({ route, navigation }: any) {
             )}&limit=6`;
             const res = await fetch(url, { headers: { 'User-Agent': 'PizzaWala/1.0' } });
             const json = await res.json();
-            const mapped = (json || []).map((r: any) => ({
-                lat: parseFloat(r.lat),
-                lng: parseFloat(r.lon),
-                display: r.display_name,
-            }));
+            const mapped = (json || [])
+                .map((r: any) => ({ lat: parseFloat(r.lat), lng: parseFloat(r.lon), display: r.display_name }))
+                .filter(isValidLocation);
             setResults(mapped);
         } catch (e) {
             setResults([]);
@@ -64,22 +143,11 @@ export default function MapPickerScreen({ route, navigation }: any) {
     const selectResult = (item: any) => {
         setSelectedLocation({ lat: item.lat, lng: item.lng });
         setResults([]);
-        // move map
-        if (mapRef.current) {
-            mapRef.current.animateToRegion(
-                {
-                    latitude: item.lat,
-                    longitude: item.lng,
-                    latitudeDelta: 0.01,
-                    longitudeDelta: 0.01,
-                },
-                300
-            );
-        }
+        moveMapTo(item.lat, item.lng);
     };
 
     return (
-        <SafeAreaView style={styles.container}>
+        <PizzaFireScreen edges={['top', 'left', 'right']}>
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => navigation.goBack()}>
                     <Text style={styles.backBtn}>Cancel</Text>
@@ -90,7 +158,7 @@ export default function MapPickerScreen({ route, navigation }: any) {
                 </TouchableOpacity>
             </View>
             {/* Search bar */}
-            <View style={[styles.searchBarContainer, { top: 72 + insets.top }]}>
+            <View style={[styles.searchBarContainer, { top: 72 }]}>
                 <TextInput
                     placeholder="Search address or place"
                     value={query}
@@ -112,11 +180,33 @@ export default function MapPickerScreen({ route, navigation }: any) {
                 ref={mapRef}
                 style={styles.map}
                 provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-                initialRegion={{
-                    latitude: 34.0522,
-                    longitude: -118.2437,
-                    latitudeDelta: 0.0922,
-                    longitudeDelta: 0.0421,
+                userInterfaceStyle="light"
+                showsUserLocation
+                showsMyLocationButton
+                initialRegion={
+                    initialLocation
+                        ? {
+                              latitude: initialLocation.lat,
+                              longitude: initialLocation.lng,
+                              ...REGION_DELTA,
+                          }
+                        : {
+                              latitude: 52.52,
+                              longitude: 13.405,
+                              latitudeDelta: 0.08,
+                              longitudeDelta: 0.08,
+                          }
+                }
+                onMapReady={() => {
+                    setMapReady(true);
+                    setMapLoadTimedOut(false);
+                    const pending = pendingRegionRef.current;
+                    if (pending) {
+                        mapRef.current?.animateToRegion(
+                            { ...pending, ...REGION_DELTA },
+                            250
+                        );
+                    }
                 }}
                 onPress={(e) => {
                     const { latitude, longitude } = e.nativeEvent.coordinate;
@@ -133,9 +223,22 @@ export default function MapPickerScreen({ route, navigation }: any) {
                 )}
             </MapView>
 
+            {locating ? (
+                <View style={styles.locatingBanner} pointerEvents="none">
+                    <ActivityIndicator color={PIZZA_FIRE.gold} />
+                    <Text style={styles.locatingText}>Finding your location…</Text>
+                </View>
+            ) : null}
+
+            {mapLoadTimedOut ? (
+                <View style={styles.mapErrorBanner}>
+                    <Text style={styles.mapErrorText}>Map could not load. Check your internet connection and Google Maps setup.</Text>
+                </View>
+            ) : null}
+
             {/* Search results dropdown */}
             {results.length > 0 && (
-                <View style={[styles.resultsContainer, { top: 120 + insets.top }]}>
+                <View style={[styles.resultsContainer, { top: 120 }]}>
                     <FlatList
                         data={results}
                         keyExtractor={(i, idx) => `${i.lat}-${i.lng}-${idx}`}
@@ -151,18 +254,18 @@ export default function MapPickerScreen({ route, navigation }: any) {
             <View style={styles.instructions}>
                 <Text style={styles.instructionText}>Tap the map to place a pin</Text>
             </View>
-        </SafeAreaView>
+        </PizzaFireScreen>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#2A211B' },
-    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#3A2D24', backgroundColor: '#1E1813' },
-    backBtn: { fontSize: 16, fontWeight: 'bold', color: '#D9A441' },
-    title: { fontSize: 18, fontWeight: 'bold', color: '#F6EDE2' },
+    container: { flex: 1, backgroundColor: PIZZA_FIRE.bgTop },
+    header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider, backgroundColor: 'transparent' },
+    backBtn: { fontSize: 16, fontWeight: 'bold', color: PIZZA_FIRE.gold },
+    title: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
     map: { flex: 1 },
     instructions: { position: 'absolute', bottom: 40, width: '100%', alignItems: 'center' },
-    instructionText: { backgroundColor: 'rgba(31, 41, 55, 0.95)', color: '#F6EDE2', padding: 10, borderRadius: 20, borderWidth: 1, borderColor: '#C9782B' }
+    instructionText: { backgroundColor: PIZZA_FIRE.bgMid, color: PIZZA_FIRE.textPrimary, padding: 10, borderRadius: 20, borderWidth: 1, borderColor: PIZZA_FIRE.accent }
     ,
     searchBarContainer: {
         position: 'absolute',
@@ -184,7 +287,7 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     searchBtn: {
-        backgroundColor: '#C9782B',
+        backgroundColor: PIZZA_FIRE.accent,
         paddingHorizontal: 12,
         paddingVertical: 8,
         borderRadius: 8,
@@ -204,4 +307,33 @@ const styles = StyleSheet.create({
     },
     resultRow: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#EBDCCB' },
     resultText: { fontSize: 14 },
+    locatingBanner: {
+        position: 'absolute',
+        top: 128,
+        alignSelf: 'center',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: PIZZA_FIRE.bgMid,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: PIZZA_FIRE.accent,
+        zIndex: 20,
+    },
+    locatingText: { color: PIZZA_FIRE.textPrimary, fontWeight: '600' },
+    mapErrorBanner: {
+        position: 'absolute',
+        top: 128,
+        left: 20,
+        right: 20,
+        backgroundColor: PIZZA_FIRE.bgMid,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: PIZZA_FIRE.hotAccentBorder,
+        padding: 12,
+        zIndex: 20,
+    },
+    mapErrorText: { color: PIZZA_FIRE.textPrimary, textAlign: 'center', fontWeight: '600' },
 });

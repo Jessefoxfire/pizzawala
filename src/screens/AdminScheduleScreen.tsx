@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,13 +8,11 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  TextInput,
-  Linking,
   Modal,
   ScrollView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import ShiftPlanGridView from '../components/ShiftPlanGrid';
 import {
   collection,
   onSnapshot,
@@ -24,75 +22,69 @@ import {
   deleteDoc,
   getFirestore,
 } from '@react-native-firebase/firestore';
-import { Calendar } from 'react-native-calendars';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { Avatars, AvatarKey } from '../../assets/avatars';
+import { openUserProfile } from '../navigation/openUserProfile';
 import { Icons } from '../components/Icons';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import {
-  defaultExportRange,
   downloadSchedulePdfToDevice,
-  exportSchedulePdfAndShare,
-  filterScheduledInRange,
-  formatPeriodLabel,
   type ScheduledShiftRow,
 } from '../services/schedulePdf';
+import {
+  buildShiftPlanGrid,
+  eventPeriodLabel,
+  groupScheduledShiftsByEvent,
+  uniqueEmployeesFromShifts,
+  UNLINKED_EVENT_ID,
+  type ScheduleEventRef,
+  type ScheduleGeofenceRef,
+  type ShiftPlanCell,
+} from '../utils/shiftPlanGrid';
+import { resolveAvatarSource } from '../utils/avatar';
+import {
+  EVENT_SEASONS_CONFIG_ID,
+  parseSeasonDoc,
+  splitLiveAndArchived,
+  type EventSeason,
+} from '../utils/eventSeasons';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminSchedule'>;
 
 type ScheduledShift = ScheduledShiftRow & { id: string };
-
-const SCHEDULE_EXPORT_PHONES_KEY = 'scheduleExportWhatsAppPhones';
-const MAX_SAVED_PHONES = 12;
-
-async function loadSavedExportPhones(): Promise<string[]> {
-  try {
-    const raw = await AsyncStorage.getItem(SCHEDULE_EXPORT_PHONES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
-  } catch {
-    return [];
-  }
-}
-
-async function rememberExportPhone(phone: string) {
-  const trimmed = phone.trim();
-  if (!trimmed) return;
-  const existing = await loadSavedExportPhones();
-  const next = [trimmed, ...existing.filter(entry => entry !== trimmed)].slice(0, MAX_SAVED_PHONES);
-  await AsyncStorage.setItem(SCHEDULE_EXPORT_PHONES_KEY, JSON.stringify(next));
-}
+type ScheduleView = 'events' | 'employees' | 'person';
 
 export default function AdminScheduleScreen({ navigation }: Props) {
   const [shifts, setShifts] = useState<ScheduledShift[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [events, setEvents] = useState<ScheduleEventRef[]>([]);
+  const [seasons, setSeasons] = useState<EventSeason[]>([]);
+  const [currentSeasonId, setCurrentSeasonId] = useState<string | null>(null);
+  const [geofences, setGeofences] = useState<ScheduleGeofenceRef[]>([]);
   const [loading, setLoading] = useState(true);
-  const [exportStartDate, setExportStartDate] = useState('');
-  const [exportEndDate, setExportEndDate] = useState('');
-  const [exportPhone, setExportPhone] = useState('');
-  const [savedPhones, setSavedPhones] = useState<string[]>([]);
-  const [phonePickerVisible, setPhonePickerVisible] = useState(false);
-  const [exporting, setExporting] = useState(false);
+  const [view, setView] = useState<ScheduleView>('events');
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [openedSeasonId, setOpenedSeasonId] = useState<string | null>(null);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [showExportPanel, setShowExportPanel] = useState(false);
-  const [datePickerTarget, setDatePickerTarget] = useState<'start' | 'end' | null>(null);
+  const [scheduleViewerVisible, setScheduleViewerVisible] = useState(false);
   const fs = getFirestore();
 
   useEffect(() => {
-    const q = query(collection(fs, 'shifts'), where('isScheduled', '==', true));
-    const unsubShifts = onSnapshot(q, snap => {
-      if (!snap || !snap.docs || snap.empty) {
-        setShifts([]);
+    const unsubShifts = onSnapshot(
+      query(collection(fs, 'shifts'), where('isScheduled', '==', true)),
+      snap => {
+        if (!snap || !snap.docs || snap.empty) {
+          setShifts([]);
+          setLoading(false);
+          return;
+        }
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduledShift));
+        items.sort((a, b) => b.date.localeCompare(a.date));
+        setShifts(items);
         setLoading(false);
-        return;
       }
-      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduledShift));
-      items.sort((a, b) => b.date.localeCompare(a.date));
-      setShifts(items);
-      setLoading(false);
-    });
+    );
 
     const unsubUsers = onSnapshot(collection(fs, 'users'), snap => {
       if (!snap || !snap.docs) {
@@ -102,37 +94,131 @@ export default function AdminScheduleScreen({ navigation }: Props) {
       setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
+    const unsubEvents = onSnapshot(collection(fs, 'events'), snap => {
+      if (!snap || !snap.docs) {
+        setEvents([]);
+        return;
+      }
+      setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleEventRef)));
+    });
+
+    const unsubSeasons = onSnapshot(collection(fs, 'seasons'), snap => {
+      if (!snap?.docs) {
+        setSeasons([]);
+        return;
+      }
+      setSeasons(snap.docs.map(d => parseSeasonDoc(d.id, d.data() as Record<string, unknown>)));
+    });
+
+    const unsubSeasonConfig = onSnapshot(doc(fs, 'appConfig', EVENT_SEASONS_CONFIG_ID), snap => {
+      const raw = snap?.exists() ? (snap.data() as { currentSeasonId?: unknown })?.currentSeasonId : null;
+      setCurrentSeasonId(typeof raw === 'string' && raw.trim() ? raw.trim() : null);
+    });
+
+    const unsubGeofences = onSnapshot(collection(fs, 'geofences'), snap => {
+      if (!snap || !snap.docs) {
+        setGeofences([]);
+        return;
+      }
+      setGeofences(snap.docs.map(d => ({ id: d.id, ...d.data() } as ScheduleGeofenceRef)));
+    });
+
     return () => {
       unsubShifts();
       unsubUsers();
+      unsubEvents();
+      unsubSeasons();
+      unsubSeasonConfig();
+      unsubGeofences();
     };
   }, [fs]);
 
-  useEffect(() => {
-    if (exportStartDate && exportEndDate) return;
-    const range = defaultExportRange(shifts);
-    setExportStartDate(range.startDate);
-    setExportEndDate(range.endDate);
-  }, [shifts, exportStartDate, exportEndDate]);
+  const grouped = useMemo(
+    () => groupScheduledShiftsByEvent(shifts, events, geofences),
+    [shifts, events, geofences]
+  );
 
-  const refreshSavedPhones = useCallback(async () => {
-    const phones = await loadSavedExportPhones();
-    setSavedPhones(phones);
-  }, []);
-
-  useEffect(() => {
-    if (!showExportPanel) return;
-    void refreshSavedPhones();
-  }, [showExportPanel, refreshSavedPhones]);
-
-  const exportPreviewCount = useMemo(() => {
-    if (!exportStartDate || !exportEndDate) return 0;
-    try {
-      return filterScheduledInRange(shifts, exportStartDate, exportEndDate).length;
-    } catch {
-      return 0;
+  const eventCards = useMemo(() => {
+    const cards = grouped.groups.map(group => {
+      const dayKeys = [...new Set(group.shifts.map(s => s.date).filter(Boolean))].sort();
+      return {
+        id: group.event.id,
+        title: group.event.title || group.event.name || 'Event',
+        period: eventPeriodLabel(group.event) || (dayKeys.length ? `${dayKeys[0]} – ${dayKeys[dayKeys.length - 1]}` : ''),
+        shifts: group.shifts,
+        dayKeys,
+        unlinked: false,
+        seasonId: group.event.seasonId || null,
+      };
+    });
+    if (grouped.unlinked.length) {
+      const dates = [...new Set(grouped.unlinked.map(s => s.date).filter(Boolean))].sort();
+      cards.push({
+        id: UNLINKED_EVENT_ID,
+        title: 'Standalone worksites',
+        period: dates.length ? `${dates[0]} – ${dates[dates.length - 1]}` : '',
+        shifts: grouped.unlinked,
+        dayKeys: dates,
+        unlinked: true,
+        seasonId: null,
+      });
     }
-  }, [shifts, exportStartDate, exportEndDate]);
+    return cards;
+  }, [grouped]);
+
+  const scheduleSplit = useMemo(
+    () => splitLiveAndArchived(eventCards.filter(card => !card.unlinked), seasons, currentSeasonId),
+    [eventCards, seasons, currentSeasonId]
+  );
+  const unlinkedCards = useMemo(() => eventCards.filter(card => card.unlinked), [eventCards]);
+  const openedScheduleSeason = scheduleSplit.archives.find(archive => archive.season.id === openedSeasonId) ?? null;
+
+  const eventListRows = useMemo(() => {
+    if (openedScheduleSeason) {
+      return openedScheduleSeason.items.map(card => ({ kind: 'event' as const, card }));
+    }
+    return [
+      ...scheduleSplit.archives.map(archive => ({ kind: 'archive' as const, archive })),
+      ...scheduleSplit.live.map(card => ({ kind: 'event' as const, card })),
+      ...unlinkedCards.map(card => ({ kind: 'event' as const, card })),
+    ];
+  }, [openedScheduleSeason, scheduleSplit, unlinkedCards]);
+
+  const selectedEvent = eventCards.find(card => card.id === selectedEventId) || null;
+  const eventEmployees = useMemo(
+    () => (selectedEvent ? uniqueEmployeesFromShifts(selectedEvent.shifts) : []),
+    [selectedEvent]
+  );
+  const selectedEmployee = eventEmployees.find(emp => emp.userId === selectedUserId) || null;
+
+  const eventGrid = useMemo(() => {
+    if (!selectedEvent) return null;
+    return buildShiftPlanGrid({
+      eventId: selectedEvent.id,
+      eventName: selectedEvent.title,
+      shifts: selectedEvent.shifts,
+      dayKeys: selectedEvent.dayKeys,
+    });
+  }, [selectedEvent]);
+
+  const personGrid = useMemo(() => {
+    if (!selectedEvent || !selectedUserId) return null;
+    return buildShiftPlanGrid({
+      eventId: selectedEvent.id,
+      eventName: selectedEvent.title,
+      shifts: selectedEvent.shifts,
+      dayKeys: selectedEvent.dayKeys,
+      employeeUserId: selectedUserId,
+    });
+  }, [selectedEvent, selectedUserId]);
+
+  const viewGrid = view === 'person' ? personGrid : eventGrid;
+
+  const exportRange = useMemo(() => {
+    const keys = [...new Set((selectedEvent?.shifts || []).map(s => s.date).filter(Boolean))].sort();
+    if (keys.length) return { startDate: keys[0], endDate: keys[keys.length - 1] };
+    return { startDate: '1970-01-01', endDate: '1970-01-01' };
+  }, [selectedEvent]);
 
   const handleDelete = (id: string) => {
     Alert.alert('Delete Shift', 'Are you sure you want to remove this scheduled shift?', [
@@ -141,77 +227,25 @@ export default function AdminScheduleScreen({ navigation }: Props) {
     ]);
   };
 
-  const handleExportWhatsApp = async () => {
-    if (!exportStartDate || !exportEndDate) {
-      Alert.alert('Select dates', 'Choose a start and end date for the schedule period.');
-      return;
-    }
-    try {
-      const preview = filterScheduledInRange(shifts, exportStartDate, exportEndDate);
-      if (preview.length === 0) {
-        Alert.alert(
-          'No shifts in range',
-          'No scheduled shifts fall in this date range. Create an empty PDF anyway?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Continue', onPress: () => void runExport() },
-          ]
-        );
-        return;
-      }
-      await runExport();
-    } catch (err: any) {
-      const code = err?.code ? `\n\n(${err.code})` : '';
-      Alert.alert('Export failed', `${err?.message || 'Could not create schedule PDF.'}${code}`);
-    }
-  };
-
-  const runExport = async () => {
-    setExporting(true);
-    try {
-      const result = await exportSchedulePdfAndShare({
-        shifts,
-        startDate: exportStartDate,
-        endDate: exportEndDate,
-        whatsAppPhone: exportPhone.trim() || undefined,
-      });
-      if (result.sharedWithPdf) {
-        const trimmedPhone = exportPhone.trim();
-        if (trimmedPhone) {
-          await rememberExportPhone(trimmedPhone);
-          await refreshSavedPhones();
-        }
-        return;
-      }
-      const opened = await Linking.canOpenURL(result.whatsAppUrl);
-      if (!opened) {
-        Alert.alert(
-          'WhatsApp unavailable',
-          `PDF uploaded. Share this link manually:\n\n${result.downloadUrl}`
-        );
-        return;
-      }
-      await Linking.openURL(result.whatsAppUrl);
-      const trimmedPhone = exportPhone.trim();
-      if (trimmedPhone) {
-        await rememberExportPhone(trimmedPhone);
-        await refreshSavedPhones();
-      }
-    } catch (err: any) {
-      const code = err?.code ? `\n\n(${err.code})` : '';
-      Alert.alert('Export failed', `${err?.message || 'Could not create schedule PDF.'}${code}`);
-    } finally {
-      setExporting(false);
-    }
+  const handleCellPress = (cell: ShiftPlanCell) => {
+    if (cell.empty || cell.shifts.length === 0) return;
+    const first = cell.shifts[0];
+    if (!first.id) return;
+    handleDelete(first.id);
   };
 
   const runDownload = async () => {
+    if (!selectedEvent || !viewGrid) return;
     setDownloadingPdf(true);
     try {
       await downloadSchedulePdfToDevice({
-        shifts,
-        startDate: exportStartDate,
-        endDate: exportEndDate,
+        shifts: selectedEvent.shifts,
+        startDate: exportRange.startDate,
+        endDate: exportRange.endDate,
+        eventName: selectedEvent.title,
+        dayKeys: selectedEvent.dayKeys,
+        employeeUserId: view === 'person' ? selectedUserId || undefined : undefined,
+        grid: viewGrid,
       });
     } catch (err: any) {
       const code = err?.code ? `\n\n(${err.code})` : '';
@@ -221,192 +255,166 @@ export default function AdminScheduleScreen({ navigation }: Props) {
     }
   };
 
-  const handleDownloadPdf = async () => {
-    if (!exportStartDate || !exportEndDate) {
-      Alert.alert('Select dates', 'Choose a start and end date for the schedule period.');
+  const handleBack = () => {
+    if (view === 'person') {
+      setSelectedUserId(null);
+      setScheduleViewerVisible(false);
+      setView('employees');
       return;
     }
-    try {
-      const preview = filterScheduledInRange(shifts, exportStartDate, exportEndDate);
-      if (preview.length === 0) {
-        Alert.alert(
-          'No shifts in range',
-          'No scheduled shifts fall in this date range. Download an empty PDF anyway?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Continue', onPress: () => void runDownload() },
-          ]
-        );
-        return;
-      }
-      await runDownload();
-    } catch (err: any) {
-      const code = err?.code ? `\n\n(${err.code})` : '';
-      Alert.alert('Download failed', `${err?.message || 'Could not save schedule PDF.'}${code}`);
+    if (view === 'employees') {
+      setSelectedEventId(null);
+      setScheduleViewerVisible(false);
+      setView('events');
+      return;
     }
+    if (openedSeasonId) {
+      setOpenedSeasonId(null);
+      return;
+    }
+    navigation.goBack();
   };
 
-  const exportBusy = exporting || downloadingPdf;
+  const headerTitle =
+    view === 'person'
+      ? selectedEmployee?.userName || 'Employee'
+      : view === 'employees'
+        ? selectedEvent?.title || 'Event'
+        : openedScheduleSeason
+          ? openedScheduleSeason.season.name
+          : 'Team Schedule';
 
-  const handleDatePick = (day: { dateString: string }) => {
-    if (datePickerTarget === 'start') setExportStartDate(day.dateString);
-    if (datePickerTarget === 'end') setExportEndDate(day.dateString);
-    setDatePickerTarget(null);
-  };
+  const scheduleActions = view !== 'events' && selectedEvent ? (
+    <View style={styles.exportSection}>
+      <TouchableOpacity
+        style={[styles.viewScheduleBtn, !viewGrid && styles.btnDisabled]}
+        onPress={() => setScheduleViewerVisible(true)}
+        disabled={!viewGrid}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.viewScheduleBtnText}>View Schedule</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.downloadBtn, downloadingPdf && styles.btnDisabled]}
+        onPress={() => void runDownload()}
+        disabled={downloadingPdf || !viewGrid}
+      >
+        {downloadingPdf ? (
+          <ActivityIndicator color={PIZZA_FIRE.accent} />
+        ) : (
+          <Text style={styles.downloadBtnText}>Download / save PDF</Text>
+        )}
+      </TouchableOpacity>
+    </View>
+  ) : null;
 
-  const renderShift = ({ item }: { item: ScheduledShift }) => {
-    const user = users.find(u => u.id === item.userId);
-    const avatarKey = (user?.avatarUrl as AvatarKey) || 'pizzaMaker';
-    const avatarSource = Avatars[avatarKey] || Avatars.pizzaMaker;
-
+  const renderEventCard = ({ item }: { item: (typeof eventCards)[number] }) => {
+    const employees = uniqueEmployeesFromShifts(item.shifts);
     return (
-      <View style={styles.shiftCard}>
-        <Image source={avatarSource} style={styles.cardAvatar} />
-        <View style={styles.shiftInfo}>
-          <Text style={styles.shiftUser}>{item.userName}</Text>
-          <Text style={styles.shiftWorksite}>{item.worksiteName}</Text>
-          <View style={styles.timeBadge}>
-            <Text style={styles.shiftTime}>
-              {item.date} • {item.startTime} - {item.endTime}
-            </Text>
-          </View>
-        </View>
-        <TouchableOpacity onPress={() => handleDelete(item.id)} style={styles.deleteBtn}>
-          <Icons.trash color="#9E3C2E" width={20} height={20} />
-        </TouchableOpacity>
-      </View>
+      <TouchableOpacity
+        style={styles.eventCard}
+        onPress={() => {
+          setSelectedEventId(item.id);
+          setSelectedUserId(null);
+          setView('employees');
+        }}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.eventTitle}>{item.title}</Text>
+        {item.period ? <Text style={styles.eventPeriod}>{item.period}</Text> : null}
+        <Text style={styles.eventMeta}>
+          {employees.length} employee{employees.length === 1 ? '' : 's'} · {item.shifts.length} shift
+          {item.shifts.length === 1 ? '' : 's'}
+        </Text>
+      </TouchableOpacity>
     );
   };
 
-  const listHeader = (
-    <View style={styles.exportSection}>
+  const renderEmployee = ({ item }: { item: { userId: string; userName: string; shiftCount: number } }) => {
+    const user = users.find(u => u.id === item.userId);
+    const avatarSource = resolveAvatarSource(user?.avatarUrl, user?.customAvatarUrl);
+    return (
       <TouchableOpacity
-        style={styles.exportToggle}
-        onPress={() => setShowExportPanel(v => !v)}
+        style={styles.employeeCard}
+        onPress={() => {
+          setSelectedUserId(item.userId);
+          setView('person');
+        }}
         activeOpacity={0.85}
       >
-        <Text style={styles.exportToggleTitle}>Export schedule PDF</Text>
-        <Text style={styles.exportToggleHint}>
-          {showExportPanel ? 'Hide' : 'Download or WhatsApp'}
-        </Text>
-      </TouchableOpacity>
-
-      {showExportPanel ? (
-        <View style={styles.exportPanel}>
-          <Text style={styles.exportHelp}>
-            Create one PDF for a date range. Download to your phone or share on WhatsApp with a link.
+        <Image source={avatarSource} style={styles.cardAvatar} />
+        <View style={styles.shiftInfo}>
+          <Text style={styles.shiftUser}>{item.userName}</Text>
+          <Text style={styles.shiftWorksite}>
+            {item.shiftCount} shift{item.shiftCount === 1 ? '' : 's'}
           </Text>
-
-          <View style={styles.dateRow}>
-            <TouchableOpacity
-              style={styles.datePickBtn}
-              onPress={() => setDatePickerTarget('start')}
-            >
-              <Text style={styles.datePickLabel}>Start</Text>
-              <Text style={styles.datePickValue}>{exportStartDate || 'Pick date'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.datePickBtn}
-              onPress={() => setDatePickerTarget('end')}
-            >
-              <Text style={styles.datePickLabel}>End</Text>
-              <Text style={styles.datePickValue}>{exportEndDate || 'Pick date'}</Text>
-            </TouchableOpacity>
-          </View>
-
-          {exportStartDate && exportEndDate ? (
-            <Text style={styles.previewText}>
-              {exportPreviewCount} shift{exportPreviewCount === 1 ? '' : 's'} in{' '}
-              {formatPeriodLabel(exportStartDate, exportEndDate)}
-            </Text>
-          ) : null}
-
-          <Text style={styles.phoneLabel}>WhatsApp number (optional)</Text>
-          <View style={styles.phoneRow}>
-            <TextInput
-              value={exportPhone}
-              onChangeText={setExportPhone}
-              placeholder="Type or pick a saved number"
-              placeholderTextColor="#7A6050"
-              keyboardType="phone-pad"
-              style={styles.phoneInput}
-            />
-            {savedPhones.length > 0 ? (
-              <TouchableOpacity
-                style={styles.phonePickerBtn}
-                onPress={() => setPhonePickerVisible(true)}
-              >
-                <Text style={styles.phonePickerBtnText}>Saved</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          {savedPhones.length > 0 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.phoneChipRow}>
-              {savedPhones.map(phone => (
-                <TouchableOpacity
-                  key={phone}
-                  style={[styles.phoneChip, exportPhone === phone && styles.phoneChipActive]}
-                  onPress={() => setExportPhone(phone)}
-                >
-                  <Text style={styles.phoneChipText}>{phone}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          ) : null}
-
-          <TouchableOpacity
-            style={[styles.downloadBtn, exportBusy && styles.btnDisabled]}
-            onPress={() => void handleDownloadPdf()}
-            disabled={exportBusy}
-          >
-            {downloadingPdf ? (
-              <ActivityIndicator color="#C9782B" />
-            ) : (
-              <Text style={styles.downloadBtnText}>Download / save PDF</Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.whatsAppBtn, exportBusy && styles.btnDisabled]}
-            onPress={() => void handleExportWhatsApp()}
-            disabled={exportBusy}
-          >
-            {exporting ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.whatsAppBtnText}>Create PDF & share on WhatsApp</Text>
-            )}
-          </TouchableOpacity>
         </View>
-      ) : null}
-    </View>
-  );
+        <Text style={styles.chevron}>›</Text>
+      </TouchableOpacity>
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Icons.arrowLeft color="#F6EDE2" width={24} height={24} />
+        <TouchableOpacity onPress={handleBack}>
+          <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
         </TouchableOpacity>
-        <Text style={styles.title}>Team Schedule</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={() => navigation.navigate('AssignShifts')}>
-          <Icons.plus color="#C9782B" width={28} height={28} />
+        <Text style={styles.title} numberOfLines={1}>{headerTitle}</Text>
+        <TouchableOpacity
+          style={styles.addBtn}
+          onPress={() =>
+            navigation.navigate('AssignShifts', {
+              eventId:
+                selectedEventId && selectedEventId !== UNLINKED_EVENT_ID
+                  ? selectedEventId
+                  : undefined,
+              userId: selectedUserId || undefined,
+            })
+          }
+        >
+          <Icons.plus color={PIZZA_FIRE.gold} width={28} height={28} />
         </TouchableOpacity>
       </View>
 
       <View style={styles.summaryBar}>
-        <Text style={styles.summaryText}>{shifts.length} Active Assignments</Text>
+        <Text style={styles.summaryText}>
+          {view === 'events'
+            ? `${eventCards.length} event${eventCards.length === 1 ? '' : 's'} with shift plans`
+            : view === 'employees'
+              ? `${eventEmployees.length} employee${eventEmployees.length === 1 ? '' : 's'}`
+              : selectedEmployee
+                ? `${selectedEmployee.shiftCount} shift${selectedEmployee.shiftCount === 1 ? '' : 's'}`
+                : ''}
+        </Text>
       </View>
 
       {loading ? (
-        <ActivityIndicator size="large" color="#C9782B" style={{ marginTop: 40 }} />
-      ) : (
+        <ActivityIndicator size="large" color={PIZZA_FIRE.accent} style={{ marginTop: 40 }} />
+      ) : view === 'events' ? (
         <FlatList
-          data={shifts}
-          keyExtractor={item => item.id}
-          renderItem={renderShift}
-          ListHeaderComponent={listHeader}
+          data={eventListRows}
+          keyExtractor={item =>
+            item.kind === 'archive' ? `archive-${item.archive.season.id}` : item.card.id
+          }
+          renderItem={({ item }) => {
+            if (item.kind === 'archive') {
+              return (
+                <TouchableOpacity
+                  style={styles.eventCard}
+                  onPress={() => setOpenedSeasonId(item.archive.season.id)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.eventPeriod}>Season file</Text>
+                  <Text style={styles.eventTitle}>{item.archive.season.name}</Text>
+                  <Text style={styles.eventMeta}>
+                    {item.archive.items.length} event{item.archive.items.length === 1 ? '' : 's'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }
+            return renderEventCard({ item: item.card });
+          }}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -415,247 +423,171 @@ export default function AdminScheduleScreen({ navigation }: Props) {
             </View>
           }
         />
+      ) : view === 'employees' ? (
+        <FlatList
+          data={eventEmployees}
+          keyExtractor={item => item.userId}
+          renderItem={renderEmployee}
+          ListHeaderComponent={scheduleActions}
+          contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyTitle}>No employees on this plan</Text>
+            </View>
+          }
+        />
+      ) : (
+        <ScrollView contentContainerStyle={styles.list}>
+          {scheduleActions}
+          {personGrid ? (
+            <ShiftPlanGridView
+              grid={personGrid}
+              onPressEmployee={(userId, userName) => openUserProfile(navigation, { userId, userName })}
+              onPressCell={handleCellPress}
+            />
+          ) : null}
+        </ScrollView>
       )}
 
-      <Modal visible={datePickerTarget != null} transparent animationType="slide">
+      <Modal visible={scheduleViewerVisible} transparent animationType="slide" onRequestClose={() => setScheduleViewerVisible(false)}>
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>
-              {datePickerTarget === 'start' ? 'Period start' : 'Period end'}
-            </Text>
-            <Calendar
-              onDayPress={handleDatePick}
-              markedDates={{
-                ...(exportStartDate
-                  ? { [exportStartDate]: { selected: true, selectedColor: '#C9782B' } }
-                  : {}),
-                ...(exportEndDate
-                  ? { [exportEndDate]: { selected: true, selectedColor: '#C9782B' } }
-                  : {}),
-              }}
-              theme={{
-                backgroundColor: '#1E1813',
-                calendarBackground: '#1E1813',
-                dayTextColor: '#F6EDE2',
-                monthTextColor: '#F6EDE2',
-                arrowColor: '#C9782B',
-                todayTextColor: '#C9782B',
-              }}
-            />
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => setDatePickerTarget(null)}
-            >
-              <Text style={styles.modalCloseText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      <Modal visible={phonePickerVisible} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Saved WhatsApp numbers</Text>
-            {savedPhones.map(phone => (
-              <TouchableOpacity
-                key={phone}
-                style={styles.phoneOption}
-                onPress={() => {
-                  setExportPhone(phone);
-                  setPhonePickerVisible(false);
-                }}
-              >
-                <Text style={styles.phoneOptionText}>{phone}</Text>
+          <View style={styles.viewerCard}>
+            <View style={styles.viewerHeader}>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {view === 'person' ? selectedEmployee?.userName || 'Schedule' : selectedEvent?.title || 'Schedule'}
+              </Text>
+              <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setScheduleViewerVisible(false)}>
+                <Text style={styles.modalCloseText}>Close</Text>
               </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => setPhonePickerVisible(false)}
-            >
-              <Text style={styles.modalCloseText}>Close</Text>
-            </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.viewerScroll}>
+              {viewGrid ? (
+                <ShiftPlanGridView
+                  grid={viewGrid}
+                  onPressEmployee={(userId, userName) => {
+                    setScheduleViewerVisible(false);
+                    openUserProfile(navigation, { userId, userName });
+                  }}
+                />
+              ) : (
+                <Text style={styles.emptySub}>No schedule to show.</Text>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#2A211B' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     padding: 16,
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
     alignItems: 'center',
   },
-  title: { color: '#F6EDE2', fontSize: 20, fontWeight: '900' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 20, fontWeight: '900', flex: 1, textAlign: 'center', marginHorizontal: 8 },
   addBtn: { padding: 4 },
-  summaryBar: { backgroundColor: '#3A2D24', paddingVertical: 8, paddingHorizontal: 16 },
+  summaryBar: { backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 8, paddingHorizontal: 16 },
   summaryText: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 12,
     fontWeight: '800',
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
   list: { padding: 16, paddingBottom: 40 },
-  exportSection: { marginBottom: 16 },
-  exportToggle: {
-    backgroundColor: '#1E1813',
-    borderWidth: 1,
-    borderColor: '#3A2D24',
-    borderRadius: 14,
-    padding: 14,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  exportToggleTitle: { color: '#F6EDE2', fontSize: 15, fontWeight: '800' },
-  exportToggleHint: { color: '#C9782B', fontSize: 12, fontWeight: '700' },
-  exportPanel: {
-    marginTop: 10,
-    backgroundColor: '#1E1813',
-    borderWidth: 1,
-    borderColor: '#3A2D24',
-    borderRadius: 14,
-    padding: 14,
-    gap: 10,
-  },
-  exportHelp: { color: '#A88E73', fontSize: 13, lineHeight: 18 },
-  dateRow: { flexDirection: 'row', gap: 10 },
-  datePickBtn: {
-    flex: 1,
-    backgroundColor: '#2A211B',
-    borderWidth: 1,
-    borderColor: '#3A2D24',
-    borderRadius: 10,
-    padding: 12,
-  },
-  datePickLabel: {
-    color: '#7A6050',
-    fontSize: 11,
+  seasonHeader: { marginBottom: 10, marginTop: 4 },
+  seasonHeaderLabel: {
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 1,
     textTransform: 'uppercase',
     marginBottom: 4,
   },
-  datePickValue: { color: '#F6EDE2', fontSize: 14, fontWeight: '700' },
-  previewText: { color: '#D5C6B8', fontSize: 13 },
-  phoneLabel: {
-    color: '#7A6050',
-    fontSize: 11,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-  },
-  phoneRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  phoneInput: {
-    flex: 1,
-    backgroundColor: '#2A211B',
+  seasonHeaderName: { color: PIZZA_FIRE.gold, fontSize: 18, fontWeight: '900', marginBottom: 4 },
+  eventCard: {
+    backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
-    borderColor: '#3A2D24',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#F6EDE2',
-    fontSize: 14,
+    borderColor: PIZZA_FIRE.cardBorder,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
   },
-  phonePickerBtn: {
-    backgroundColor: '#3A2D24',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderWidth: 1,
-    borderColor: '#C9782B',
-  },
-  phonePickerBtnText: { color: '#C9782B', fontSize: 13, fontWeight: '800' },
-  phoneChipRow: { marginTop: -2 },
-  phoneChip: {
-    backgroundColor: '#2A211B',
-    borderWidth: 1,
-    borderColor: '#3A2D24',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    marginRight: 8,
-  },
-  phoneChipActive: { borderColor: '#C9782B', backgroundColor: '#3A2D24' },
-  phoneChipText: { color: '#F6EDE2', fontSize: 13, fontWeight: '700' },
-  phoneOption: {
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
-  },
-  phoneOptionText: { color: '#F6EDE2', fontSize: 15, fontWeight: '700' },
-  downloadBtn: {
-    backgroundColor: '#2A211B',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#C9782B',
-  },
-  downloadBtnText: { color: '#C9782B', fontSize: 14, fontWeight: '900' },
-  whatsAppBtn: {
-    backgroundColor: '#25D366',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  whatsAppBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
-  btnDisabled: { opacity: 0.6 },
-  shiftCard: {
+  eventTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
+  eventPeriod: { color: PIZZA_FIRE.accent, fontSize: 13, fontWeight: '700', marginTop: 6 },
+  eventMeta: { color: PIZZA_FIRE.textMuted, fontSize: 13, marginTop: 8 },
+  employeeCard: {
     flexDirection: 'row',
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surface,
     padding: 16,
     borderRadius: 16,
     marginBottom: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
-  cardAvatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 2, borderColor: '#3A2D24' },
+  chevron: { color: PIZZA_FIRE.gold, fontSize: 28, fontWeight: '300', marginLeft: 8 },
+  exportSection: { marginBottom: 16, gap: 10 },
+  viewScheduleBtn: {
+    backgroundColor: PIZZA_FIRE.surface,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.gold,
+  },
+  viewScheduleBtnText: { color: PIZZA_FIRE.gold, fontSize: 14, fontWeight: '900' },
+  downloadBtn: {
+    backgroundColor: PIZZA_FIRE.inputBg,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.accent,
+  },
+  downloadBtnText: { color: PIZZA_FIRE.accent, fontSize: 14, fontWeight: '900' },
+  btnDisabled: { opacity: 0.6 },
+  cardAvatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 2, borderColor: PIZZA_FIRE.cardBorder },
   shiftInfo: { flex: 1, marginLeft: 16 },
-  shiftUser: { color: '#F6EDE2', fontSize: 17, fontWeight: '800', marginBottom: 2 },
+  shiftUser: { color: PIZZA_FIRE.textPrimary, fontSize: 17, fontWeight: '800', marginBottom: 2 },
   shiftWorksite: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontSize: 13,
     fontWeight: '700',
     textTransform: 'uppercase',
-    marginBottom: 8,
   },
-  timeBadge: {
-    backgroundColor: '#2A211B',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: '#3A2D24',
-  },
-  shiftTime: { color: '#A88E73', fontSize: 12, fontWeight: '700' },
-  deleteBtn: { padding: 8, backgroundColor: 'rgba(158, 60, 46, 0.1)', borderRadius: 10 },
   emptyContainer: { alignItems: 'center', marginTop: 40 },
-  emptyTitle: { color: '#F6EDE2', fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
-  emptySub: { color: '#A88E73', fontSize: 14 },
+  emptyTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
+  emptySub: { color: PIZZA_FIRE.textMuted, fontSize: 14 },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
-  modalCard: {
-    backgroundColor: '#1E1813',
+  viewerCard: {
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     padding: 16,
     paddingBottom: 28,
+    maxHeight: '88%',
   },
-  modalTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '800', marginBottom: 8 },
+  viewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 8,
+  },
+  viewerScroll: { paddingBottom: 12 },
+  modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '800', flex: 1 },
   modalCloseBtn: {
-    marginTop: 12,
-    alignSelf: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
   },
-  modalCloseText: { color: '#C9782B', fontSize: 14, fontWeight: '800' },
+  modalCloseText: { color: PIZZA_FIRE.accent, fontSize: 14, fontWeight: '800' },
 });

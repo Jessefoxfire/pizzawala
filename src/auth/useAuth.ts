@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-// Native Auth import
-import nativeAuth, { FirebaseAuthTypes } from '@react-native-firebase/auth';
-// Web Firestore for now, but native user
+import nativeAuth from '@react-native-firebase/auth';
 import {
   collection,
   doc,
   getDocs,
+  getFirestore,
   limit,
   onSnapshot,
   query,
@@ -13,8 +12,7 @@ import {
   setDoc,
   updateDoc,
   where,
-} from 'firebase/firestore';
-import { db } from '../services/firebase';
+} from '@react-native-firebase/firestore';
 
 type AuthState =
   | { status: 'loading' }
@@ -29,7 +27,6 @@ export function useAuth(): AuthState {
   useEffect(() => {
     let unsubProfile: (() => void) | null = null;
 
-    // Use Native Auth listener
     const unsubAuth = nativeAuth().onAuthStateChanged(user => {
       if (!user) {
         if (unsubProfile) {
@@ -40,14 +37,13 @@ export function useAuth(): AuthState {
         return;
       }
 
-      // Move off the login screen immediately while profile loads.
       setState({ status: 'user' });
 
       if (unsubProfile) {
         unsubProfile();
       }
 
-      const profileRef = doc(db, 'users', user.uid);
+      const profileRef = doc(getFirestore(), 'users', user.uid);
       unsubProfile = onSnapshot(
         profileRef,
         async snap => {
@@ -92,7 +88,7 @@ export function useAuth(): AuthState {
               try {
                 const adminsSnap = await getDocs(
                   query(
-                    collection(db, 'users'),
+                    collection(getFirestore(), 'users'),
                     where('roles', 'array-contains', 'admin'),
                     limit(1)
                   )

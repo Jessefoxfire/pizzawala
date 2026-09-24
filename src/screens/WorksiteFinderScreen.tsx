@@ -16,9 +16,11 @@ import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import CompassHeading from 'react-native-compass-heading';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { openUserProfile } from '../navigation/openUserProfile';
 import { auth, db } from '../services/firebase';
 import { doc, onSnapshot, collection, query, where, updateDoc } from 'firebase/firestore';
 import { resolveAvatarSource } from '../utils/avatar';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'WorksiteFinder'>;
 
@@ -418,7 +420,7 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
   }, [followMap, mapRegion]);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['left', 'right']}>
       <MapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
@@ -579,10 +581,17 @@ const WorksiteFinderScreen = ({ navigation, route }: Props) => {
                   style={[styles.teamRow, isSelected && styles.teamRowActive]}
                   onPress={() => setSelectedTeammate(member)}
                 >
-                  <Image
-                    source={resolveAvatarSource(member.avatarUrl, member.customAvatarUrl)}
-                    style={styles.teamRowAvatar}
-                  />
+                  <TouchableOpacity
+                    onPress={() =>
+                      openUserProfile(navigation, { userId: member.id, userName: displayName })
+                    }
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Image
+                      source={resolveAvatarSource(member.avatarUrl, member.customAvatarUrl)}
+                      style={styles.teamRowAvatar}
+                    />
+                  </TouchableOpacity>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.teamRowName}>{displayName}</Text>
                     <Text style={styles.teamRowSub}>{formatDistance(member.distanceMeters)}</Text>
@@ -652,7 +661,7 @@ export default WorksiteFinderScreen;
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.bgTop,
   },
   closeButton: {
     position: 'absolute',
@@ -661,9 +670,9 @@ const styles = StyleSheet.create({
     width: 50,
     height: 50,
     borderRadius: 25,
-    backgroundColor: 'rgba(31, 41, 55, 0.85)',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderWidth: 2,
-    borderColor: '#D9A441',
+    borderColor: PIZZA_FIRE.gold,
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 999,
@@ -674,7 +683,7 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
   },
   closeButtonText: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 28,
     fontWeight: '700',
     lineHeight: 28,
@@ -691,18 +700,18 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   mapControlButton: {
-    backgroundColor: 'rgba(31, 41, 55, 0.9)',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
   mapControlButtonActive: {
-    backgroundColor: 'rgba(201, 120, 43, 0.9)',
+    backgroundColor: PIZZA_FIRE.accent,
   },
   mapControlButtonText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 12,
     fontWeight: '700',
   },
@@ -710,16 +719,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 16,
     width: 200,
-    backgroundColor: 'rgba(15, 23, 42, 0.9)',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     borderRadius: 12,
     paddingVertical: 8,
     paddingHorizontal: 8,
     zIndex: 25,
   },
   teamPanelTitle: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontWeight: '700',
     marginBottom: 6,
     fontSize: 12,
@@ -734,9 +743,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(148, 163, 184, 0.12)',
   },
   teamRowActive: {
-    backgroundColor: 'rgba(201, 120, 43, 0.35)',
+    backgroundColor: PIZZA_FIRE.accentSoftStrong,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
   },
   teamRowAvatar: {
     width: 28,
@@ -745,12 +754,12 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   teamRowName: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 12,
     fontWeight: '700',
   },
   teamRowSub: {
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 11,
   },
   teamRowAction: {
@@ -794,10 +803,10 @@ const styles = StyleSheet.create({
   readoutPanel: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: 'rgba(31, 41, 55, 0.95)',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     paddingVertical: 12,
     paddingHorizontal: 16,
     shadowColor: '#000',
@@ -818,7 +827,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 1.1,
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     textAlign: 'center',
     textShadowColor: 'rgba(0, 0, 0, 0.6)',
     textShadowOffset: { width: 0, height: 1 },
@@ -830,13 +839,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     backgroundColor: 'rgba(15, 23, 42, 0.65)',
   },
   readoutValue: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     letterSpacing: 0.6,
     textAlign: 'center',
   },
@@ -844,7 +853,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 16,
     fontWeight: '700',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     textAlign: 'center',
     textShadowColor: 'rgba(0, 0, 0, 0.6)',
     textShadowOffset: { width: 0, height: 1 },
@@ -867,7 +876,7 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 999,
     backgroundColor: 'rgba(35, 212, 245, 0.08)',
-    shadowColor: '#46E3FF',
+    shadowColor: PIZZA_FIRE.gold,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.65,
     shadowRadius: 18,
@@ -936,7 +945,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#00F5A0',
+    backgroundColor: PIZZA_FIRE.success,
     position: 'absolute',
     left: '50%',
     top: '50%',
@@ -949,15 +958,15 @@ const styles = StyleSheet.create({
     height: 56,
     borderRadius: 28,
     borderWidth: 3,
-    borderColor: '#C9782B',
-    backgroundColor: '#1E1813',
+    borderColor: PIZZA_FIRE.accent,
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     alignItems: 'center',
     justifyContent: 'center',
     left: '50%',
     top: '50%',
     marginLeft: -28,
     marginTop: -28,
-    shadowColor: '#C9782B',
+    shadowColor: PIZZA_FIRE.accent,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.6,
     shadowRadius: 8,
@@ -984,7 +993,7 @@ const styles = StyleSheet.create({
     height: 84,
     alignItems: 'center',
     justifyContent: 'flex-start',
-    shadowColor: '#00F5A0',
+    shadowColor: PIZZA_FIRE.success,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.55,
     shadowRadius: 10,
@@ -998,7 +1007,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 30,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
-    borderBottomColor: '#46E3FF',
+    borderBottomColor: PIZZA_FIRE.gold,
   },
   pointerCoreRing: {
     position: 'absolute',
@@ -1007,7 +1016,7 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     borderWidth: 3,
-    borderColor: '#46E3FF',
+    borderColor: PIZZA_FIRE.gold,
     backgroundColor: 'rgba(5, 24, 31, 0.85)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1016,7 +1025,7 @@ const styles = StyleSheet.create({
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: '#46E3FF',
+    backgroundColor: PIZZA_FIRE.gold,
     opacity: 0.9,
   },
   errorText: {
@@ -1041,7 +1050,7 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: '#D9A441',
+    backgroundColor: PIZZA_FIRE.gold,
     borderWidth: 2,
     borderColor: '#0F172A',
   },
@@ -1050,7 +1059,7 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     borderWidth: 3,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     backgroundColor: '#fff',
     overflow: 'hidden',
     alignItems: 'center',
@@ -1065,6 +1074,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
   },
 });

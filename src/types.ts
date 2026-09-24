@@ -8,4 +8,5 @@ export interface Geofence {
     teamId: string;
     createdBy: string;
     createdAt: any;
+    eventId?: string | null;
 }

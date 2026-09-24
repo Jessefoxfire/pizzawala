@@ -12,7 +12,6 @@ import {
   Modal,
   Linking,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   collection,
   doc,
@@ -31,9 +30,15 @@ import { Icons } from '../components/Icons';
 import { Avatars, type AvatarKey } from '../../assets/avatars';
 import { ensureImagePickerPermission } from '../utils/imagePickerPermissions';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
-import { Calendar } from 'react-native-calendars';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import PizzaFireCalendar from '../components/PizzaFireCalendar';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useAuth } from '../auth/useAuth';
+import type { RootStackParamList } from '../navigation/AppNavigator';
 import { formatDateTime } from '../services/hygiene';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
+import PizzaFireButton from '../components/PizzaFireButton';
 import {
   CHECKLIST_HELP,
   GERMAN_COMPLIANCE_DOCUMENTS,
@@ -77,6 +82,12 @@ const defaultBirthCalendarMonth = (birthDate: string) => {
   return monthStartKey(fallback.getFullYear(), fallback.getMonth() + 1);
 };
 
+const formatBirthDate = (birthDate: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) return '';
+  const { year, month, day } = parseDateKey(birthDate);
+  return `${padDatePart(day)}.${padDatePart(month)}.${year}`;
+};
+
 const emptyCompliance = (): GermanComplianceProfile => ({
   salutation: '',
   address: '',
@@ -86,9 +97,11 @@ const emptyCompliance = (): GermanComplianceProfile => ({
   taxIdNumber: '',
 });
 
-export default function EditProfileScreen({ navigation }: any) {
+export default function EditProfileScreen({ navigation, route }: NativeStackScreenProps<RootStackParamList, 'EditProfile'>) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [roles, setRoles] = useState<string[]>([]);
+  const [accountDisabled, setAccountDisabled] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState<AvatarKey | null>(null);
   const [customAvatarUrl, setCustomAvatarUrl] = useState<string | null>(null);
   const [compliance, setCompliance] = useState<GermanComplianceProfile>(emptyCompliance);
@@ -108,7 +121,7 @@ export default function EditProfileScreen({ navigation }: any) {
   const birthDateMin = '1920-01-01';
 
   const openBirthDatePicker = () => {
-    const monthKey = defaultBirthCalendarMonth(compliance.birthDate);
+    const monthKey = defaultBirthCalendarMonth(compliance.birthDate || '');
     setBirthCalendarMonth(monthKey);
     setBirthPickerYear(parseDateKey(monthKey).year);
     setBirthPickerView('day');
@@ -128,8 +141,14 @@ export default function EditProfileScreen({ navigation }: any) {
     return false;
   };
 
-  const { pickAndUpload, nameConfirmModal, isUploading: isUploadingDoc } = useHygieneCredentialUpload();
+  const { pickAndUpload, nameConfirmModal, sourcePickerModal, isUploading: isUploadingDoc } = useHygieneCredentialUpload();
   const user = auth.currentUser;
+  const authState = useAuth();
+  const profileUserId = route.params?.userId || user?.uid || null;
+  const isSelf = Boolean(profileUserId && user?.uid && profileUserId === user.uid);
+  const isAdmin = authState.status === 'admin';
+  const canViewHours = isSelf || isAdmin;
+  const canViewDocuments = isSelf || isAdmin;
 
   const requiredDocumentTypes = useMemo(
     () => getRequiredDocumentTypesForUser(extraRequiredDocuments),
@@ -160,11 +179,11 @@ export default function EditProfileScreen({ navigation }: any) {
   }, [credentials]);
 
   useEffect(() => {
-    if (!user?.uid) return undefined;
+    if (!canViewDocuments || !profileUserId) return undefined;
 
     const fs = getFirestore();
     const unsubCredentials = onSnapshot(
-      query(collection(fs, 'hygieneCredentials'), where('employeeUid', '==', user.uid)),
+      query(collection(fs, 'hygieneCredentials'), where('employeeUid', '==', profileUserId)),
       snap => {
         const items = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
         items.sort((a: any, b: any) => {
@@ -177,28 +196,41 @@ export default function EditProfileScreen({ navigation }: any) {
     );
 
     return () => unsubCredentials();
-  }, [user?.uid]);
+  }, [canViewDocuments, profileUserId]);
 
   useEffect(() => {
     const fetchProfile = async () => {
-      if (!user?.uid) return;
+      if (!profileUserId) {
+        setLoading(false);
+        return;
+      }
       try {
-        const snap = await getDoc(doc(getFirestore(), 'users', user.uid));
+        const snap = await getDoc(doc(getFirestore(), 'users', profileUserId));
         if (snap.exists()) {
           const data = snap.data();
-          setName(data?.name || '');
-          setEmail(data?.email || '');
+          setName(data?.name || route.params?.userName || '');
+          setEmail(data?.email || (isSelf ? user?.email || '' : ''));
           setSelectedAvatar((data?.avatarUrl as AvatarKey) || 'pizzaMaker');
           setCustomAvatarUrl(data?.customAvatarUrl || null);
-          setCompliance(readGermanCompliance(data));
-          setExtraRequiredDocuments(
-            Array.isArray(data?.requiredDocuments)
-              ? data.requiredDocuments.map((value: unknown) => String(value || '').trim()).filter(Boolean)
-              : []
-          );
+          setRoles(Array.isArray(data?.roles) ? data.roles.map((value: unknown) => String(value)) : []);
+          setAccountDisabled(Boolean(data?.disabled));
+          if (isSelf || isAdmin) {
+            setExtraRequiredDocuments(
+              Array.isArray(data?.requiredDocuments)
+                ? data.requiredDocuments.map((value: unknown) => String(value || '').trim()).filter(Boolean)
+                : []
+            );
+          } else {
+            setExtraRequiredDocuments([]);
+          }
+          if (isSelf || isAdmin) {
+            setCompliance(readGermanCompliance(data));
+          } else {
+            setCompliance(emptyCompliance());
+          }
         } else {
-          setName(user.displayName || '');
-          setEmail(user.email || '');
+          setName(isSelf ? user?.displayName || '' : route.params?.userName || '');
+          setEmail(isSelf ? user?.email || '' : '');
           setSelectedAvatar('pizzaMaker');
           setCustomAvatarUrl(null);
           setCompliance(emptyCompliance());
@@ -212,7 +244,7 @@ export default function EditProfileScreen({ navigation }: any) {
       }
     };
     void fetchProfile();
-  }, [user?.uid]);
+  }, [profileUserId, isSelf, isAdmin, user?.displayName, user?.email, route.params?.userName]);
 
   const updateCompliance = (key: keyof GermanComplianceProfile, value: string) => {
     setCompliance(current => ({ ...current, [key]: value }));
@@ -295,12 +327,12 @@ export default function EditProfileScreen({ navigation }: any) {
   };
 
   const handleSave = async () => {
-    if (!user?.uid || saving) return;
+    if (!isSelf || !user?.uid || saving) return;
     const trimmedName = name.trim();
     const trimmedEmail = email.trim();
 
-    if (!trimmedName || !trimmedEmail || (!selectedAvatar && !customAvatarUrl)) {
-      Alert.alert('Notice', 'Please fill in your name, email, and choose an avatar.');
+    if (!trimmedName || !trimmedEmail) {
+      Alert.alert('Notice', 'Please fill in your name and email.');
       return;
     }
 
@@ -344,44 +376,160 @@ export default function EditProfileScreen({ navigation }: any) {
     }
   };
 
+  const openHours = () => {
+    if (!profileUserId || !canViewHours) return;
+    if (isSelf) {
+      navigation.navigate('WorkingHours');
+      return;
+    }
+    navigation.navigate('WorkingHours', {
+      employeeUserId: profileUserId,
+      employeeName: name || route.params?.userName,
+    });
+  };
+
   const showChecklistHelp = () => {
     Alert.alert('Signed checklist', CHECKLIST_HELP);
   };
 
   if (loading) {
     return (
+      <PizzaFireScreen>
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#C9782B" />
+        <ActivityIndicator size="large" color={PIZZA_FIRE.accent} />
       </View>
+      </PizzaFireScreen>
     );
   }
 
   const complianceComplete = missingFields.length === 0 && missingDocuments.length === 0;
 
   return (
-    <>
-      <SafeAreaView style={styles.container}>
+    <PizzaFireScreen>
+      <View style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Icons.arrowLeft color="#F6EDE2" width={24} height={24} />
+            <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Edit Profile</Text>
+          <Text style={styles.headerTitle}>{isSelf ? 'Edit Profile' : name || 'Profile'}</Text>
+          {isSelf ? (
           <TouchableOpacity onPress={handleSave} disabled={saving}>
-            {saving ? <ActivityIndicator color="#C9782B" /> : <Text style={styles.saveText}>Save</Text>}
+            {saving ? <ActivityIndicator color={PIZZA_FIRE.accent} /> : <Text style={styles.saveText}>Save</Text>}
           </TouchableOpacity>
+          ) : (
+            <View style={{ width: 48 }} />
+          )}
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={styles.avatarSection}>
-            <TouchableOpacity style={styles.mainAvatarContainer} onPress={() => setAvatarModalVisible(true)}>
+            <TouchableOpacity
+              style={styles.mainAvatarContainer}
+              onPress={() => isSelf && setAvatarModalVisible(true)}
+              disabled={!isSelf}
+              activeOpacity={isSelf ? 0.8 : 1}
+            >
               <Image source={resolveAvatarSource(selectedAvatar, customAvatarUrl)} style={styles.mainAvatar} />
+              {isSelf ? (
               <View style={styles.editOverlay}>
-                <Icons.camera color="#F6EDE2" width={20} height={20} />
+                <Icons.camera color={PIZZA_FIRE.textPrimary} width={20} height={20} />
               </View>
+              ) : null}
             </TouchableOpacity>
-            <Text style={styles.avatarLabel}>Tap to change identity</Text>
+            <Text style={styles.avatarLabel}>{isSelf ? 'Tap to change identity' : name || 'Team member'}</Text>
+            {canViewHours ? (
+              <PizzaFireButton
+                label="Hours"
+                variant="primary"
+                onPress={openHours}
+                style={styles.hoursBtn}
+                textStyle={styles.hoursBtnText}
+              />
+            ) : null}
           </View>
 
+          {!isSelf ? (
+            <View style={styles.form}>
+              <View style={styles.complianceIntroCard}>
+                <Text style={styles.label}>Full name</Text>
+                <Text style={styles.metaValue}>{name || '—'}</Text>
+                <Text style={[styles.label, { marginTop: 14 }]}>Email</Text>
+                <Text style={styles.metaValue}>{email || 'Not available'}</Text>
+                <Text style={[styles.label, { marginTop: 14 }]}>Role</Text>
+                <Text style={styles.metaValue}>
+                  {roles.includes('admin') ? 'Admin' : 'Member'}
+                  {accountDisabled ? ' • Disabled' : ''}
+                </Text>
+                <Text style={[styles.label, { marginTop: 14 }]}>Title</Text>
+                <Text style={styles.metaValue}>{compliance.salutation || '—'}</Text>
+                {GERMAN_COMPLIANCE_FIELDS.map(field => (
+                  <React.Fragment key={field.key}>
+                    <Text style={[styles.label, { marginTop: 14 }]}>{field.label}</Text>
+                    <Text style={styles.metaValue}>
+                      {field.key === 'birthDate' ? formatBirthDate(String(compliance.birthDate || '')) || '—' : String(compliance[field.key] || '').trim() || '—'}
+                    </Text>
+                  </React.Fragment>
+                ))}
+              </View>
+              {canViewDocuments ? (
+                <>
+                  <Text style={styles.sectionHeading}>Documents</Text>
+                  <Text style={styles.complianceIntroText}>
+                    {requiredDocumentTypes.length
+                      ? `${missingDocuments.length} missing of ${requiredDocumentTypes.length} required.`
+                      : 'No extra document types assigned.'}
+                  </Text>
+                  {GERMAN_COMPLIANCE_DOCUMENTS.map(doc => {
+                    const upload = uploadsByDocType.get(doc.type);
+                    const complete = !!upload;
+                    const required = doc.required;
+                    return (
+                      <View key={doc.type} style={[styles.docCard, complete ? styles.docCardComplete : required ? styles.docCardMissing : null]}>
+                        <Text style={styles.docTitle}>{doc.type}</Text>
+                        <Text style={[styles.docStatus, complete ? styles.docStatusComplete : required ? styles.docStatusMissing : styles.docStatusOptional]}>
+                          {complete ? 'Uploaded' : required ? 'Missing' : 'Optional'}
+                        </Text>
+                        {upload ? (
+                          <View style={styles.uploadMetaCard}>
+                            <Text style={styles.uploadMetaText}>{upload.fileName || 'Document'}</Text>
+                            {upload.downloadUrl ? (
+                              <TouchableOpacity onPress={() => void Linking.openURL(String(upload.downloadUrl))}>
+                                <Text style={styles.linkText}>Open uploaded file</Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                  {extraRequiredDocuments
+                    .filter(docType => !GERMAN_COMPLIANCE_DOCUMENTS.some(doc => doc.type === docType))
+                    .map(docType => {
+                      const upload = uploadsByDocType.get(docType);
+                      const complete = !!upload;
+                      return (
+                        <View key={docType} style={[styles.docCard, complete ? styles.docCardComplete : styles.docCardMissing]}>
+                          <Text style={styles.docTitle}>{docType}</Text>
+                          <Text style={[styles.docStatus, complete ? styles.docStatusComplete : styles.docStatusMissing]}>
+                            {complete ? 'Uploaded' : 'Missing'}
+                          </Text>
+                          {upload?.downloadUrl ? (
+                            <TouchableOpacity onPress={() => void Linking.openURL(String(upload.downloadUrl))}>
+                              <Text style={styles.linkText}>Open uploaded file</Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      );
+                    })}
+                </>
+              ) : (
+                <Text style={styles.avatarLabel}>Employment documents are only visible to admins and the account owner.</Text>
+              )}
+            </View>
+          ) : null}
+
+          {isSelf ? (
+          <>
           <View style={styles.form}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Full Name</Text>
@@ -408,15 +556,15 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
           </View>
 
-          <View style={styles.complianceIntroCard}>
-            <Text style={styles.complianceIntroTitle}>Employment records (Germany)</Text>
-            <Text style={styles.complianceIntroText}>{GERMAN_COMPLIANCE_INTRO}</Text>
-            <Text style={[styles.complianceStatus, complianceComplete ? styles.complianceStatusComplete : styles.complianceStatusPending]}>
-              {complianceComplete
-                ? 'All required details and documents are on file.'
-                : `${missingFields.length} detail${missingFields.length === 1 ? '' : 's'} and ${missingDocuments.length} document${missingDocuments.length === 1 ? '' : 's'} still needed.`}
-            </Text>
-          </View>
+          {!complianceComplete ? (
+            <View style={styles.complianceIntroCard}>
+              <Text style={styles.complianceIntroTitle}>Employment records (Germany)</Text>
+              <Text style={styles.complianceIntroText}>{GERMAN_COMPLIANCE_INTRO}</Text>
+              <Text style={[styles.complianceStatus, styles.complianceStatusPending]}>
+                {missingFields.length} detail{missingFields.length === 1 ? '' : 's'} and {missingDocuments.length} document{missingDocuments.length === 1 ? '' : 's'} still needed.
+              </Text>
+            </View>
+          ) : null}
 
           <Text style={styles.sectionHeading}>Personal details</Text>
           <View style={styles.inputGroup}>
@@ -443,7 +591,7 @@ export default function EditProfileScreen({ navigation }: any) {
                 <View key={field.key} style={styles.inputGroup}>
                   <Text style={styles.label}>{field.label}</Text>
                   <TouchableOpacity style={styles.dateButton} onPress={openBirthDatePicker}>
-                    <Text style={styles.dateButtonText}>{compliance.birthDate || field.placeholder}</Text>
+                    <Text style={styles.dateButtonText}>{formatBirthDate(compliance.birthDate || '') || field.placeholder}</Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -470,13 +618,14 @@ export default function EditProfileScreen({ navigation }: any) {
             const upload = uploadsByDocType.get(doc.type);
             const complete = !!upload;
             const busy = uploadingDocType === doc.type;
+            const required = doc.required;
             return (
-              <View key={doc.type} style={[styles.docCard, complete ? styles.docCardComplete : styles.docCardMissing]}>
+              <View key={doc.type} style={[styles.docCard, complete ? styles.docCardComplete : required ? styles.docCardMissing : null]}>
                 <View style={styles.docHeader}>
                   <View style={styles.docHeaderText}>
                     <Text style={styles.docTitle}>{doc.type}</Text>
-                    <Text style={[styles.docStatus, complete ? styles.docStatusComplete : styles.docStatusMissing]}>
-                      {complete ? 'Uploaded' : 'Missing'}
+                    <Text style={[styles.docStatus, complete ? styles.docStatusComplete : required ? styles.docStatusMissing : styles.docStatusOptional]}>
+                      {complete ? 'Uploaded' : required ? 'Missing' : 'Optional'}
                     </Text>
                   </View>
                   {doc.helpTitle ? (
@@ -508,7 +657,7 @@ export default function EditProfileScreen({ navigation }: any) {
                   disabled={busy || isUploadingDoc}
                 >
                   {busy ? (
-                    <ActivityIndicator color="#1E1813" />
+                    <ActivityIndicator color={PIZZA_FIRE.charcoal} />
                   ) : (
                     <Text style={styles.uploadButtonText}>{complete ? 'Replace upload' : 'Upload / photograph'}</Text>
                   )}
@@ -549,7 +698,7 @@ export default function EditProfileScreen({ navigation }: any) {
                     disabled={busy || isUploadingDoc}
                   >
                     {busy ? (
-                      <ActivityIndicator color="#1E1813" />
+                      <ActivityIndicator color={PIZZA_FIRE.charcoal} />
                     ) : (
                       <Text style={styles.uploadButtonText}>{complete ? 'Replace upload' : 'Upload / photograph'}</Text>
                     )}
@@ -557,6 +706,8 @@ export default function EditProfileScreen({ navigation }: any) {
                 </View>
               );
             })}
+          </>
+          ) : null}
         </ScrollView>
 
         <Modal visible={avatarModalVisible} animationType="slide" transparent>
@@ -576,11 +727,11 @@ export default function EditProfileScreen({ navigation }: any) {
                   disabled={uploadingPhoto}
                 >
                   {uploadingPhoto ? (
-                    <ActivityIndicator color="#C9782B" />
+                    <ActivityIndicator color={PIZZA_FIRE.accent} />
                   ) : (
                     <>
                       <View style={styles.uploadIconCircle}>
-                        <Icons.camera color="#C9782B" width={24} height={24} />
+                        <Icons.camera color={PIZZA_FIRE.accent} width={24} height={24} />
                       </View>
                       <View>
                         <Text style={styles.uploadTitle}>Upload Real Photo</Text>
@@ -679,35 +830,23 @@ export default function EditProfileScreen({ navigation }: any) {
                   </TouchableOpacity>
                 </>
               ) : (
-                <Calendar
-                  key={birthCalendarMonth}
+                <PizzaFireCalendar
                   current={birthCalendarMonth}
                   minDate={birthDateMin}
                   maxDate={birthDateMax}
-                  enableSwipeMonths={false}
-                  hideArrows
-                  renderHeader={(date: { toString: (format: string) => string }) => (
-                    <TouchableOpacity
-                      style={styles.calendarMonthHeader}
-                      onPress={() => {
-                        setBirthPickerYear(Number(date.toString('yyyy')));
-                        setBirthPickerView('month');
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel="Open month picker"
-                    >
-                      <Text style={styles.calendarMonthHeaderText}>{date.toString('MMMM yyyy')}</Text>
-                      <Text style={styles.calendarMonthHeaderHint}>Tap to pick month</Text>
-                    </TouchableOpacity>
-                  )}
+                  onMonthChange={day => setBirthCalendarMonth(monthStartKey(day.year, day.month))}
+                  onMonthTitlePress={() => {
+                    setBirthPickerYear(parseDateKey(birthCalendarMonth).year);
+                    setBirthPickerView('month');
+                  }}
                   theme={{
-                    backgroundColor: '#1E1813',
-                    calendarBackground: '#1E1813',
-                    selectedDayBackgroundColor: '#C9782B',
+                    backgroundColor: PIZZA_FIRE.surfaceInset,
+                    calendarBackground: 'transparent',
+                    selectedDayBackgroundColor: PIZZA_FIRE.accent,
                     dayTextColor: '#F6EDE2',
                     monthTextColor: '#F6EDE2',
                     textDisabledColor: '#3A2D24',
-                    arrowColor: '#C9782B',
+                    arrowColor: PIZZA_FIRE.accent,
                   }}
                   onDayPress={(day: { dateString: string }) => {
                     updateCompliance('birthDate', day.dateString);
@@ -716,7 +855,7 @@ export default function EditProfileScreen({ navigation }: any) {
                   }}
                   markedDates={
                     compliance.birthDate
-                      ? { [compliance.birthDate]: { selected: true, selectedColor: '#C9782B' } }
+                      ? { [compliance.birthDate]: { selected: true, selectedColor: PIZZA_FIRE.accent } }
                       : {}
                   }
                 />
@@ -734,32 +873,33 @@ export default function EditProfileScreen({ navigation }: any) {
             </View>
           </View>
         </Modal>
-      </SafeAreaView>
+      </View>
       {nameConfirmModal}
-    </>
+      {sourcePickerModal}
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#1E1813' },
-  centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1E1813' },
+  container: { flex: 1, backgroundColor: 'transparent' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
-  headerTitle: { fontSize: 20, fontWeight: '900', color: '#F6EDE2' },
-  saveText: { color: '#C9782B', fontSize: 16, fontWeight: '900' },
+  headerTitle: { fontSize: 20, fontWeight: '900', color: PIZZA_FIRE.textPrimary },
+  saveText: { color: PIZZA_FIRE.accent, fontSize: 16, fontWeight: '900' },
   scrollContent: { padding: 24, paddingBottom: 40 },
   avatarSection: { alignItems: 'center', marginBottom: 24 },
   mainAvatarContainer: {
     width: 120,
     height: 120,
     borderRadius: 60,
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -774,25 +914,39 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     alignItems: 'center',
   },
-  avatarLabel: { color: '#A88E73', fontSize: 13, marginTop: 12, fontWeight: '600' },
+  avatarLabel: { color: PIZZA_FIRE.textMuted, fontSize: 13, marginTop: 12, fontWeight: '600' },
+  hoursBtn: {
+    marginTop: 16,
+    minWidth: 160,
+    paddingHorizontal: 28,
+  },
+  hoursBtnText: {
+    fontSize: 16,
+    letterSpacing: 0.4,
+  },
+  metaValue: {
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 16,
+    fontWeight: '700',
+    marginTop: 4,
+  },
   form: { gap: 20, marginBottom: 24 },
   inputGroup: { gap: 8, marginBottom: 14 },
-  label: { color: '#A88E73', fontSize: 12, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' },
-  input: { backgroundColor: '#3A2D24', borderRadius: 12, padding: 16, color: '#F6EDE2', fontSize: 16 },
+  label: { color: PIZZA_FIRE.textMuted, fontSize: 12, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 12, padding: 16, color: PIZZA_FIRE.textPrimary, fontSize: 16 },
   inputMultiline: { minHeight: 88, textAlignVertical: 'top' },
-  sectionHeading: { color: '#F6EDE2', fontSize: 18, fontWeight: '900', marginTop: 8, marginBottom: 12 },
+  sectionHeading: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900', marginTop: 8, marginBottom: 12 },
   complianceIntroCard: {
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.card,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#4B382B',
+    borderColor: PIZZA_FIRE.cardBorder,
     marginBottom: 18,
   },
-  complianceIntroTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '900', marginBottom: 8 },
-  complianceIntroText: { color: '#C8B29A', fontSize: 14, lineHeight: 20, marginBottom: 10 },
+  complianceIntroTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '900', marginBottom: 8 },
+  complianceIntroText: { color: PIZZA_FIRE.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 10 },
   complianceStatus: { fontSize: 13, fontWeight: '800' },
-  complianceStatusComplete: { color: '#9BD1A5' },
   complianceStatusPending: { color: '#E2A14A' },
   salutationRow: { flexDirection: 'row', gap: 10 },
   salutationPill: {
@@ -800,23 +954,23 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
-  salutationPillActive: { backgroundColor: '#C9782B', borderColor: '#C9782B' },
-  salutationText: { color: '#A88E73', fontWeight: '800' },
-  salutationTextActive: { color: '#1E1813' },
+  salutationPillActive: { backgroundColor: PIZZA_FIRE.accent, borderColor: PIZZA_FIRE.accent },
+  salutationText: { color: PIZZA_FIRE.textMuted, fontWeight: '800' },
+  salutationTextActive: { color: PIZZA_FIRE.charcoal },
   dateButton: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
-  dateButtonText: { color: '#F6EDE2', fontSize: 16, fontWeight: '600' },
+  dateButtonText: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '600' },
   docCard: {
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
@@ -826,56 +980,59 @@ const styles = StyleSheet.create({
   docCardMissing: { borderColor: '#6D4C41' },
   docHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
   docHeaderText: { flex: 1 },
-  docTitle: { color: '#F6EDE2', fontSize: 15, fontWeight: '800', marginBottom: 4 },
+  docTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 15, fontWeight: '800', marginBottom: 4 },
   docStatus: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
   docStatusComplete: { color: '#9BD1A5' },
   docStatusMissing: { color: '#E2A14A' },
+  docStatusOptional: { color: PIZZA_FIRE.textMuted },
   helpButton: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
   },
-  helpButtonText: { color: '#C9782B', fontWeight: '900' },
+  helpButtonText: { color: PIZZA_FIRE.accent, fontWeight: '900' },
   uploadMetaCard: {
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderRadius: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
     marginBottom: 10,
   },
-  uploadMetaText: { color: '#D6C0AC', fontSize: 13, marginBottom: 4 },
-  linkText: { color: '#C9782B', fontSize: 13, fontWeight: '800', marginTop: 4 },
-  missingHelp: { color: '#A88E73', fontSize: 13, lineHeight: 18, marginBottom: 10 },
+  uploadMetaText: { color: PIZZA_FIRE.textSecondary, fontSize: 13, marginBottom: 4 },
+  linkText: { color: PIZZA_FIRE.accent, fontSize: 13, fontWeight: '800', marginTop: 4 },
+  missingHelp: { color: PIZZA_FIRE.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 10 },
   uploadButton: {
-    backgroundColor: '#C9782B',
-    borderRadius: 12,
+    backgroundColor: PIZZA_FIRE.hotAccent,
+    borderRadius: 16,
     paddingVertical: 12,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.hotAccentBorder,
   },
   uploadButtonDisabled: { opacity: 0.6 },
-  uploadButtonText: { color: '#1E1813', fontSize: 14, fontWeight: '900' },
+  uploadButtonText: { color: PIZZA_FIRE.textPrimary, fontSize: 14, fontWeight: '900' },
   modalContainer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalContainerCenter: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 20 },
   modalContent: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
     padding: 24,
     maxHeight: '80%',
   },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  modalTitle: { color: '#F6EDE2', fontSize: 18, fontWeight: '900' },
-  closeText: { color: '#A88E73', fontWeight: '600' },
+  modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
+  closeText: { color: PIZZA_FIRE.textMuted, fontWeight: '600' },
   customUploadOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     padding: 16,
     borderRadius: 16,
     marginBottom: 24,
@@ -884,47 +1041,47 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 16,
   },
-  uploadTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '700' },
-  uploadSub: { color: '#A88E73', fontSize: 12 },
-  modalSectionLabel: { color: '#A88E73', fontSize: 11, fontWeight: '900', letterSpacing: 1, marginBottom: 16 },
+  uploadTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
+  uploadSub: { color: PIZZA_FIRE.textMuted, fontSize: 12 },
+  modalSectionLabel: { color: PIZZA_FIRE.textMuted, fontSize: 11, fontWeight: '900', letterSpacing: 1, marginBottom: 16 },
   avatarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'center' },
   avatarChoice: {
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
     borderColor: 'transparent',
   },
-  avatarChoiceSelected: { borderColor: '#C9782B', backgroundColor: '#C9782B' },
+  avatarChoiceSelected: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accent },
   choiceImage: { width: 44, height: 44 },
   calendarCard: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
-  calendarTitle: { color: '#C9782B', fontSize: 14, fontWeight: '800', textAlign: 'center', marginBottom: 12 },
+  calendarTitle: { color: PIZZA_FIRE.accent, fontSize: 14, fontWeight: '800', textAlign: 'center', marginBottom: 12 },
   calendarMonthHeader: {
     alignItems: 'center',
     paddingVertical: 8,
     marginBottom: 4,
   },
   calendarMonthHeaderText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 18,
     fontWeight: '700',
   },
   calendarMonthHeaderHint: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontSize: 11,
     fontWeight: '600',
     marginTop: 2,
@@ -942,16 +1099,16 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
   },
   monthPickerArrowText: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontSize: 24,
     fontWeight: '700',
     lineHeight: 28,
   },
   monthPickerYear: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 20,
     fontWeight: '700',
   },
@@ -967,31 +1124,31 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1.5,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   monthCellCurrent: {
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
   },
   monthCellSelected: {
-    backgroundColor: 'rgba(201, 120, 43, 0.2)',
-    borderColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accentSoftStrong,
+    borderColor: PIZZA_FIRE.accent,
   },
   monthCellDisabled: {
     opacity: 0.35,
   },
   monthCellText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 14,
     fontWeight: '500',
   },
   monthCellTextActive: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontWeight: '700',
   },
   monthCellTextDisabled: {
-    color: '#8F6A48',
+    color: PIZZA_FIRE.textMuted,
   },
   monthPickerBackBtn: {
     marginTop: 14,
@@ -1000,10 +1157,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   monthPickerBackText: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontWeight: '700',
     fontSize: 14,
   },
   closeCalendarBtn: { marginTop: 12, padding: 10, alignItems: 'center' },
-  closeCalendarBtnText: { color: '#C9782B', fontWeight: 'bold' },
+  closeCalendarBtnText: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
 });

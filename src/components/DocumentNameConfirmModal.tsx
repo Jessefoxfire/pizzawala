@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import {
   ActivityIndicator,
   Image,
@@ -75,7 +76,7 @@ export default function DocumentNameConfirmModal({
               disabled={aiFixBusy}
             >
               {aiFixBusy ? (
-                <ActivityIndicator color="#F6EDE2" size="small" />
+                <ActivityIndicator color={PIZZA_FIRE.textPrimary} size="small" />
               ) : (
                 <Text style={styles.aiFixText}>AI Fix again</Text>
               )}
@@ -121,10 +122,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   card: {
-    backgroundColor: '#241B15',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
     padding: 18,
   },
   header: {
@@ -134,7 +135,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   title: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 20,
     fontWeight: '800',
     flex: 1,
@@ -145,11 +146,11 @@ const styles = StyleSheet.create({
   },
   closeText: {
     fontSize: 24,
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontWeight: '300',
   },
   subtitle: {
-    color: '#C9B29A',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 12,
@@ -162,7 +163,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 140,
     borderRadius: 12,
-    backgroundColor: '#140F0B',
+    backgroundColor: PIZZA_FIRE.inputBg,
   },
   aiBadge: {
     position: 'absolute',
@@ -174,7 +175,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   aiBadgeText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.4,
@@ -182,9 +183,9 @@ const styles = StyleSheet.create({
   },
   aiFixButton: {
     alignSelf: 'flex-start',
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderWidth: 1,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
@@ -196,12 +197,12 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   aiFixText: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 13,
     fontWeight: '800',
   },
   label: {
-    color: '#C9B29A',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 11,
     fontWeight: '800',
     textTransform: 'uppercase',
@@ -209,11 +210,11 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    backgroundColor: '#140F0B',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#3A2D24',
-    color: '#F6EDE2',
+    borderColor: PIZZA_FIRE.cardBorder,
+    color: PIZZA_FIRE.textPrimary,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
@@ -230,12 +231,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   cancelText: {
-    color: '#C9B29A',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 14,
     fontWeight: '700',
   },
   confirmButton: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -244,7 +245,7 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   confirmText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 14,
     fontWeight: '800',
   },

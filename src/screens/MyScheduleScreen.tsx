@@ -10,10 +10,7 @@ import {
   Platform,
   Modal,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { Calendar } from 'react-native-calendars';
 import {
-  endLiveShift,
   calcBreakMs,
   calcCurrentPauseMs,
   calcWorkedMs,
@@ -27,6 +24,9 @@ import {
   startLiveShift,
   type LiveShift,
 } from '../services/shifts';
+import DaySummaryModal from '../components/DaySummaryModal';
+import HoursChangeBadge from '../components/HoursChangeBadge';
+import { hoursChangeKind } from '../utils/workingHours';
 import {
   collection,
   getFirestore,
@@ -41,6 +41,9 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { setPromptActionStatus, loadCachedGeofences } from '../geofencing/storage';
 import type { GeofencePromptPayload } from '../geofencing/types';
 import Geolocation from 'react-native-geolocation-service';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import PizzaFireCalendar from '../components/PizzaFireCalendar';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MySchedule'>;
 
@@ -87,7 +90,6 @@ type CompletedShiftEntry = {
 type CompletedShiftGroup = {
   key: string;
   locationName: string;
-  date: Date;
   totalWorkedMs: number;
   shifts: CompletedShiftEntry[];
 };
@@ -100,8 +102,10 @@ const buildCompletedShiftGroups = (shifts: ShiftRecord[]): CompletedShiftGroup[]
 
     const start = new Date(getTimestampMs(shift.startAt));
     const end = new Date(getTimestampMs(shift.endAt));
-    const locationName = shift.geofenceName || shift.worksiteName || 'Worksite';
-    const key = `${localDateKey(start)}|${locationName}`;
+    const locationName = shift.workCategory === 'driving'
+      ? 'Driving'
+      : shift.geofenceName || shift.worksiteName || 'No Worksite';
+    const key = locationName;
     const entry: CompletedShiftEntry = {
       shift,
       workedMs: calcWorkedMs(shift, end.getTime()),
@@ -119,7 +123,6 @@ const buildCompletedShiftGroups = (shifts: ShiftRecord[]): CompletedShiftGroup[]
     groups.set(key, {
       key,
       locationName,
-      date: start,
       totalWorkedMs: entry.workedMs,
       shifts: [entry],
     });
@@ -155,6 +158,7 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
   const [auditResultMs, setAuditResultMs] = useState<number | null>(null);
   const [shiftNowMs, setShiftNowMs] = useState(Date.now());
   const [shiftBusy, setShiftBusy] = useState(false);
+  const [daySummaryOpen, setDaySummaryOpen] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState<GeofencePromptPayload | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [expandedCompletedGroups, setExpandedCompletedGroups] = useState<Record<string, boolean>>({});
@@ -329,25 +333,42 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
 
   const handleEndShift = () => {
     if (!userId || !openShift || shiftBusy) return;
-    Alert.alert('End shift', 'End your current shift? It will be locked and cannot be edited.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'End shift',
-        style: 'destructive',
-        onPress: () => {
-          setShiftBusy(true);
-          void endLiveShift(openShift.id, 'manual')
-            .catch((err: any) => Alert.alert('Notice', err?.message || 'Could not end shift.'))
-            .finally(() => setShiftBusy(false));
-        },
-      },
-    ]);
+    setDaySummaryOpen(true);
   };
 
   const upcomingForSelectedDate = useMemo(() => 
     upcomingShifts.filter(s => s.date === selectedDate), 
     [upcomingShifts, selectedDate]
   );
+
+  const calendarMarkedDates = useMemo(() => {
+    const acc: Record<string, any> = {
+      [selectedDate]: {
+        selected: true,
+        selectedColor: PIZZA_FIRE.accent,
+        selectedTextColor: PIZZA_FIRE.charcoal,
+      },
+    };
+    upcomingShifts.forEach(s => {
+      if (!acc[s.date]) {
+        acc[s.date] = {
+          customStyles: {
+            container: { backgroundColor: 'rgba(201, 120, 43, 0.25)', borderRadius: 8 },
+            text: { color: PIZZA_FIRE.textPrimary, fontWeight: 'bold' },
+          },
+        };
+      }
+      if (s.date === selectedDate) {
+        acc[s.date].selected = true;
+        acc[s.date].selectedColor = PIZZA_FIRE.accent;
+        acc[s.date].selectedTextColor = PIZZA_FIRE.charcoal;
+        if (acc[s.date].customStyles) {
+          acc[s.date].customStyles.text.color = PIZZA_FIRE.charcoal;
+        }
+      }
+    });
+    return acc;
+  }, [upcomingShifts, selectedDate]);
 
   const upcomingFutureShifts = useMemo(() => {
     const today = new Date().toISOString().split('T')[0];
@@ -464,7 +485,8 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
+    <View style={styles.safe}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Home</Text>
@@ -494,10 +516,15 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
         </View>
       ) : loading ? (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color="#C9782B" />
+          <ActivityIndicator size="large" color={PIZZA_FIRE.accent} />
         </View>
       ) : (
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+        >
           {pendingPrompt && (
             <View style={styles.promptCard}>
               <View style={styles.promptHeaderRow}>
@@ -541,11 +568,11 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
               <View style={styles.timerActions}>
                 {shiftPaused ? (
                   <TouchableOpacity style={styles.startBtn} onPress={() => void handleResumeShift()} disabled={shiftBusy}>
-                    {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Resume</Text>}
+                    {shiftBusy ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : <Text style={styles.startBtnText}>Resume</Text>}
                   </TouchableOpacity>
                 ) : (
                   <TouchableOpacity style={styles.pauseBtn} onPress={() => void handlePauseShift()} disabled={shiftBusy}>
-                    {shiftBusy ? <ActivityIndicator color="#F6EDE2" /> : <Text style={styles.pauseBtnText}>Pause</Text>}
+                    {shiftBusy ? <ActivityIndicator color={PIZZA_FIRE.textPrimary} /> : <Text style={styles.pauseBtnText}>Pause</Text>}
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity style={styles.endBtn} onPress={handleEndShift} disabled={shiftBusy}>
@@ -559,7 +586,7 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
               <Text style={styles.timerStatus}>Start when you begin work at site.</Text>
               <View style={styles.timerActions}>
                 <TouchableOpacity style={styles.startBtn} onPress={() => void handleStartShift()} disabled={shiftBusy}>
-                  {shiftBusy ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.startBtnText}>Start shift</Text>}
+                  {shiftBusy ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : <Text style={styles.startBtnText}>Start shift</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -567,42 +594,24 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
 
           {viewMode === 'calendar' ? (
             <>
-              <View style={styles.calendarCard}>
-                <Calendar
+              <View style={styles.calendarCard} collapsable={false}>
+                <PizzaFireCalendar
+                  initialDate={selectedDate}
                   firstDay={1}
                   theme={{
-                    backgroundColor: '#1E1813',
-                    calendarBackground: '#1E1813',
+                    backgroundColor: PIZZA_FIRE.surfaceInset,
+                    calendarBackground: 'transparent',
                     textSectionTitleColor: '#A88E73',
-                    selectedDayBackgroundColor: '#C9782B',
-                    selectedDayTextColor: '#1E1813',
-                    todayTextColor: '#C9782B',
+                    selectedDayBackgroundColor: PIZZA_FIRE.accent,
+                    selectedDayTextColor: PIZZA_FIRE.charcoal,
+                    todayTextColor: PIZZA_FIRE.accent,
                     dayTextColor: '#F6EDE2',
                     textDisabledColor: '#3A2D24',
                     monthTextColor: '#F6EDE2',
-                    indicatorColor: '#C9782B',
-                    arrowColor: '#C9782B',
+                    indicatorColor: PIZZA_FIRE.accent,
+                    arrowColor: PIZZA_FIRE.accent,
                   }}
-                  markedDates={upcomingShifts.reduce((acc: any, s: any) => {
-                    if (!acc[s.date]) {
-                      acc[s.date] = { 
-                        customStyles: {
-                          container: { backgroundColor: 'rgba(201, 120, 43, 0.25)', borderRadius: 8 },
-                          text: { color: '#F6EDE2', fontWeight: 'bold' }
-                        }
-                      };
-                    }
-                    if (s.date === selectedDate) {
-                      acc[s.date].selected = true;
-                      acc[s.date].selectedColor = '#C9782B';
-                      acc[s.date].selectedTextColor = '#1E1813';
-                      // Keep customStyles but override text for selected state if needed
-                      if (acc[s.date].customStyles) {
-                        acc[s.date].customStyles.text.color = '#1E1813';
-                      }
-                    }
-                    return acc;
-                  }, { [selectedDate]: { selected: true, selectedColor: '#C9782B', selectedTextColor: '#1E1813' } })}
+                  markedDates={calendarMarkedDates}
                   markingType={'custom'}
                   onDayPress={day => setSelectedDate(day.dateString)}
                   style={styles.innerCalendar}
@@ -676,7 +685,7 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
                   <View style={styles.auditResult}>
                     <Text style={styles.auditResultText}>
                       Total time:{' '}
-                      <Text style={{ color: '#C9782B' }}>
+                      <Text style={{ color: PIZZA_FIRE.accent }}>
                         {Math.floor(auditResultMs / 3600000)}h {Math.floor((auditResultMs % 3600000) / 60000)}m
                       </Text>
                     </Text>
@@ -716,10 +725,7 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
                 ) : (
                   completedShiftGroups.map(group => {
                     const expanded = !!expandedCompletedGroups[group.key];
-                    const shiftLabel =
-                      group.shifts.length === 1
-                        ? `${formatDate(group.date)} • ${formatTime(group.shifts[0].start)} - ${formatTime(group.shifts[0].end)}`
-                        : `${formatDate(group.date)} • ${group.shifts.length} shifts`;
+                    const shiftLabel = `${group.shifts.length} ${group.shifts.length === 1 ? 'shift' : 'shifts'}`;
 
                     return (
                       <View key={group.key} style={styles.historyGroupWrap}>
@@ -740,18 +746,24 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
                           </View>
                         </TouchableOpacity>
                         {expanded
-                          ? group.shifts.map(entry => (
+                          ? group.shifts.map(entry => {
+                              const kind = hoursChangeKind(entry.shift);
+                              return (
                               <View key={entry.shift.id} style={styles.historySubItem}>
                                 <View style={{ flex: 1 }}>
-                                  <Text style={styles.historySubTime}>
-                                    {formatTime(entry.start)} - {formatTime(entry.end)}
-                                  </Text>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                    <Text style={styles.historySubTime}>
+                                      {formatDate(entry.start)} • {formatTime(entry.start)} - {formatTime(entry.end)}
+                                    </Text>
+                                    <HoursChangeBadge added={kind === 'added'} edited={kind === 'edited'} />
+                                  </View>
                                 </View>
                                 <Text style={styles.historySubDuration}>
                                   {formatShiftDuration(entry.workedMs)}
                                 </Text>
                               </View>
-                            ))
+                              );
+                            })
                           : null}
                       </View>
                     );
@@ -763,6 +775,16 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
         </ScrollView>
       )}
 
+      <DaySummaryModal
+        visible={daySummaryOpen}
+        userId={userId}
+        activeShift={openShift}
+        onCancel={() => setDaySummaryOpen(false)}
+        onConfirmed={() => {
+          setDaySummaryOpen(false);
+        }}
+      />
+
       <Modal visible={pickerVisible} transparent animationType="slide">
         <View style={styles.pickerModalBg}>
           <View style={styles.pickerCard}>
@@ -772,85 +794,86 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
                 <Text style={styles.pickerClose}>Cancel</Text>
               </TouchableOpacity>
             </View>
-            <Calendar
+            <PizzaFireCalendar
               current={pickerTarget === 'start' ? auditStart : auditEnd}
               onDayPress={handleDateSelect}
               theme={{
-                backgroundColor: '#1E1813',
-                calendarBackground: '#1E1813',
+                backgroundColor: PIZZA_FIRE.surfaceInset,
+                calendarBackground: 'transparent',
                 textSectionTitleColor: '#A88E73',
-                selectedDayBackgroundColor: '#C9782B',
-                selectedDayTextColor: '#1E1813',
-                todayTextColor: '#C9782B',
+                selectedDayBackgroundColor: PIZZA_FIRE.accent,
+                selectedDayTextColor: PIZZA_FIRE.charcoal,
+                todayTextColor: PIZZA_FIRE.accent,
                 dayTextColor: '#F6EDE2',
                 textDisabledColor: '#3A2D24',
                 monthTextColor: '#F6EDE2',
-                indicatorColor: '#C9782B',
-                arrowColor: '#C9782B',
+                indicatorColor: PIZZA_FIRE.accent,
+                arrowColor: PIZZA_FIRE.accent,
               }}
             />
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#2A211B' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#1E1813', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#3A2D24' },
-  back: { color: '#EBDCCB', fontSize: 16, fontWeight: 'bold' },
-  title: { color: '#F6EDE2', fontSize: 18, fontWeight: '800' },
-  toggleBtn: { backgroundColor: '#3A2D24', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#C9782B' },
-  toggleText: { color: '#C9782B', fontSize: 12, fontWeight: 'bold' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: 'transparent', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
+  back: { color: PIZZA_FIRE.gold, fontSize: 16, fontWeight: 'bold' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '800' },
+  toggleBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  toggleText: { color: PIZZA_FIRE.accent, fontSize: 12, fontWeight: 'bold' },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
-  calendarCard: { margin: 16, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#3A2D24', backgroundColor: '#1E1813' },
-  innerCalendar: { borderBottomWidth: 1, borderBottomColor: '#3A2D24' },
+  calendarCard: { margin: 16, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, backgroundColor: PIZZA_FIRE.surfaceInset },
+  innerCalendar: { borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
   sectionHeader: { marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
-  sectionTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '700' },
+  sectionTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
   upcomingList: { marginHorizontal: 16, gap: 10 },
-  upcomingItem: { backgroundColor: '#1E1813', padding: 16, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: '#C9782B' },
-  upcomingWorksite: { color: '#F6EDE2', fontWeight: 'bold', fontSize: 16 },
-  upcomingTime: { color: '#A88E73', fontSize: 13, marginTop: 4 },
-  timerCard: { margin: 16, padding: 24, borderRadius: 20, backgroundColor: '#1E1813', alignItems: 'center', borderWidth: 1, borderColor: '#C9782B' },
-  timerHeader: { color: '#C9782B', fontSize: 13, fontWeight: '800', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 },
-  proximityBadge: { backgroundColor: '#2A211B', padding: 12, borderRadius: 12, marginBottom: 16, width: '100%', alignItems: 'center', borderWidth: 1, borderColor: '#3A2D24' },
+  upcomingItem: { backgroundColor: PIZZA_FIRE.surface, padding: 16, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: PIZZA_FIRE.accent },
+  upcomingWorksite: { color: PIZZA_FIRE.textPrimary, fontWeight: 'bold', fontSize: 16 },
+  upcomingTime: { color: PIZZA_FIRE.textMuted, fontSize: 13, marginTop: 4 },
+  timerCard: { margin: 16, padding: 24, borderRadius: 20, backgroundColor: PIZZA_FIRE.surface, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  timerHeader: { color: PIZZA_FIRE.accent, fontSize: 13, fontWeight: '800', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 },
+  proximityBadge: { backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 12, marginBottom: 16, width: '100%', alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   proximityText: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
   textInside: { color: '#4CAF50' },
   textOutside: { color: '#F44336' },
   directionsLink: { marginTop: 8 },
-  directionsLinkText: { color: '#C9782B', fontSize: 12, textDecorationLine: 'underline', fontWeight: 'bold' },
-  timerLabel: { color: '#A88E73', fontSize: 12, marginBottom: 8 },
-  timerValue: { color: '#F6EDE2', fontSize: 42, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
-  timerStatus: { color: '#A88E73', fontSize: 12, marginTop: 8, fontStyle: 'italic' },
+  directionsLinkText: { color: PIZZA_FIRE.accent, fontSize: 12, textDecorationLine: 'underline', fontWeight: 'bold' },
+  timerLabel: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginBottom: 8 },
+  timerValue: { color: PIZZA_FIRE.textPrimary, fontSize: 42, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
+  timerStatus: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginTop: 8, fontStyle: 'italic' },
   timerActions: { marginTop: 24, width: '100%', flexDirection: 'row', gap: 10 },
-  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#C9782B' },
-  pauseBtnText: { color: '#F6EDE2', fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
-  startBtn: { flex: 1, backgroundColor: '#C9782B', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  startBtnText: { color: '#1E1813', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
+  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  pauseBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
+  startBtn: { flex: 1, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  startBtnText: { color: PIZZA_FIRE.charcoal, fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
   endBtn: { flex: 1, backgroundColor: '#5C2420', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#9E3C2E' },
-  endBtnText: { color: '#F6EDE2', fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
-  auditCard: { margin: 16, padding: 20, backgroundColor: '#1E1813', borderRadius: 16, borderWidth: 1, borderColor: '#3A2D24' },
-  auditTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '700', marginBottom: 16 },
+  endBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
+  auditCard: { margin: 16, padding: 20, backgroundColor: PIZZA_FIRE.surface, borderRadius: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  auditTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700', marginBottom: 16 },
   auditRow: { flexDirection: 'row', marginBottom: 16 },
-  auditLabel: { color: '#A88E73', fontSize: 12, marginBottom: 8, textTransform: 'uppercase', fontWeight: 'bold' },
-  auditInput: { backgroundColor: '#2A211B', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#3A2D24', height: 48, justifyContent: 'center' },
-  auditInputText: { color: '#F6EDE2', fontSize: 14 },
-  auditBtn: { backgroundColor: '#3A2D24', paddingVertical: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#C9782B' },
-  auditBtnText: { color: '#C9782B', fontWeight: 'bold', fontSize: 14 },
-  auditResult: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#3A2D24', alignItems: 'center' },
-  auditResultText: { color: '#F6EDE2', fontSize: 18, fontWeight: '900' },
-  settingsCard: { marginHorizontal: 16, padding: 16, borderRadius: 16, backgroundColor: '#1E1813', borderWidth: 1, borderColor: '#3A2D24' },
+  auditLabel: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginBottom: 8, textTransform: 'uppercase', fontWeight: 'bold' },
+  auditInput: { backgroundColor: PIZZA_FIRE.inputBg, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, height: 48, justifyContent: 'center' },
+  auditInputText: { color: PIZZA_FIRE.textPrimary, fontSize: 14 },
+  auditBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  auditBtnText: { color: PIZZA_FIRE.accent, fontWeight: 'bold', fontSize: 14 },
+  auditResult: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: PIZZA_FIRE.divider, alignItems: 'center' },
+  auditResultText: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
+  settingsCard: { marginHorizontal: 16, padding: 16, borderRadius: 16, backgroundColor: PIZZA_FIRE.surface, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   settingsRow: { flexDirection: 'row', alignItems: 'center' },
-  settingsLabel: { color: '#F6EDE2', fontWeight: 'bold' },
-  settingsDesc: { color: '#A88E73', fontSize: 12, marginTop: 2 },
+  settingsLabel: { color: PIZZA_FIRE.textPrimary, fontWeight: 'bold' },
+  settingsDesc: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginTop: 2 },
   historyList: { marginHorizontal: 16, gap: 10 },
   historyGroupWrap: { gap: 6 },
-  historyItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#1E1813', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#3A2D24' },
+  historyItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: PIZZA_FIRE.surface, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   historyRight: { alignItems: 'flex-end', gap: 4 },
-  historyExpandHint: { color: '#A88E73', fontSize: 16, fontWeight: '700', lineHeight: 16 },
+  historyExpandHint: { color: PIZZA_FIRE.textMuted, fontSize: 16, fontWeight: '700', lineHeight: 16 },
   historySubItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -859,34 +882,34 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 10,
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderWidth: 1,
     borderColor: '#2E241D',
   },
-  historySubTime: { color: '#C9B29A', fontSize: 12 },
+  historySubTime: { color: PIZZA_FIRE.textMuted, fontSize: 12 },
   historySubDuration: { color: '#D89A79', fontWeight: '700', fontSize: 12 },
-  historyName: { color: '#F6EDE2', fontWeight: '600' },
-  historyTime: { color: '#A88E73', fontSize: 11, marginTop: 2 },
-  historyDuration: { color: '#C9782B', fontWeight: 'bold', fontSize: 13 },
-  empty: { color: '#A88E73', textAlign: 'center', marginTop: 20, fontSize: 13 },
+  historyName: { color: PIZZA_FIRE.textPrimary, fontWeight: '600' },
+  historyTime: { color: PIZZA_FIRE.textMuted, fontSize: 11, marginTop: 2 },
+  historyDuration: { color: PIZZA_FIRE.accent, fontWeight: 'bold', fontSize: 13 },
+  empty: { color: PIZZA_FIRE.textMuted, textAlign: 'center', marginTop: 20, fontSize: 13 },
   errorWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
   errorText: { color: '#9E3C2E', textAlign: 'center', fontSize: 14, marginBottom: 16 },
-  retryBtn: { backgroundColor: '#3A2D24', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#C9782B' },
-  retryBtnText: { color: '#C9782B', fontWeight: '800' },
+  retryBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  retryBtnText: { color: PIZZA_FIRE.accent, fontWeight: '800' },
   pickerModalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
-  pickerCard: { backgroundColor: '#1E1813', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, borderWidth: 1, borderColor: '#3A2D24' },
+  pickerCard: { backgroundColor: PIZZA_FIRE.bgMid, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   pickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  pickerTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '700' },
-  pickerClose: { color: '#C9782B', fontWeight: '700' },
-  promptCard: { margin: 16, padding: 16, borderRadius: 16, backgroundColor: '#3A2D24', borderWidth: 1, borderColor: '#5A4739' },
-  promptTitle: { fontSize: 18, fontWeight: '700', color: '#F6EDE2' },
+  pickerTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
+  pickerClose: { color: PIZZA_FIRE.accent, fontWeight: '700' },
+  promptCard: { margin: 16, padding: 16, borderRadius: 16, backgroundColor: PIZZA_FIRE.inputBg, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  promptTitle: { fontSize: 18, fontWeight: '700', color: PIZZA_FIRE.textPrimary },
   promptHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  badge: { backgroundColor: '#C9782B', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  badgeText: { color: '#1E1813', fontSize: 12, fontWeight: 'bold' },
-  promptText: { marginTop: 8, color: '#C8B29A', lineHeight: 22, fontSize: 15 },
+  badge: { backgroundColor: PIZZA_FIRE.accent, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  badgeText: { color: PIZZA_FIRE.charcoal, fontSize: 12, fontWeight: 'bold' },
+  promptText: { marginTop: 8, color: PIZZA_FIRE.textSecondary, lineHeight: 22, fontSize: 15 },
   promptActions: { flexDirection: 'row', gap: 12, marginTop: 12 },
-  promptBtn: { flex: 1, backgroundColor: '#C9782B', paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
-  promptBtnText: { color: '#1E1813', fontWeight: '700' },
-  promptBtnGhost: { backgroundColor: '#2A211B', borderWidth: 1, borderColor: '#5A4739' },
-  promptBtnGhostText: { color: '#EBDCCB', fontWeight: '600' },
+  promptBtn: { flex: 1, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  promptBtnText: { color: PIZZA_FIRE.charcoal, fontWeight: '700' },
+  promptBtnGhost: { backgroundColor: PIZZA_FIRE.surfaceInset, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  promptBtnGhostText: { color: PIZZA_FIRE.textSecondary, fontWeight: '600' },
 });

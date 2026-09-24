@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  Modal,
+  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -9,30 +12,47 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   collection,
   getFirestore,
-  limit,
   onSnapshot,
   query,
   where,
+  doc,
 } from '@react-native-firebase/firestore';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import EventDayTimeModal from '../components/EventDayTimeModal';
+import HoursChangeBadge from '../components/HoursChangeBadge';
+import DaySummaryModal from '../components/DaySummaryModal';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { Icons } from '../components/Icons';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { formatTimeRange } from '../utils/eventDays';
 import { auth } from '../services/firebase';
+import { useAuth } from '../auth/useAuth';
 import { useOffline } from '../context/OfflineContext';
 import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
-import { offlineOpenShiftToLiveShift, updateShiftPeriodTimes, endLiveShift, isShiftPaused, pauseLiveShift, resumeLiveShift, type LiveShift } from '../services/shifts';
+import {
+  cleanupStoredSubMinuteShiftsForUser,
+  offlineOpenShiftToLiveShift,
+  updateShiftPeriodTimes,
+  isShiftPaused,
+  pauseLiveShift,
+  resumeLiveShift,
+  type LiveShift,
+} from '../services/shifts';
+import { shareMonthlyTimesheetPdf } from '../services/monthlyTimesheetPdf';
 import {
   applyTimeToIso,
+  addDaysToDateKey,
   buildDayTimeEntries,
+  buildHoursRolodexDateKeys,
   buildRecentDateKeys,
+  hoursRolodexWindowStart,
   formatEntryDuration,
   formatEntryRange,
   formatOriginalEntryRange,
@@ -63,14 +83,26 @@ const CARD_STYLES = {
     icon: '🕐',
     title: 'Working time',
   },
+  driving: {
+    backgroundColor: 'rgba(94, 179, 255, 0.14)',
+    borderColor: 'rgba(94, 179, 255, 0.32)',
+    icon: '🚗',
+    title: 'Driving',
+  },
+  drivingActive: {
+    backgroundColor: 'rgba(94, 179, 255, 0.22)',
+    borderColor: PIZZA_FIRE.driving,
+    icon: '🚗',
+    title: 'Driving',
+  },
   break: {
-    backgroundColor: 'rgba(94, 179, 255, 0.12)',
-    borderColor: 'rgba(94, 179, 255, 0.28)',
+    backgroundColor: 'rgba(255, 246, 229, 0.10)',
+    borderColor: 'rgba(255, 246, 229, 0.52)',
     icon: '☕',
     title: 'Break',
   },
   breakActive: {
-    backgroundColor: 'rgba(94, 179, 255, 0.2)',
+    backgroundColor: 'rgba(255, 246, 229, 0.18)',
     borderColor: PIZZA_FIRE.pause,
     icon: '☕',
     title: 'Break',
@@ -78,29 +110,50 @@ const CARD_STYLES = {
 } as const;
 
 function getCardStyle(entry: DayTimeEntry) {
+  if (entry.kind === 'work' && entry.workCategory === 'driving') {
+    return entry.isActive ? CARD_STYLES.drivingActive : CARD_STYLES.driving;
+  }
   if (entry.kind === 'work') return entry.isActive ? CARD_STYLES.workActive : CARD_STYLES.work;
   return entry.isActive ? CARD_STYLES.breakActive : CARD_STYLES.break;
 }
 
 type TimeViewMode = 'workHours' | 'shiftsBreaks';
 
+const DATE_ITEM_WIDTH = 64;
+const VISIBLE_DATE_COUNT = 5;
+
 export default function WorkingHoursScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { syncBannerVisible } = useOffline();
-  const userId = auth.currentUser?.uid || null;
+  const currentUserId = auth.currentUser?.uid || null;
+  const authState = useAuth();
+  const isAdmin = authState.status === 'admin';
   const initialDateKey = route.params?.initialDateKey;
-  const dateKeys = useMemo(() => {
-    const keys = buildRecentDateKeys(7);
-    if (initialDateKey && /^\d{4}-\d{2}-\d{2}$/.test(initialDateKey) && !keys.includes(initialDateKey)) {
-      return [...keys, initialDateKey].sort();
-    }
-    return keys;
-  }, [initialDateKey]);
-  const todayKey = localDateKey(new Date());
-  const [selectedDateKey, setSelectedDateKey] = useState(
-    initialDateKey && dateKeys.includes(initialDateKey) ? initialDateKey : todayKey
+  const requestedUserId = route.params?.employeeUserId || currentUserId;
+  const requestedOther = Boolean(requestedUserId && currentUserId && requestedUserId !== currentUserId);
+  const [viewedUserId, setViewedUserId] = useState(
+    () => (requestedOther && authState.status !== 'admin' ? currentUserId : requestedUserId)
   );
+  const [viewedUserName, setViewedUserName] = useState(route.params?.employeeName || '');
+  const viewingOtherUser = Boolean(viewedUserId && currentUserId && viewedUserId !== currentUserId);
+  const userId = viewedUserId;
+  const todayKey = localDateKey(new Date());
+  const recentQueryDateKeys = useMemo(() => buildRecentDateKeys(7), []);
+  const [selectedDateKey, setSelectedDateKey] = useState(() => {
+    if (initialDateKey && /^\d{4}-\d{2}-\d{2}$/.test(initialDateKey) && initialDateKey <= todayKey) {
+      return initialDateKey;
+    }
+    return todayKey;
+  });
+  const stripDateKeys = useMemo(
+    () => buildHoursRolodexDateKeys(todayKey, selectedDateKey),
+    [selectedDateKey, todayKey]
+  );
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [liveShifts, setLiveShifts] = useState<LiveShift[]>([]);
+  const [historicalShifts, setHistoricalShifts] = useState<LiveShift[]>([]);
+  const cleanedUserIdRef = useRef<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [scheduledShifts, setScheduledShifts] = useState<ScheduledShiftRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(Date.now());
@@ -108,14 +161,72 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   const [editingEntry, setEditingEntry] = useState<DayTimeEntry | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [shiftActionBusy, setShiftActionBusy] = useState(false);
+  const [daySummaryOpen, setDaySummaryOpen] = useState(false);
+  const [exportingTimesheet, setExportingTimesheet] = useState(false);
   const [timeViewMode, setTimeViewMode] = useState<TimeViewMode>('workHours');
-  const tabScrollRef = useRef<ScrollView>(null);
+  const tabScrollRef = useRef<FlatList<string>>(null);
+  const itemWidthRef = useRef(DATE_ITEM_WIDTH);
+  const [itemWidth, setItemWidth] = useState(DATE_ITEM_WIDTH);
+  itemWidthRef.current = itemWidth;
+  const daySwipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          Math.abs(gesture.dx) > 30 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+        onPanResponderRelease: (_event, gesture) => {
+          if (Math.abs(gesture.dx) < 60) return;
+          setSelectedDateKey(current => {
+            const next = addDaysToDateKey(current, gesture.dx < 0 ? 1 : -1);
+            return next <= todayKey ? next : current;
+          });
+        },
+      }),
+    [todayKey]
+  );
+
+  const scrollRolodexToSelection = useCallback(
+    (dateKey: string, animated: boolean) => {
+      if (!stripDateKeys.length) return;
+      const start = hoursRolodexWindowStart(dateKey, todayKey, stripDateKeys);
+      tabScrollRef.current?.scrollToOffset({
+        offset: start * itemWidth,
+        animated,
+      });
+    },
+    [itemWidth, stripDateKeys, todayKey]
+  );
 
   useEffect(() => {
-    if (initialDateKey && dateKeys.includes(initialDateKey)) {
+    if (authState.status === 'loading') return;
+    const requested = route.params?.employeeUserId;
+    if (requested && requested !== currentUserId && !isAdmin) {
+      setViewedUserId(currentUserId);
+      return;
+    }
+    if (requested) {
+      setViewedUserId(requested);
+      if (route.params?.employeeName) setViewedUserName(route.params.employeeName);
+      return;
+    }
+    if (!viewedUserId && currentUserId) setViewedUserId(currentUserId);
+  }, [authState.status, isAdmin, currentUserId, route.params?.employeeUserId, route.params?.employeeName]);
+
+  useEffect(() => {
+    if (!userId) return undefined;
+    const fs = getFirestore();
+    const unsub = onSnapshot(doc(fs, 'users', userId), snap => {
+      const data = snap.data();
+      const name = String(data?.name || data?.displayName || '').trim();
+      if (name) setViewedUserName(name);
+    });
+    return unsub;
+  }, [userId]);
+
+  useEffect(() => {
+    if (initialDateKey && /^\d{4}-\d{2}-\d{2}$/.test(initialDateKey) && initialDateKey <= todayKey) {
       setSelectedDateKey(initialDateKey);
     }
-  }, [initialDateKey, dateKeys]);
+  }, [initialDateKey, todayKey]);
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
@@ -123,8 +234,12 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   }, []);
 
   const refreshOfflineShift = async () => {
+    if (viewingOtherUser) {
+      setOfflineShift(null);
+      return;
+    }
     const offline = await getOfflineOpenShift();
-    if (offline && offline.userId === userId) {
+    if (offline && offline.userId === currentUserId) {
       setOfflineShift(offlineOpenShiftToLiveShift(offline));
       return;
     }
@@ -132,13 +247,25 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   };
 
   useEffect(() => {
-    if (!userId) return undefined;
+    if (!userId || viewingOtherUser) {
+      setOfflineShift(null);
+      if (viewingOtherUser) return undefined;
+      if (!userId) return undefined;
+    }
     void refreshOfflineShift();
     const unsub = subscribeOutboxChanges(() => {
       void refreshOfflineShift();
     });
     return unsub;
-  }, [userId]);
+  }, [userId, viewingOtherUser, currentUserId]);
+
+  useEffect(() => {
+    if (!userId || viewingOtherUser || cleanedUserIdRef.current === userId) return;
+    cleanedUserIdRef.current = userId;
+    void cleanupStoredSubMinuteShiftsForUser(userId).catch(error => {
+      console.warn('Could not clean up short shift records:', error);
+    });
+  }, [userId, viewingOtherUser]);
 
   useEffect(() => {
     if (!userId) {
@@ -146,8 +273,11 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
       return undefined;
     }
 
+    setLoading(true);
+    setLiveShifts([]);
+    setHistoricalShifts([]);
     const fs = getFirestore();
-    const historyQuery = query(collection(fs, 'shifts'), where('userId', '==', userId), limit(50));
+    const historyQuery = query(collection(fs, 'shifts'), where('userId', '==', userId));
     const scheduledQuery = query(
       collection(fs, 'shifts'),
       where('userId', '==', userId),
@@ -181,17 +311,45 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     };
   }, [userId]);
 
+  const needsHistoricalLoad = !recentQueryDateKeys.includes(selectedDateKey);
+
   useEffect(() => {
-    requestAnimationFrame(() => {
-      tabScrollRef.current?.scrollToEnd({ animated: false });
+    if (!userId || !needsHistoricalLoad) {
+      setHistoricalShifts([]);
+      setHistoryLoading(false);
+      return undefined;
+    }
+
+    setHistoryLoading(true);
+    const fs = getFirestore();
+    const historicalQuery = query(collection(fs, 'shifts'), where('userId', '==', userId));
+    const unsubHistorical = onSnapshot(historicalQuery, snap => {
+      const items = (snap?.docs || [])
+        .map(d => ({ id: d.id, ...d.data() } as LiveShift))
+        .filter(s => !s.isScheduled);
+      setHistoricalShifts(items);
+      setHistoryLoading(false);
     });
-  }, [dateKeys]);
+
+    return () => {
+      unsubHistorical();
+    };
+  }, [userId, needsHistoricalLoad]);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      scrollRolodexToSelection(selectedDateKey, false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedDateKey, stripDateKeys, scrollRolodexToSelection]);
 
   const mergedShifts = useMemo(() => {
-    if (!offlineShift) return liveShifts;
-    const withoutOffline = liveShifts.filter(s => s.id !== offlineShift.id);
+    const extras = historicalShifts.filter(s => !liveShifts.some(live => live.id === s.id));
+    const base = extras.length ? [...liveShifts, ...extras] : liveShifts;
+    if (!offlineShift) return base;
+    const withoutOffline = base.filter(s => s.id !== offlineShift.id);
     return [offlineShift, ...withoutOffline];
-  }, [liveShifts, offlineShift]);
+  }, [liveShifts, historicalShifts, offlineShift]);
 
   const dayEntries = useMemo(
     () => buildDayTimeEntries(mergedShifts, selectedDateKey, nowMs),
@@ -222,6 +380,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   );
 
   const selectedIsToday = selectedDateKey === todayKey;
+
   const scheduledLabel = formatScheduledTargetLabel(scheduledMs);
   const scheduledSubtext = scheduledLabel
     ? `Scheduled on rota: ${scheduledLabel.replace(/\s*Hours$/i, '')}`
@@ -232,6 +391,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   const findShiftById = (shiftId: string) => mergedShifts.find(s => s.id === shiftId) ?? null;
 
   const handlePauseOrResumeShift = async (shiftId: string) => {
+    if (viewingOtherUser) return;
     if (shiftActionBusy) return;
     const shift = findShiftById(shiftId);
     if (!shift) {
@@ -254,32 +414,17 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     }
   };
 
-  const handleEndShiftFromAlert = (shiftId: string) => {
-    Alert.alert('End shift', 'End your current shift? It will be locked.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'End',
-        style: 'destructive',
-        onPress: () => {
-          if (shiftActionBusy) return;
-          setShiftActionBusy(true);
-          void endLiveShift(shiftId, 'manual')
-            .then(async result => {
-              await refreshOfflineShift();
-              if (result.queued) {
-                Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
-              }
-            })
-            .catch(error =>
-              Alert.alert('Notice', error instanceof Error ? error.message : 'Could not end shift.')
-            )
-            .finally(() => setShiftActionBusy(false));
-        },
-      },
-    ]);
+  const handleEndShiftFromAlert = (_shiftId: string) => {
+    if (viewingOtherUser) return;
+    if (!userId || shiftActionBusy) return;
+    setDaySummaryOpen(true);
   };
 
   const openEntryEditor = (entry: DayTimeEntry) => {
+    if (viewingOtherUser) {
+      Alert.alert('View only', 'Employee hours are read-only. Shifts cannot be edited from this view.');
+      return;
+    }
     if (entry.isActive) {
       const shift = findShiftById(entry.shiftId);
       const paused = shift ? isShiftPaused(shift) : false;
@@ -315,6 +460,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   };
 
   const saveEntryEdit = async (startTime: string, endTime: string) => {
+    if (viewingOtherUser) return;
     if (!editingEntry?.periodEndIso) return;
     setSavingEdit(true);
     try {
@@ -345,7 +491,33 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
       : 'Edit break'
     : '';
 
-  const headerTopInset = syncBannerVisible ? insets.top + 18 : 8;
+  const selectedMonthKey = selectedDateKey.slice(0, 7);
+  const selectedMonthLabel = new Date(`${selectedMonthKey}-01T12:00:00`).toLocaleString('en-US', {
+    month: 'long',
+    year: 'numeric',
+  });
+
+  const exportMonthlyTimesheet = async () => {
+    if (!userId || exportingTimesheet) return;
+    setExportingTimesheet(true);
+    try {
+      const result = await shareMonthlyTimesheetPdf({
+        employeeName: viewedUserName || 'Employee',
+        monthKey: selectedMonthKey,
+        shifts: mergedShifts,
+      });
+      if (result.rows.length === 0) {
+        Alert.alert('No hours logged', `The ${selectedMonthLabel} Stundenzettel was created with no recorded shifts.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not create the Stundenzettel PDF.';
+      if (!/user did not share/i.test(message)) Alert.alert('Export failed', message);
+    } finally {
+      setExportingTimesheet(false);
+    }
+  };
+
+  const headerTopInset = insets.top + (syncBannerVisible ? 18 : 12);
 
   return (
     <View style={styles.screen}>
@@ -355,43 +527,116 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Icons.arrowLeft color={PIZZA_FIRE.gold} width={22} height={22} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Manage working hours</Text>
+        <Text style={styles.headerTitle}>Working Hours</Text>
         <View style={styles.headerSpacer} />
       </View>
 
-      <ScrollView
-        ref={tabScrollRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabsScroll}
-        contentContainerStyle={styles.tabsRow}
-      >
-        {dateKeys.map(dateKey => {
-          const active = dateKey === selectedDateKey;
-          return (
-            <TouchableOpacity
-              key={dateKey}
-              style={[styles.tab, active && styles.tabActive]}
-              onPress={() => setSelectedDateKey(dateKey)}
-              activeOpacity={0.8}
-            >
-              <Text
-                style={[styles.tabText, active && styles.tabTextActive]}
-                numberOfLines={1}
-              >
-                {formatTabLabel(dateKey, dateKey === todayKey)}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      <View style={styles.dateSelector}>
+        <TouchableOpacity
+          style={[styles.tab, styles.dateSelectorFixed]}
+          onPress={() => setDatePickerOpen(true)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.endTabText} numberOfLines={1}>
+            SELECT DATE
+          </Text>
+        </TouchableOpacity>
+        <View
+          style={styles.dateRolodex}
+          onLayout={event => {
+            const width = event.nativeEvent.layout.width;
+            const nextWidth = Math.floor(width / VISIBLE_DATE_COUNT);
+            if (nextWidth > 0 && nextWidth !== itemWidthRef.current) {
+              setItemWidth(nextWidth);
+            }
+          }}
+        >
+          <FlatList
+            ref={tabScrollRef}
+            style={styles.dateRolodexList}
+            contentContainerStyle={styles.dateRolodexContent}
+            data={stripDateKeys}
+            keyExtractor={dateKey => dateKey}
+            extraData={`${selectedDateKey}:${itemWidth}`}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            snapToInterval={itemWidth}
+            snapToAlignment="start"
+            decelerationRate="fast"
+            disableIntervalMomentum={false}
+            getItemLayout={(_item, index) => ({
+              length: itemWidth,
+              offset: itemWidth * index,
+              index,
+            })}
+            initialNumToRender={12}
+            windowSize={7}
+            onScrollToIndexFailed={info => {
+              setTimeout(() => {
+                tabScrollRef.current?.scrollToOffset({
+                  offset: info.index * itemWidthRef.current,
+                  animated: false,
+                });
+              }, 80);
+            }}
+            renderItem={({ item: dateKey }) => {
+              const active = dateKey === selectedDateKey;
+              return (
+                <TouchableOpacity
+                  style={[
+                    styles.tab,
+                    styles.dateRolodexItem,
+                    { width: itemWidth },
+                    active && styles.tabActive,
+                  ]}
+                  onPress={() => setSelectedDateKey(dateKey)}
+                  activeOpacity={0.8}
+                  delayPressIn={50}
+                >
+                  <Text style={[styles.dateTabText, active && styles.tabTextActive]}>
+                    {formatTabLabel(dateKey, false)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            }}
+          />
+        </View>
+        <TouchableOpacity
+          style={[styles.tab, styles.dateSelectorFixed, selectedIsToday && styles.tabActive]}
+          onPress={() => setSelectedDateKey(todayKey)}
+          activeOpacity={0.8}
+        >
+          <Text
+            style={[styles.endTabText, selectedIsToday && styles.tabTextActive]}
+            numberOfLines={1}
+          >
+            TODAY
+          </Text>
+        </TouchableOpacity>
+      </View>
 
-      {loading ? (
+      <Text style={styles.selectedPersonName} numberOfLines={1}>
+        {viewedUserName || ' '}
+      </Text>
+
+      <TouchableOpacity
+        style={[styles.exportButton, exportingTimesheet && styles.exportButtonDisabled]}
+        onPress={() => void exportMonthlyTimesheet()}
+        disabled={exportingTimesheet || loading}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.exportButtonText}>
+          {exportingTimesheet ? 'Preparing PDF…' : `Export ${selectedMonthLabel} PDF`}
+        </Text>
+      </TouchableOpacity>
+
+      {loading || (needsHistoricalLoad && historyLoading) ? (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={PIZZA_FIRE.gold} />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.content}>
+        <ScrollView contentContainerStyle={styles.content} {...daySwipeResponder.panHandlers}>
           <View style={styles.viewToggle}>
             <TouchableOpacity
               style={[styles.viewToggleBtn, timeViewMode === 'workHours' && styles.viewToggleBtnActive]}
@@ -455,6 +700,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
             )}
           </View>
 
+          {!viewingOtherUser ? (
           <TouchableOpacity
             style={styles.createButton}
             onPress={() => navigation.navigate('ShiftSetup')}
@@ -463,6 +709,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
             <Icons.clock color={PIZZA_FIRE.cheese} width={18} height={18} />
             <Text style={styles.createButtonText}>View Shift Status</Text>
           </TouchableOpacity>
+          ) : null}
 
           {visibleEntries.length === 0 ? (
             <View style={styles.emptyCard}>
@@ -470,7 +717,9 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
                 {timeViewMode === 'workHours' ? 'No work logged' : 'No shifts or breaks logged'}
               </Text>
               <Text style={styles.emptyText}>
-                {timeViewMode === 'workHours'
+                {viewingOtherUser
+                  ? 'No hours recorded for this employee on the selected date.'
+                  : timeViewMode === 'workHours'
                   ? 'Start a shift from Home to track working time here.'
                   : 'Start a shift from Home to see your full shift timeline here.'}
               </Text>
@@ -495,14 +744,19 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
                   <View style={styles.entryBody}>
                     <View style={styles.entryTitleRow}>
                       <Text style={styles.entryTitle}>{card.title}</Text>
-                      {entry.isEdited ? (
-                        <View style={styles.editedBadge}>
-                          <Text style={styles.editedBadgeText}>Edited</Text>
-                        </View>
+                      {entry.isAdded || entry.isEdited ? (
+                        <HoursChangeBadge added={entry.isAdded} edited={entry.isEdited} />
                       ) : null}
                     </View>
                     <Text style={styles.entryRange}>{formatEntryRange(entry)}</Text>
-                    {entry.isEdited && formatOriginalEntryRange(entry) ? (
+                    {entry.scheduledStartTime && entry.scheduledEndTime ? (
+                      <Text style={styles.entryOriginal}>
+                        Scheduled: {formatTimeRange(entry.scheduledStartTime, entry.scheduledEndTime)}
+                      </Text>
+                    ) : null}
+                    {entry.isAdded ? (
+                      <Text style={styles.entryOriginal}>Manually added</Text>
+                    ) : entry.isEdited && formatOriginalEntryRange(entry) ? (
                       <Text style={styles.entryOriginal}>{formatOriginalEntryRange(entry)}</Text>
                     ) : null}
                     {entry.locationName ? (
@@ -513,6 +767,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
                     <Text style={styles.entryDuration}>
                       {formatEntryDuration(entry.durationMs, entry.isActive)}
                     </Text>
+                    {!viewingOtherUser ? (
                     <TouchableOpacity
                       onPress={() => openEntryEditor(entry)}
                       disabled={savingEdit}
@@ -521,6 +776,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
                     >
                       <Text style={styles.entryEdit}>✎</Text>
                     </TouchableOpacity>
+                    ) : null}
                   </View>
                 </View>
               );
@@ -539,6 +795,62 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
         }}
         onConfirm={saveEntryEdit}
       />
+      <DaySummaryModal
+        visible={daySummaryOpen}
+        userId={currentUserId}
+        activeShift={offlineShift || mergedShifts.find(s => s.status === 'open') || null}
+        onCancel={() => setDaySummaryOpen(false)}
+        onConfirmed={async result => {
+          setDaySummaryOpen(false);
+          await refreshOfflineShift();
+          if (result.queued) {
+            Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+          }
+        }}
+      />
+      <Modal
+        visible={datePickerOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDatePickerOpen(false)}
+      >
+        <View style={styles.datePickerBackdrop}>
+          <View style={styles.datePickerCard}>
+            <Text style={styles.datePickerTitle}>Select date</Text>
+            <PizzaFireCalendar
+              current={selectedDateKey}
+              maxDate={todayKey}
+              theme={{
+                backgroundColor: PIZZA_FIRE.surfaceInset,
+                calendarBackground: 'transparent',
+                selectedDayBackgroundColor: PIZZA_FIRE.accent,
+                dayTextColor: '#F6EDE2',
+                monthTextColor: '#F6EDE2',
+                textDisabledColor: '#3A2D24',
+                arrowColor: PIZZA_FIRE.accent,
+                todayTextColor: '#E9B261',
+              }}
+              onDayPress={day => {
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(day.dateString) || day.dateString > todayKey) return;
+                setSelectedDateKey(day.dateString);
+              }}
+              markedDates={{
+                [selectedDateKey]: {
+                  selected: true,
+                  selectedColor: PIZZA_FIRE.accent,
+                  selectedTextColor: PIZZA_FIRE.charcoal,
+                },
+              }}
+            />
+            <TouchableOpacity
+              style={styles.datePickerCloseButton}
+              onPress={() => setDatePickerOpen(false)}
+            >
+              <Text style={styles.datePickerCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
       </SafeAreaView>
     </View>
   );
@@ -574,32 +886,127 @@ const styles = StyleSheet.create({
   headerSpacer: {
     width: 40,
   },
-  tabsScroll: {
-    flexGrow: 0,
-    minHeight: 52,
-    marginBottom: 10,
-  },
-  tabsRow: {
-    paddingHorizontal: 12,
-    paddingRight: 32,
-    paddingTop: 10,
-    paddingBottom: 12,
+  dateSelector: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    minHeight: 44,
+    marginBottom: 4,
+    paddingHorizontal: 4,
+  },
+  selectedPersonName: {
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '800',
+    color: PIZZA_FIRE.textPrimary,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    paddingTop: 2,
+  },
+  exportButton: {
+    alignSelf: 'center',
+    minHeight: 38,
+    paddingHorizontal: 16,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 159, 28, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 159, 28, 0.55)',
+    marginBottom: 8,
+  },
+  exportButtonDisabled: {
+    opacity: 0.55,
+  },
+  exportButtonText: {
+    color: PIZZA_FIRE.cheese,
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  dateSelectorFixed: {
+    flexShrink: 0,
+    paddingHorizontal: 8,
+  },
+  dateRolodex: {
+    flex: 1,
+    minHeight: 44,
+    overflow: 'hidden',
+    justifyContent: 'center',
+  },
+  dateRolodexList: {
+    flexGrow: 0,
+  },
+  dateRolodexContent: {
+    alignItems: 'center',
+  },
+  dateRolodexItem: {
+    flexShrink: 0,
+    paddingHorizontal: 0,
+    justifyContent: 'center',
+    minHeight: 44,
   },
   tab: {
-    minWidth: 84,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
     borderBottomWidth: 3,
     borderBottomColor: 'transparent',
     alignItems: 'center',
+  },
+  datePickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  datePickerCard: {
+    backgroundColor: PIZZA_FIRE.bgMid,
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.cardBorder,
+  },
+  datePickerTitle: {
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 16,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  datePickerCloseButton: {
+    marginTop: 12,
+    minHeight: 44,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: PIZZA_FIRE.hotAccent,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.hotAccentBorder,
+  },
+  datePickerCloseText: {
+    color: PIZZA_FIRE.cheese,
+    fontSize: 15,
+    fontWeight: '800',
   },
   tabActive: {
     borderBottomColor: PIZZA_FIRE.gold,
   },
   tabText: {
     fontSize: 12,
+    fontWeight: '700',
+    color: PIZZA_FIRE.textMuted,
+    letterSpacing: 0.4,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  dateTabText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: PIZZA_FIRE.textMuted,
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  endTabText: {
+    fontSize: 13,
     fontWeight: '700',
     color: PIZZA_FIRE.textMuted,
     letterSpacing: 0.4,
@@ -638,9 +1045,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   viewToggleBtnActive: {
-    backgroundColor: PIZZA_FIRE.ember,
+    backgroundColor: PIZZA_FIRE.hotAccent,
     borderWidth: 1,
-    borderColor: 'rgba(255, 209, 102, 0.35)',
+    borderColor: PIZZA_FIRE.hotAccentBorder,
   },
   viewToggleText: {
     fontSize: 13,
@@ -717,7 +1124,7 @@ const styles = StyleSheet.create({
   createButton: {
     marginTop: 18,
     marginBottom: 22,
-    backgroundColor: PIZZA_FIRE.ember,
+    backgroundColor: PIZZA_FIRE.hotAccent,
     borderRadius: 999,
     minHeight: 48,
     flexDirection: 'row',
@@ -725,7 +1132,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255, 209, 102, 0.45)',
+    borderColor: PIZZA_FIRE.hotAccentBorder,
   },
   createButtonText: {
     color: PIZZA_FIRE.cheese,

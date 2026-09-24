@@ -14,10 +14,9 @@ import {
   Platform,
   ToastAndroid,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import Geolocation from 'react-native-geolocation-service';
 import Slider from '@react-native-community/slider';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { NativeStackNavigationProp, NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   addDoc,
   collection,
@@ -26,7 +25,6 @@ import {
   getFirestore,
   onSnapshot,
   query,
-  setDoc,
   serverTimestamp,
   updateDoc,
   writeBatch,
@@ -39,11 +37,18 @@ import { cacheGeofences, loadCachedGeofences } from '../geofencing/storage';
 import { normalizeLatLng } from '../utils/geo';
 import { startNativeMonitoring, getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 import { useIsFocused } from '@react-navigation/native';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Geofences'>;
 type TimeoutHandle = ReturnType<typeof setTimeout>;
 
-export default function GeofencesScreen({ navigation }: Props) {
+type WorksitesPanelProps = {
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Geofences'>;
+  embedded?: boolean;
+};
+
+export function WorksitesPanel({ navigation, embedded = false }: WorksitesPanelProps) {
   const [geofences, setGeofences] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
@@ -55,13 +60,8 @@ export default function GeofencesScreen({ navigation }: Props) {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
-  const [campsiteModalVisible, setCampsiteModalVisible] = useState(false);
-  const [campsiteName, setCampsiteName] = useState('Campsite');
-  const [campsiteCenter, setCampsiteCenter] = useState<{ lat: number; lng: number } | null>(null);
-  const [campsiteLocating, setCampsiteLocating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [savingCampsite, setSavingCampsite] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
@@ -384,6 +384,7 @@ export default function GeofencesScreen({ navigation }: Props) {
   /* ───────────────────────── save ───────────────────────── */
 
   const saveGeofence = async () => {
+    if (!isAdmin) return;
     if (saving) return;
     console.log('saveGeofence: invoked', { name, location, radius, editingId });
     // reset previous error state
@@ -453,6 +454,7 @@ export default function GeofencesScreen({ navigation }: Props) {
 
         if (user && user.uid) payload.createdBy = user.uid;
         payload.createdAt = serverTimestamp();
+        payload.eventId = null;
 
         await addDoc(collection(getFirestore(), 'geofences'), payload);
         // List updates from onSnapshot only — optimistic prepend duplicated the new doc in UI.
@@ -513,7 +515,19 @@ export default function GeofencesScreen({ navigation }: Props) {
     setSaveError(null);
   };
 
+  const openCreateModal = () => {
+    if (!isAdmin) return;
+    setName('');
+    setRadius(50);
+    setLocation(null);
+    setEditingId(null);
+    setMessage(null);
+    setSaveError(null);
+    setModalVisible(true);
+  };
+
   const openEditModal = (worksite: any) => {
+    if (!isAdmin) return;
     setName(worksite.name);
     setRadius(worksite.radiusMeters);
     setLocation(worksite.center);
@@ -522,6 +536,7 @@ export default function GeofencesScreen({ navigation }: Props) {
   };
 
   const deleteWorksite = (id: string, name: string) => {
+    if (!isAdmin) return;
     Alert.alert('Delete Worksite', `Are you sure you want to delete "${name}"?`, [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -567,6 +582,7 @@ export default function GeofencesScreen({ navigation }: Props) {
   };
 
   const deleteSelected = () => {
+    if (!isAdmin) return;
     if (selectedIds.size === 0) return;
     const ids = Array.from(selectedIds);
     Alert.alert(
@@ -605,83 +621,11 @@ export default function GeofencesScreen({ navigation }: Props) {
   };
 
   const handleToggleActive = async (id: string, currentStatus: boolean) => {
+    if (!isAdmin) return;
     try {
       await updateDoc(doc(getFirestore(), 'geofences', id), { active: !currentStatus });
     } catch (err: any) {
       Alert.alert('Notice', 'Failed to toggle worksite status.');
-    }
-  };
-
-  const openCampsiteModal = () => {
-    setCampsiteName('Campsite');
-    setCampsiteCenter(null);
-    setCampsiteModalVisible(true);
-  };
-
-  const resetCampsiteModal = () => {
-    setCampsiteModalVisible(false);
-    setCampsiteName('Campsite');
-    setCampsiteCenter(null);
-    setCampsiteLocating(false);
-  };
-
-  const useCurrentLocationForCampsite = async () => {
-    if (campsiteLocating) return;
-    const granted = await ensureLocationPermission();
-    if (!granted) {
-      Alert.alert('Permission denied', 'Location access is required.');
-      return;
-    }
-    setCampsiteLocating(true);
-    try {
-      const coords = await new Promise<{ latitude: number; longitude: number }>((resolve, reject) => {
-        Geolocation.getCurrentPosition(
-          position =>
-            resolve({
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-            }),
-          reject,
-          {
-            enableHighAccuracy: true,
-            timeout: 20000,
-            maximumAge: 0,
-          }
-        );
-      });
-      setCampsiteCenter({ lat: coords.latitude, lng: coords.longitude });
-    } catch (err: any) {
-      Alert.alert('Location Error', err?.message || 'Unable to get current location.');
-    } finally {
-      setCampsiteLocating(false);
-    }
-  };
-
-  const saveCampsiteLocation = async () => {
-    if (savingCampsite) return;
-    const trimmedName = campsiteName.trim();
-    if (!trimmedName || !campsiteCenter) {
-      Alert.alert('Notice', 'Campsite name and location are required.');
-      return;
-    }
-    setSavingCampsite(true);
-    try {
-      await setDoc(
-        doc(getFirestore(), 'appConfig', 'campsite'),
-        {
-          name: trimmedName,
-          center: campsiteCenter,
-          updatedAt: serverTimestamp(),
-          updatedBy: user?.uid || null,
-        },
-        { merge: true }
-      );
-      Alert.alert('Success', 'Campsite location saved.');
-      resetCampsiteModal();
-    } catch (err: any) {
-      Alert.alert('Notice', `Failed to save campsite: ${err?.message || err}`);
-    } finally {
-      setSavingCampsite(false);
     }
   };
 
@@ -693,62 +637,69 @@ export default function GeofencesScreen({ navigation }: Props) {
       <View style={[styles.item, isSelected && styles.itemSelected]}>
         <View style={{flex: 1}}>
           <Text style={styles.itemName}>{item.name}</Text>
-          <Text style={styles.itemSub}>Radius: {item.radiusMeters}m</Text>
-          <View style={{ flexDirection: 'row', marginTop: 8, gap: 8, alignItems: 'center' }}>
-            <TouchableOpacity
-              style={styles.checkbox}
-              onPress={() => toggleSelect(item.id)}
-            >
-              <Text style={styles.checkboxText}>{isSelected ? '✓' : ''}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.editBtn}
-              onPress={() => openEditModal(item)}
-            >
-              <Text style={styles.editBtnText}>Edit</Text>
-            </TouchableOpacity>
+          <Text style={styles.itemSub}>
+            Radius: {item.radiusMeters}m · {item.eventId ? 'Linked to an event' : 'Standalone'}
+          </Text>
+          <View style={{ flexDirection: 'row', marginTop: 8, gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {isAdmin ? (
+              <TouchableOpacity
+                style={styles.checkbox}
+                onPress={() => toggleSelect(item.id)}
+              >
+                <Text style={styles.checkboxText}>{isSelected ? '✓' : ''}</Text>
+              </TouchableOpacity>
+            ) : null}
+            {isAdmin ? (
+              <TouchableOpacity
+                style={styles.editBtn}
+                onPress={() => openEditModal(item)}
+              >
+                <Text style={styles.editBtnText}>Edit</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity
               style={styles.viewBtn}
               onPress={() => navigation.navigate('WorksiteFinder', { geofence: item })}
             >
               <Text style={styles.viewBtnText}>View location</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.deleteBtn}
-              onPress={() => deleteWorksite(item.id, item.name)}
-            >
-              <Text style={styles.deleteBtnText}>Delete</Text>
-            </TouchableOpacity>
+            {isAdmin ? (
+              <TouchableOpacity
+                style={styles.deleteBtn}
+                onPress={() => deleteWorksite(item.id, item.name)}
+              >
+                <Text style={styles.deleteBtnText}>Delete</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         </View>
-        <Switch
-          value={item.active}
-
-
-
-          onValueChange={() => handleToggleActive(item.id, item.active)}
-        />
+        {isAdmin ? (
+          <Switch
+            value={item.active}
+            onValueChange={() => handleToggleActive(item.id, item.active)}
+          />
+        ) : (
+          <Text style={styles.itemSub}>{item.active === false ? 'Inactive' : 'Active'}</Text>
+        )}
       </View>
     );
   };
 
   /* ───────────────────────── UI ───────────────────────── */
 
-  return (
-    <SafeAreaView style={styles.container}>
+  const content = (
+    <View style={styles.container}>
+      {embedded ? null : (
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Icons.home width={28} height={28} color="#2E6B5A" />
+          <Icons.arrowLeft width={24} height={24} color={PIZZA_FIRE.gold} />
         </TouchableOpacity>
         <Text style={styles.title}>Manage Worksites</Text>
         <View style={{ width: 60 }} />
       </View>
+      )}
 
-      {isAdmin === false ? (
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>Access Denied. Admin role required.</Text>
-        </View>
-      ) : loading ? (
+      {loading ? (
         <ActivityIndicator size="large" style={{ marginTop: 40 }} />
       ) : (
         <>
@@ -770,24 +721,22 @@ export default function GeofencesScreen({ navigation }: Props) {
             contentContainerStyle={styles.list}
             ListEmptyComponent={
               <Text style={styles.empty}>
-                No worksites found. Add one to get started!
+                {isAdmin
+                  ? 'No worksites yet. Add one here — an event is not required.'
+                  : 'No worksites found.'}
               </Text>
             }
           />
         </>
       )}
 
+      {isAdmin ? (
       <View style={styles.footer}>
         <TouchableOpacity
-          style={[styles.addBtn, { marginBottom: 10, backgroundColor: '#6D4C41' }]}
-          onPress={openCampsiteModal}
-          disabled={savingCampsite}
+          style={[styles.addBtn, { marginBottom: 10 }]}
+          onPress={openCreateModal}
         >
-          {savingCampsite ? (
-            <ActivityIndicator color="#FFF" />
-          ) : (
-            <Text style={styles.addText}>+ Add Campsite Location</Text>
-          )}
+          <Text style={styles.addText}>+ Add Worksite</Text>
         </TouchableOpacity>
         {selectedIds.size > 0 && (
           <TouchableOpacity style={styles.deleteSelectedBtn} onPress={deleteSelected}>
@@ -796,14 +745,12 @@ export default function GeofencesScreen({ navigation }: Props) {
             </Text>
           </TouchableOpacity>
         )}
-        <TouchableOpacity style={styles.addBtn} onPress={() => setModalVisible(true)}>
-          <Text style={styles.addText}>+ Add New Worksite</Text>
-        </TouchableOpacity>
       </View>
+      ) : null}
 
       {/* ───────────── modal ───────────── */}
 
-      <Modal visible={modalVisible} transparent animationType="slide">
+      <Modal visible={modalVisible && !!isAdmin} transparent animationType="slide">
         <View style={styles.modalBg}>
           <View style={styles.modal}>
             <View style={styles.modalHeader}>
@@ -842,11 +789,12 @@ export default function GeofencesScreen({ navigation }: Props) {
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.locBtn, { backgroundColor: '#3D352E' }]}
+                style={[styles.locBtn, styles.locBtnAlt]}
                 onPress={() => {
                   // Close modal before navigating to the full-screen map picker
                   setModalVisible(false);
                   navigation.navigate('MapPicker', {
+                    initialLocation: location || undefined,
                     onLocationSelected: (lat, lng) => {
                       setLocation({ lat, lng });
                       // reopen modal when a location is picked
@@ -855,7 +803,7 @@ export default function GeofencesScreen({ navigation }: Props) {
                   });
                 }}
               >
-                <Text style={styles.btnText}>Pick on Map</Text>
+                <Text style={[styles.btnText, styles.btnTextAlt]}>Pick on Map</Text>
               </TouchableOpacity>
             </View>
 
@@ -876,70 +824,6 @@ export default function GeofencesScreen({ navigation }: Props) {
                   <Text style={styles.btnText}>
                     {editingId ? 'Update Worksite' : 'Save Worksite'}
                   </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-      <Modal visible={campsiteModalVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.modal}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>New Campsite</Text>
-              <TouchableOpacity onPress={resetCampsiteModal} style={styles.closeBtn}>
-                <Text style={styles.closeText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            <Text style={styles.label}>Campsite Name</Text>
-            <TextInput
-              style={styles.input}
-              value={campsiteName}
-              onChangeText={setCampsiteName}
-              placeholder="e.g. Base Camp"
-            />
-
-            <View style={styles.locBtns}>
-              <TouchableOpacity style={styles.locBtn} onPress={useCurrentLocationForCampsite}>
-                {campsiteLocating ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.btnText}>Use Current Location</Text>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.locBtn, { backgroundColor: '#3D352E' }]}
-                onPress={() => {
-                  setCampsiteModalVisible(false);
-                  navigation.navigate('MapPicker', {
-                    onLocationSelected: (lat, lng) => {
-                      setCampsiteCenter({ lat, lng });
-                      setCampsiteModalVisible(true);
-                    },
-                  });
-                }}
-              >
-                <Text style={styles.btnText}>Pick on Map</Text>
-              </TouchableOpacity>
-            </View>
-
-            {campsiteCenter && <Text style={styles.ok}>✓ Location set</Text>}
-
-            <View style={styles.actions}>
-              <TouchableOpacity onPress={resetCampsiteModal}>
-                <Text>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.saveBtn}
-                onPress={saveCampsiteLocation}
-                disabled={savingCampsite}
-              >
-                {savingCampsite ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.btnText}>Save Campsite</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -973,14 +857,20 @@ export default function GeofencesScreen({ navigation }: Props) {
           <Text style={styles.messageText}>{message}</Text>
         </View>
       )}
-    </SafeAreaView>
+    </View>
   );
+
+  return embedded ? content : <PizzaFireScreen>{content}</PizzaFireScreen>;
+}
+
+export default function GeofencesScreen({ navigation }: Props) {
+  return <WorksitesPanel navigation={navigation} />;
 }
 
 /* ───────────────────────── styles ───────────────────────── */
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A211B' },
+  container: { flex: 1, backgroundColor: 'transparent' },
   batteryBanner: {
     backgroundColor: '#9E3C2E',
     padding: 12,
@@ -997,7 +887,7 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   batteryText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 12,
     lineHeight: 16,
   },
@@ -1005,17 +895,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     padding: 16,
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
   backBtn: { padding: 4 },
-  back: { fontSize: 18, fontWeight: 'bold', color: '#EBDCCB' },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#F6EDE2' },
+  back: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textSecondary },
+  title: { fontSize: 20, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
   list: { padding: 16 },
-  empty: { textAlign: 'center', marginTop: 40, color: '#A88E73' },
+  empty: { textAlign: 'center', marginTop: 40, color: PIZZA_FIRE.textMuted },
   item: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surface,
     padding: 16,
     borderRadius: 16,
     flexDirection: 'row',
@@ -1023,7 +913,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   itemSelected: {
     backgroundColor: '#5C2420',
@@ -1034,29 +924,33 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderWidth: 2,
-    borderColor: '#C9782B',
+    borderColor: PIZZA_FIRE.accent,
     borderRadius: 4,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
-  checkboxText: { fontSize: 16, color: '#C9782B', fontWeight: 'bold' },
-  itemName: { fontSize: 18, fontWeight: 'bold', color: '#F6EDE2' },
-  itemSub: { fontSize: 14, color: '#A88E73' },
+  checkboxText: { fontSize: 16, color: PIZZA_FIRE.accent, fontWeight: 'bold' },
+  itemName: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
+  itemSub: { fontSize: 14, color: PIZZA_FIRE.textMuted },
   editBtn: {
-    backgroundColor: '#D9A441',
+    backgroundColor: PIZZA_FIRE.qlFill,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.qlBorder,
   },
-  editBtnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
+  editBtnText: { color: PIZZA_FIRE.textSecondary, fontSize: 12, fontWeight: 'bold' },
   viewBtn: {
-    backgroundColor: '#CFA15A',
+    backgroundColor: PIZZA_FIRE.qlFill,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.qlBorder,
   },
-  viewBtnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
+  viewBtnText: { color: PIZZA_FIRE.textSecondary, fontSize: 12, fontWeight: 'bold' },
   deleteBtn: {
     backgroundColor: '#9E3C2E',
     paddingHorizontal: 10,
@@ -1064,9 +958,9 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   deleteBtnText: { color: '#FFF', fontSize: 12, fontWeight: 'bold' },
-  footer: { padding: 16, backgroundColor: '#1E1813', borderTopWidth: 1, borderTopColor: '#3A2D24' },
+  footer: { padding: 16, backgroundColor: 'transparent', borderTopWidth: 1, borderTopColor: PIZZA_FIRE.divider },
   addBtn: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
@@ -1087,11 +981,11 @@ const styles = StyleSheet.create({
   },
   modal: {
     margin: 20,
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 24,
     padding: 24,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1099,27 +993,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 8,
   },
-  modalTitle: { fontSize: 22, fontWeight: 'bold', flex: 1, color: '#F6EDE2' },
+  modalTitle: { fontSize: 22, fontWeight: 'bold', flex: 1, color: PIZZA_FIRE.textPrimary },
   closeBtn: {
     padding: 4,
     marginLeft: 8,
   },
   closeText: {
     fontSize: 28,
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontWeight: '300',
   },
-  label: { marginTop: 12, fontWeight: '600', color: '#C8B29A' },
-  input: { backgroundColor: '#3A2D24', padding: 12, borderRadius: 8, color: '#EBDCCB', borderWidth: 1, borderColor: '#5A4739' },
+  label: { marginTop: 12, fontWeight: '600', color: PIZZA_FIRE.textSecondary },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, padding: 12, borderRadius: 8, color: PIZZA_FIRE.textSecondary, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   locBtns: { flexDirection: 'row', gap: 10, marginTop: 12 },
   locBtn: {
     flex: 1,
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',
   },
+  locBtnAlt: { backgroundColor: PIZZA_FIRE.qlFill, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
   btnText: { color: '#FFF', fontWeight: 'bold' },
+  btnTextAlt: { color: PIZZA_FIRE.textSecondary },
   ok: {
     textAlign: 'center',
     marginTop: 10,
@@ -1133,7 +1029,7 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   saveBtn: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 8,

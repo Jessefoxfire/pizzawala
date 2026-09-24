@@ -29,6 +29,49 @@
             {
               "client_id": "959171239075-v6nohal622jgvevnvcpv90lkp6bj6t0i.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "959171239075-5pqt0nin5jdqkpn7lc8tu3mav59jff3f.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.pizzawala.app"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:959171239075:android:a2628bff932a14950b3316",
+        "android_client_info": {
+          "package_name": "com.djtranscendence.pizzawala.debug"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "959171239075-v6nohal622jgvevnvcpv90lkp6bj6t0i.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCEZBpujIMl3ZSHx43duOunC-l457UWb9c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "959171239075-v6nohal622jgvevnvcpv90lkp6bj6t0i.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "959171239075-5pqt0nin5jdqkpn7lc8tu3mav59jff3f.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.pizzawala.app"
+              }
             }
           ]
         }

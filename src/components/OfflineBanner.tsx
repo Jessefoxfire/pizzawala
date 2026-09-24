@@ -15,16 +15,16 @@ export default function OfflineBanner() {
     return '';
   }, [isOnline, syncing, pendingCount]);
 
+  if (!syncBannerVisible) return null;
+
   return (
-    <View style={[styles.chrome, { paddingTop: insets.top + 6 }]}>
-      {syncBannerVisible ? (
-        <View style={[styles.row, !isOnline && styles.rowOffline]}>
-          {syncing ? (
-            <ActivityIndicator size="small" color="rgba(255, 248, 238, 0.8)" style={styles.spinner} />
-          ) : null}
-          <Text style={[styles.text, !isOnline && styles.textOffline]}>{message}</Text>
-        </View>
-      ) : null}
+    <View style={[styles.chrome, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
+      <View style={[styles.row, !isOnline && styles.rowOffline]}>
+        {syncing ? (
+          <ActivityIndicator size="small" color="rgba(255, 248, 238, 0.8)" style={styles.spinner} />
+        ) : null}
+        <Text style={[styles.text, !isOnline && styles.textOffline]}>{message}</Text>
+      </View>
     </View>
   );
 }

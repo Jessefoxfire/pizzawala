@@ -1,5 +1,7 @@
+import { Platform } from 'react-native';
 import RNFS from 'react-native-fs';
 import Share from 'react-native-share';
+import { csvShareErrorMessage, toShareableFileUri } from '../utils/shareableFileUri';
 import {
   addDoc,
   collection,
@@ -18,6 +20,7 @@ import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
 import { isDeviceOnline } from '../offline/connectivity';
 import { createOutboxId, enqueueOutbox } from '../offline/outbox';
 import type { WriteResult } from '../offline/types';
+import { inferHygieneDocumentFolder, type HygieneDocumentFolderKey } from '../utils/hygieneDocumentFolders';
 
 export const TEMPERATURE_TARGETS = [
   { key: 'truck_fridge', label: 'Truck fridge' },
@@ -117,6 +120,7 @@ export async function recordTemperature(
 ): Promise<WriteResult> {
   const actor = await getCurrentHygieneActor();
   const when = loggedAt instanceof Date && !Number.isNaN(loggedAt.getTime()) ? loggedAt : new Date();
+  const fs = getFirestore();
   const payload = {
     targetKey: target.key,
     targetLabel: target.label,
@@ -130,7 +134,6 @@ export async function recordTemperature(
   };
 
   const writeDoc = async () => {
-    const fs = getFirestore();
     await addDoc(collection(fs, 'hygieneTemperatureLogs'), {
       targetKey: payload.targetKey,
       targetLabel: payload.targetLabel,
@@ -177,19 +180,40 @@ export async function deleteTemperatureLog(logId: string) {
 export async function updateTemperatureLog(
   logId: string,
   temperatureValue: string,
-  notes = ''
+  notes = '',
+  loggedAt?: Date
 ) {
   const trimmed = temperatureValue.trim();
   if (!trimmed || !Number.isFinite(Number.parseFloat(trimmed))) {
     throw new Error('Enter a valid temperature.');
   }
   const fs = getFirestore();
-  await updateDoc(doc(fs, 'hygieneTemperatureLogs', logId), {
+  const payload: Record<string, unknown> = {
     temperatureValue: trimmed,
     notes: notes.trim(),
     reviewedAt: serverTimestamp(),
     reviewedAtIso: new Date().toISOString(),
-  });
+  };
+  if (loggedAt instanceof Date && !Number.isNaN(loggedAt.getTime())) {
+    payload.dateKey = localDateKey(loggedAt);
+    payload.monthKey = localMonthKey(loggedAt);
+    payload.loggedAtIso = loggedAt.toISOString();
+    payload.loggedAt = loggedAt.toISOString();
+  }
+  await updateDoc(doc(fs, 'hygieneTemperatureLogs', logId), payload);
+}
+
+export async function updateHygieneCredentialFolder(
+  credentialId: string,
+  folder: HygieneDocumentFolderKey
+) {
+  const fs = getFirestore();
+  await updateDoc(doc(fs, 'hygieneCredentials', credentialId), { folder });
+}
+
+export async function renameHygieneCredential(credentialId: string, fileName: string) {
+  const fs = getFirestore();
+  await updateDoc(doc(fs, 'hygieneCredentials', credentialId), { fileName: fileName.trim() });
 }
 
 export async function deleteHygieneCredential(credentialId: string, storagePath?: string | null) {
@@ -244,6 +268,7 @@ export async function uploadHygieneCredential(file: {
 }, employeeOverride?: Partial<HygieneActor> & { userId: string; userName: string; userEmail: string }, options?: {
   requiredDocumentType?: string | null;
   documentCategory?: string | null;
+  folder?: string | null;
 }) {
   const actor = await getCurrentHygieneActor();
   const employee = employeeOverride
@@ -282,6 +307,11 @@ export async function uploadHygieneCredential(file: {
     fileName: file.fileName,
     requiredDocumentType: String(options?.requiredDocumentType || '').trim() || null,
     documentCategory: String(options?.documentCategory || '').trim() || 'hygiene_card',
+    folder: String(options?.folder || '').trim() || inferHygieneDocumentFolder({
+          documentCategory: options?.documentCategory,
+          requiredDocumentType: options?.requiredDocumentType,
+          fileName: file.fileName,
+        }),
     downloadUrl,
     storagePath,
     status: 'active',
@@ -359,10 +389,23 @@ export async function buildMonthlyHygieneCsv(monthKey: string): Promise<MonthlyH
   return { csv: rows.join('\n'), fileName, monthKey: trimmedMonth };
 }
 
+function csvExportDirectory() {
+  const directory = RNFS.CachesDirectoryPath || RNFS.TemporaryDirectoryPath || RNFS.DocumentDirectoryPath;
+  if (!directory) {
+    throw new Error('Could not access device storage.');
+  }
+  return String(directory).replace(/\/$/, '');
+}
+
 export async function writeHygieneCsvLocalFile(csv: string, fileName: string) {
-  const directory = RNFS.DocumentDirectoryPath || RNFS.CachesDirectoryPath;
-  const filePath = `${directory}/${fileName}`;
+  const directory = csvExportDirectory();
+  const safeName = String(fileName || 'PizzaWala-hygiene.csv').replace(/[^\w.\-]+/g, '_');
+  const filePath = `${directory}/${safeName}`;
   await RNFS.writeFile(filePath, csv, 'utf8');
+  const exists = await RNFS.exists(filePath);
+  if (!exists) {
+    throw new Error('Could not save CSV file.');
+  }
   const stat = await RNFS.stat(filePath);
   if (!stat.size) {
     await RNFS.unlink(filePath).catch(() => undefined);
@@ -370,8 +413,8 @@ export async function writeHygieneCsvLocalFile(csv: string, fileName: string) {
   }
   return {
     filePath,
-    fileUri: filePath.startsWith('file://') ? filePath : `file://${filePath}`,
-    fileName,
+    fileUri: toShareableFileUri(filePath),
+    fileName: safeName,
   };
 }
 
@@ -381,15 +424,50 @@ export async function shareHygieneCsvFile(params: {
   fileName: string;
   monthKey: string;
 }) {
-  await Share.open({
-    title: `Hygiene report ${params.monthKey}`,
-    message: `PizzaWala hygiene CSV for ${params.monthKey}`,
-    url: params.fileUri,
-    type: 'text/csv',
-    filename: params.fileName,
-    failOnCancel: false,
-    showAppsToView: true,
-  });
+  const filePath = String(params.filePath || '').trim();
+  if (!filePath) {
+    throw new Error('Missing export file path.');
+  }
+  const exists = await RNFS.exists(filePath);
+  if (!exists) {
+    throw new Error('The CSV export file was not found.');
+  }
+  const fileUri = toShareableFileUri(params.fileUri || filePath);
+
+  const openShare = async (url: string) => {
+    await Share.open({
+      title: `Hygiene report ${params.monthKey}`,
+      url,
+      type: 'text/csv',
+      filename: params.fileName,
+      failOnCancel: false,
+      ...(Platform.OS === 'android'
+        ? { useInternalStorage: true }
+        : {
+            message: `PizzaWala hygiene CSV for ${params.monthKey}`,
+            showAppsToView: true,
+          }),
+    });
+  };
+
+  try {
+    await openShare(fileUri);
+    return;
+  } catch (error) {
+    const message = csvShareErrorMessage(error);
+    if (!message) return;
+    const base64 = await RNFS.readFile(filePath, 'base64');
+    if (!base64) {
+      throw new Error(message);
+    }
+    try {
+      await openShare(`data:text/csv;base64,${base64}`);
+    } catch (fallbackError) {
+      const fallbackMessage = csvShareErrorMessage(fallbackError);
+      if (!fallbackMessage) return;
+      throw new Error(fallbackMessage);
+    }
+  }
 }
 
 /** Build CSV locally and open the device share/download sheet. */
@@ -417,16 +495,27 @@ export async function openOrDownloadHygieneExport(item: {
 
   if (item.downloadUrl) {
     try {
-      const directory = RNFS.CachesDirectoryPath || RNFS.DocumentDirectoryPath;
+      const directory = csvExportDirectory();
       const filePath = `${directory}/${Date.now()}-${fileName}`;
       const result = await RNFS.downloadFile({ fromUrl: String(item.downloadUrl), toFile: filePath }).promise;
       if (result.statusCode && result.statusCode >= 400) {
         throw new Error(`Download failed (${result.statusCode}).`);
       }
-      const fileUri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
-      await shareHygieneCsvFile({ filePath, fileUri, fileName, monthKey: monthKey || fileName });
+      const exists = await RNFS.exists(filePath);
+      if (!exists) {
+        throw new Error('Could not save CSV file.');
+      }
+      await shareHygieneCsvFile({
+        filePath,
+        fileUri: toShareableFileUri(filePath),
+        fileName,
+        monthKey: monthKey || fileName,
+      });
       return { fileName, filePath, monthKey, source: 'cloud' as const };
-    } catch {
+    } catch (error) {
+      if (!csvShareErrorMessage(error)) {
+        return { fileName, filePath: '', monthKey, source: 'cloud' as const };
+      }
       /* fall through to local rebuild */
     }
   }

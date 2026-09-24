@@ -8,7 +8,7 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 import Geolocation from 'react-native-geolocation-service';
 import { collection, getFirestore, onSnapshot } from '@react-native-firebase/firestore';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -26,6 +26,7 @@ import { auth } from '../services/firebase';
 import { processGeofenceEvent, notifyGeofenceTransition } from '../geofencing/processor';
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { getNativeStatus, openBatteryExemptionUi, startNativeMonitoring, type NativeGeofenceStatus } from '../geofencing/native';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'GeofenceDebug'>;
 
@@ -346,7 +347,7 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
   const historyLines = nativeStatus?.nativeHistory?.split('\n').filter(l => l.length > 0) || [];
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Home</Text>
@@ -591,25 +592,25 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
           </Text>
         </ScrollView>
       )}
-    </SafeAreaView>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#2A211B',
+    backgroundColor: 'transparent',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     padding: 16,
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
-  back: { fontSize: 18, fontWeight: 'bold', color: '#EBDCCB' },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#F6EDE2' },
+  back: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textSecondary },
+  title: { fontSize: 20, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: {
     flex: 1,
@@ -622,7 +623,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
   },
   chips: {
     flexDirection: 'row',
@@ -633,36 +634,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 16,
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   chipActive: {
-    backgroundColor: '#C9782B',
-    borderColor: '#D9A441',
+    backgroundColor: PIZZA_FIRE.accent,
+    borderColor: PIZZA_FIRE.gold,
   },
   chipText: {
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 12,
   },
   chipTextActive: {
-    color: '#1E1813',
+    color: PIZZA_FIRE.charcoal,
     fontWeight: '700',
   },
   card: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
     padding: 14,
   },
   cardTitle: {
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     fontWeight: '600',
     marginBottom: 6,
   },
   cardValue: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 14,
     marginBottom: 4,
   },
@@ -671,7 +672,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   helperText: {
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 12,
     lineHeight: 18,
     marginTop: 8,
@@ -682,17 +683,17 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   historyTitle: {
-    color: '#C8B29A',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 11,
     fontWeight: 'bold',
     marginBottom: 4,
     textTransform: 'uppercase',
   },
   historyLine: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     marginBottom: 2,
@@ -703,7 +704,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   debugButton: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
@@ -717,7 +718,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   empty: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 12,
   },
   warningCard: {

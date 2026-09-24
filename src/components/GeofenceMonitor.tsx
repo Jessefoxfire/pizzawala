@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState, Platform, type AppStateStatus } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import notifee, { AuthorizationStatus } from '@notifee/react-native';
 import Geolocation from 'react-native-geolocation-service';
 import nativeAuth from '@react-native-firebase/auth';
@@ -132,17 +132,7 @@ export default function GeofenceMonitor() {
       }
     });
 
-    const handleStateChange = (nextState: AppStateStatus) => {
-      if (nextState === 'active') {
-        console.log('[GeofenceMonitor] App foregrounded, refreshing registration...');
-        refreshNativeRegistration().catch(err => console.error('Auto-refresh failed:', err));
-      }
-    };
-
-    const subscription = AppState.addEventListener('change', handleStateChange);
-
     return () => {
-      subscription.remove();
       if (unsubProfile) {
         unsubProfile();
       }
@@ -172,14 +162,13 @@ export default function GeofenceMonitor() {
         .filter(Boolean) as Geofence[];
       geofencesRef.current = items;
       void cacheGeofences(items);
-      // Removed the !useJsFallback check - we want BOTH running for maximum redundancy.
-      if (items.length > 0) {
+      if (items.length > 0 && !useJsFallbackRef.current) {
         void refreshNativeRegistration();
       }
     });
 
     return () => unsub();
-  }, [useJsFallback]);
+  }, []);
 
   useEffect(() => {
     let cleanupNative: () => void = () => {};
@@ -212,24 +201,21 @@ export default function GeofenceMonitor() {
         // ignore notification permission failure
       }
 
-      startJsFallback();
-
-      const hasBackgroundLocation = await ensureGeofencePermissions();
-      if (!hasBackgroundLocation) {
-        setUseJsFallback(true);
-        console.warn(
-          '[GeofenceMonitor] Background location not granted; foreground geofence checks are active, native background geofencing is disabled.'
-        );
-        return;
-      }
       await ensureActivityRecognitionPermission();
       await checkAndPromptBatteryOptimization();
 
+      const hasBackgroundLocation = await ensureGeofencePermissions();
       const availability = await getNativeAvailability();
-      const shouldFallback = shouldUseJsFallback(availability);
+      const shouldFallback = !hasBackgroundLocation || shouldUseJsFallback(availability);
       setUseJsFallback(shouldFallback);
 
       if (shouldFallback) {
+        if (!hasBackgroundLocation) {
+          console.warn(
+            '[GeofenceMonitor] Background location not granted; foreground geofence checks are active, native background geofencing is disabled.'
+          );
+        }
+        startJsFallback();
         return;
       }
 
@@ -244,12 +230,17 @@ export default function GeofenceMonitor() {
       cleanupNative();
       stopJsFallback();
     };
-  }, [userId, teamId, isOnShift]);
+  }, [userId, teamId]);
 
+  const wasOnShiftRef = useRef(false);
   useEffect(() => {
     if (isOnShift) {
+      wasOnShiftRef.current = true;
       void onShiftStarted();
-    } else {
+      return;
+    }
+    if (wasOnShiftRef.current) {
+      wasOnShiftRef.current = false;
       void onShiftEnded();
     }
   }, [isOnShift]);
@@ -300,7 +291,6 @@ export default function GeofenceMonitor() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', next => {
       if (next !== 'active' || !userId || useJsFallbackRef.current) return;
-      lastNativeRegSigRef.current = '';
       void refreshNativeRef.current();
     });
     return () => sub.remove();
@@ -323,6 +313,9 @@ export default function GeofenceMonitor() {
     const geofence = await resolveGeofenceForNativeEvent(event.geofenceId, geofencesRef.current);
     if (!geofence) {
       console.warn('[GeofenceMonitor] No geofence metadata for id:', event.geofenceId);
+      return;
+    }
+    if (geofence.active === false) {
       return;
     }
     if (!geofencesRef.current.some(g => g.id === geofence.id)) {
@@ -349,6 +342,10 @@ export default function GeofenceMonitor() {
       lastNativeEventAtRef.current.set(event.geofenceId, { transition, timestamp: Date.now() });
     }
 
+    if (!result.promptPayload) {
+      return;
+    }
+
     let didAutoHandle = false;
     if (transition === 'enter' || transition === 'exit') {
       const occurredAt =
@@ -365,17 +362,19 @@ export default function GeofenceMonitor() {
       const autoShift = await getAutoShiftEnabled();
       const user = nativeAuth().currentUser;
 
-      if (autoShift && user?.uid) {
+      if (autoShift && user?.uid && transition === 'enter') {
         didAutoHandle = true;
-        if (transition === 'enter') {
-          await startShift(user.uid, geofence.id, geofence.name || 'Worksite');
-        } else {
-          await endShift(user.uid);
-        }
+        await startShift(user.uid, geofence.id, geofence.name || 'Worksite');
       }
 
-      if (shouldNotify && user?.uid && (didAutoHandle || result.promptPayload)) {
-        const decision = await decideGeofenceNotification(user.uid, transition);
+      if (
+        shouldNotify &&
+        user?.uid &&
+        (didAutoHandle || result.promptPayload) &&
+        Platform.OS !== 'android' &&
+        AppState.currentState === 'active'
+      ) {
+        const decision = await decideGeofenceNotification(user.uid, transition, geofence.id);
         if (decision.show) {
           const variant = didAutoHandle ? 'auto_result' : 'prompt';
           void showGeofenceNotification(basePayload, { variant });
@@ -389,7 +388,9 @@ export default function GeofenceMonitor() {
   };
 
   const handleSignificantChange = async () => {
-    await refreshNativeRegistration();
+    // Do not re-register geofences on background location updates.
+    // Re-adding geofences makes the OS fire EXIT then ENTER again, which repeats
+    // the arrival notification while the user is still inside.
   };
 
   const evaluateJsPosition = async (coords: {
@@ -527,6 +528,10 @@ export default function GeofenceMonitor() {
       allowPrompt: true,
     });
 
+    if (!result.promptPayload) {
+      return;
+    }
+
     const occurredAt = Date.now();
     const basePayload: GeofencePromptPayload =
       result.promptPayload ?? {
@@ -553,7 +558,7 @@ export default function GeofenceMonitor() {
       }
 
       if (shouldNotify && user?.uid && (didAutoHandle || result.promptPayload)) {
-        const decision = await decideGeofenceNotification(user.uid, transition);
+        const decision = await decideGeofenceNotification(user.uid, transition, geofence.id);
         if (decision.show) {
           const variant = didAutoHandle ? 'auto_result' : 'prompt';
           void showGeofenceNotification(basePayload, { variant });

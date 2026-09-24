@@ -7,7 +7,6 @@ import { name as appName } from './app.json';
 import { handleGeofenceBootHeadless, handleGeofenceEventHeadless } from './src/geofencing/headless';
 
 import { setPromptActionStatus } from './src/geofencing/storage';
-import { handleGeofenceReminderAction } from './src/geofencing/notificationPolicy';
 
 // Data-only FCM (high priority) — display while native isn't showing a notification payload.
 messaging().setBackgroundMessageHandler(async remoteMessage => {
@@ -15,11 +14,7 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
   if (notification?.title) return;
   const type = data?.type ?? 'personal_notification';
   const channelId =
-    type === 'chat_message' || type === 'broadcast'
-      ? 'chat_messages'
-      : type === 'award_received'
-        ? 'awards'
-        : 'personal_alerts';
+    type === 'chat_message' || type === 'broadcast' ? 'chat_messages' : 'personal_alerts';
   const title = data?.title ?? 'PizzaWala';
   const body = data?.body ?? '';
   await notifee.createChannel({
@@ -51,10 +46,7 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
   const eventId = notification?.data?.payload?.eventId;
 
   if (type === EventType.ACTION_PRESS) {
-    if (pressAction?.id === 'keep_reminding' || pressAction?.id === 'stop_reminders') {
-      await handleGeofenceReminderAction(pressAction.id);
-      console.log('[Notifee] Reminder preference:', pressAction.id);
-    } else if (pressAction?.id === 'start_shift' || pressAction?.id === 'end_shift') {
+    if (pressAction?.id === 'start_shift' || pressAction?.id === 'end_shift') {
       if (eventId) await setPromptActionStatus(eventId, 'confirmed');
       console.log('[Notifee] Background action confirmed:', pressAction.id);
     } else if (pressAction?.id === 'ignore') {

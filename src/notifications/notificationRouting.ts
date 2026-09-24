@@ -1,5 +1,6 @@
 import type { GeofencePromptPayload } from '../geofencing/types';
 import type { Geofence } from '../types';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import { navigate, navigationRef } from '../navigation/navigationRef';
 import { setPendingNotificationOpen, takePendingNotificationOpen } from './pendingNotificationOpen';
 
@@ -31,6 +32,10 @@ function coerceNotificationData(data: Record<string, unknown>): Record<string, u
 function performRoute(data: Record<string, unknown>) {
   const type = String(data.type);
 
+  if (!SHOW_DEBUG_ONLY_OPERATIONS && (type === 'chat_message' || type === 'broadcast')) {
+    return;
+  }
+
   switch (type) {
     case 'geofence_event': {
       const payload = data.payload as GeofencePromptPayload | undefined;
@@ -52,14 +57,16 @@ function performRoute(data: Record<string, unknown>) {
     case 'broadcast':
       navigate('Chat');
       break;
-    case 'award_received':
-      navigate('HallOfFame');
-      break;
     case 'personal_notification': {
       const screen = String(data.screen || '');
       if (screen === 'MySchedule') {
         const view = data.view === 'calendar' ? 'calendar' : 'list';
         navigate('MySchedule', { initialView: view });
+      } else if (screen === 'Events') {
+        const eventId = typeof data.eventId === 'string' ? data.eventId.trim() : '';
+        navigate('Events', eventId ? { eventId } : undefined);
+      } else if (screen === 'RequiredDocuments') {
+        navigate('RequiredDocuments');
       } else if (screen === 'Hygiene') {
         navigate('Hygiene');
       } else if (screen === 'AdminHygiene') {
@@ -78,6 +85,10 @@ function performRoute(data: Record<string, unknown>) {
 export function routeNotificationOpen(data: Record<string, unknown> | undefined) {
   if (!data?.type) return;
   const normalized = coerceNotificationData(data);
+  const type = String(normalized.type);
+  if (!SHOW_DEBUG_ONLY_OPERATIONS && (type === 'chat_message' || type === 'broadcast')) {
+    return;
+  }
   if (!navigationRef.isReady()) {
     setPendingNotificationOpen(normalized);
     return;

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { auth } from '../services/firebase';
 import type { Geofence } from '../types';
 import { 
@@ -89,7 +90,7 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
         allowPrompt: true,
       });
 
-      const decision = await decideGeofenceNotification(userId, transition);
+      const decision = await decideGeofenceNotification(userId, transition, geofence!.id);
       const notifyPayload =
         result.promptPayload ?? {
           eventId: result.eventId,
@@ -104,7 +105,7 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
         await storePendingPrompt(result.promptPayload);
       }
 
-      if (decision.show && result.promptPayload) {
+      if (decision.show && result.promptPayload && Platform.OS !== 'android') {
         const shouldNotify = await shouldNotifyForEvent(result.eventId);
         if (shouldNotify) {
           await showGeofenceNotification(notifyPayload, { variant: decision.variant });
@@ -137,6 +138,7 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
   };
 
   if (nativeTransition === 'enter') {
+    if (geofence.active === false) return;
     await executeEvent('enter');
     return;
   }
@@ -159,11 +161,7 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
         const endTime = data.timestamp ? new Date(data.timestamp) : new Date();
         await endShift(userId, endTime);
         console.log('[Headless] Delayed auto-stop executed at', endTime.toISOString());
-        return;
       }
-
-      // Auto-tracking disabled: keep delayed exit prompt behavior.
-      await executeEvent('exit');
     } catch (error) {
       console.error('[Headless] Delayed exit handling failed:', error);
     }

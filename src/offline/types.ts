@@ -28,6 +28,7 @@ export type OutboxShiftStart = {
     teamId: string;
     geofenceId?: string | null;
     geofenceName?: string | null;
+    workCategory?: 'driving' | null;
     startedBy: string;
     recordedAtIso: string;
   };
@@ -77,6 +78,7 @@ export type OfflineOpenShift = {
   teamId: string;
   geofenceId?: string | null;
   geofenceName?: string | null;
+  workCategory?: 'driving' | null;
   startedBy: string;
   recordedAtIso: string;
   workPeriods: ShiftPeriod[];

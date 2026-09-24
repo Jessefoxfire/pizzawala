@@ -15,10 +15,11 @@ import {
   serverTimestamp,
   setDoc,
 } from '@react-native-firebase/firestore';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { auth } from '../services/firebase';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'TruckManagement'>;
 
@@ -67,7 +68,7 @@ const TRUCK_STEPS: TruckStep[] = [
     team: 'driver',
     title: 'Vehicle ready to move',
     detail: 'Do the mechanical and compliance checks before anyone starts loading.',
-    accent: '#C9782B',
+    accent: PIZZA_FIRE.accent,
     checks: [
       { id: 'diesel', prompt: 'Diesel tank full?' },
       { id: 'fresh-water', prompt: 'Fresh water tank full?' },
@@ -785,7 +786,8 @@ export default function TruckManagementScreen({ navigation }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
+    <View style={styles.safe}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Admin</Text>
@@ -967,14 +969,15 @@ export default function TruckManagementScreen({ navigation }: Props) {
           )}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#16110E',
+    backgroundColor: 'transparent',
   },
   header: {
     flexDirection: 'row',
@@ -984,22 +987,21 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#332720',
-    backgroundColor: '#1D1612',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
-  back: { color: '#E2A14A', fontSize: 16, fontWeight: '700' },
-  title: { color: '#F8F1E8', fontSize: 24, fontWeight: '800' },
+  back: { color: PIZZA_FIRE.gold, fontSize: 16, fontWeight: '700' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 22, fontWeight: '800' },
   content: {
     padding: 18,
     paddingBottom: 40,
     gap: 16,
   },
   loadingCard: {
-    backgroundColor: '#221A15',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#3C2E25',
+    borderColor: PIZZA_FIRE.qlBorder,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
@@ -1010,11 +1012,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   heroCard: {
-    backgroundColor: '#2B2019',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 20,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#4B382B',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   heroEyebrow: {
     color: '#D8B07A',
@@ -1031,7 +1033,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   heroText: {
-    color: '#D6C0AC',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 14,
     lineHeight: 20,
   },
@@ -1041,11 +1043,11 @@ const styles = StyleSheet.create({
   },
   teamChip: {
     width: 210,
-    backgroundColor: '#201813',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#3B2C22',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   teamChipActive: {
     backgroundColor: '#3A2619',
@@ -1085,11 +1087,11 @@ const styles = StyleSheet.create({
     color: '#E9D7C7',
   },
   progressCard: {
-    backgroundColor: '#221A15',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#3C2E25',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   progressTopRow: {
     flexDirection: 'row',
@@ -1180,7 +1182,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   stepCard: {
-    backgroundColor: '#211915',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 20,
     padding: 16,
     borderWidth: 1.5,
@@ -1249,11 +1251,11 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   checkCard: {
-    backgroundColor: '#17120F',
+    backgroundColor: 'rgba(18, 10, 6, 0.4)',
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#342820',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   checkPromptRow: {
     flexDirection: 'row',

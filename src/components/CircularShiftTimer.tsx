@@ -3,18 +3,21 @@ import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
 import { formatShiftDuration } from '../services/shifts';
 import { PIZZA_FIRE, PIZZA_FIRE_SHADOW } from '../theme/pizzaFireTheme';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 
 const SIZE = 248;
 const STROKE = 11;
-const RADIUS = (SIZE - STROKE) / 2;
+const PAD = 3;
+const RADIUS = (SIZE - STROKE) / 2 - PAD;
 const CENTER = SIZE / 2;
 const INNER = SIZE - STROKE * 2 - 36;
 
-export type ShiftTimerState = 'idle' | 'working' | 'pause' | 'overtime';
+export type ShiftTimerState = 'idle' | 'working' | 'driving' | 'pause' | 'overtime';
 
 const PROGRESS_CAP_MS: Record<ShiftTimerState, number> = {
   idle: 1,
   working: 8 * 60 * 60 * 1000,
+  driving: 8 * 60 * 60 * 1000,
   pause: 30 * 60 * 1000,
   overtime: 60 * 60 * 1000,
 };
@@ -47,7 +50,8 @@ export default function CircularShiftTimer({
   const dashoffset = circumference * (1 - (state === 'idle' ? 0 : ringProgress));
   const progressStroke = state === 'idle' ? 'transparent' : `url(#progress-${state})`;
   const glowColor = useMemo(() => {
-    if (state === 'pause') return PIZZA_FIRE.pause;
+    if (state === 'pause') return PIZZA_FIRE.cheese;
+    if (state === 'driving') return '#3B82F6';
     if (state === 'overtime') return PIZZA_FIRE.danger;
     if (state === 'working') return PIZZA_FIRE.flame;
     return PIZZA_FIRE.gold;
@@ -55,6 +59,16 @@ export default function CircularShiftTimer({
 
   const innerStyles = useMemo(() => {
     if (state === 'pause') {
+      return {
+        cheeseRing: {
+          backgroundColor: '#FFF6E5',
+          borderColor: '#FFFFFF',
+        },
+        time: { color: PIZZA_FIRE.crustDark },
+        label: { color: PIZZA_FIRE.crust },
+      };
+    }
+    if (state === 'driving') {
       return {
         cheeseRing: {
           backgroundColor: '#D9ECFF',
@@ -84,8 +98,12 @@ export default function CircularShiftTimer({
             <Stop offset="1" stopColor={PIZZA_FIRE.gold} />
           </LinearGradient>
           <LinearGradient id="progress-pause" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor="#3B82F6" />
-            <Stop offset="1" stopColor={PIZZA_FIRE.pause} />
+            <Stop offset="0" stopColor="#E2C9AE" />
+            <Stop offset="1" stopColor="#FFF6E5" />
+          </LinearGradient>
+          <LinearGradient id="progress-driving" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0" stopColor="#2563EB" />
+            <Stop offset="1" stopColor="#60A5FA" />
           </LinearGradient>
           <LinearGradient id="progress-overtime" x1="0" y1="0" x2="1" y2="1">
             <Stop offset="0" stopColor="#FF1744" />
@@ -124,8 +142,15 @@ export default function CircularShiftTimer({
           />
         ) : null}
       </Svg>
-      <View style={[styles.innerDisc, state === 'pause' && styles.innerDiscPause]}>
-        <View style={[styles.cheeseRing, innerStyles.cheeseRing]}>
+      <View
+        style={[
+          styles.innerDisc,
+          state === 'working' && styles.innerDiscWorking,
+          state === 'pause' && styles.innerDiscPause,
+          state === 'driving' && styles.innerDiscDriving,
+        ]}
+      >
+        <View style={[styles.cheeseRing, innerStyles.cheeseRing, SHOW_DEBUG_ONLY_OPERATIONS && state === 'pause' && styles.cheeseRingPauseOutline]}>
           <Text
             style={[styles.time, innerStyles.time]}
             numberOfLines={1}
@@ -134,7 +159,7 @@ export default function CircularShiftTimer({
           >
             {formatShiftDuration(elapsedMs)}
           </Text>
-          <View style={[styles.statePill, state === 'working' && styles.statePillWorking, state === 'pause' && styles.statePillPause]}>
+          <View style={[styles.statePill, state === 'working' && styles.statePillWorking, state === 'pause' && styles.statePillPause, state === 'driving' && styles.statePillDriving]}>
             <Text style={[styles.label, innerStyles.label]}>{label}</Text>
           </View>
         </View>
@@ -164,7 +189,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...PIZZA_FIRE_SHADOW.card,
   },
+  innerDiscWorking: {
+    backgroundColor: PIZZA_FIRE.accent,
+  },
   innerDiscPause: {
+    backgroundColor: '#4A2A19',
+  },
+  innerDiscDriving: {
     backgroundColor: '#1E3A5F',
   },
   cheeseRing: {
@@ -175,6 +206,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 10,
     borderWidth: 2,
+  },
+  cheeseRingPauseOutline: {
+    borderColor: '#FFFFFF',
   },
   statePill: {
     marginTop: 6,
@@ -187,6 +221,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 87, 34, 0.14)',
   },
   statePillPause: {
+    backgroundColor: 'rgba(255, 246, 229, 0.22)',
+  },
+  statePillDriving: {
     backgroundColor: 'rgba(94, 179, 255, 0.18)',
   },
   time: {

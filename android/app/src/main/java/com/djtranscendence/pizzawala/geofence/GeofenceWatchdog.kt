@@ -20,9 +20,12 @@ class GeofenceWatchdog(appContext: Context, params: WorkerParameters) :
             return@withContext Result.success()
         }
 
-        // 2. Perform a re-registration to ensure the system is aware of them.
-        // Google's GeofencingClient is idempotent if the same request IDs are used,
-        // but re-registering ensures they persist across various OS-level kills.
+        val lastError = GeofencePrefs.getLastRegistrationError(applicationContext)
+        if (lastError.isNullOrBlank()) {
+            Log.d("GeofenceWatchdog", "Geofences already registered. Skipping re-add.")
+            return@withContext Result.success()
+        }
+
         GeofenceRegistrar.registerGeofences(applicationContext, specs, "watchdog") { success, error ->
             if (success) {
                 Log.d("GeofenceWatchdog", "Watchdog re-registration successful.")

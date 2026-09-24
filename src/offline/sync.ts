@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getFirestore,
@@ -17,8 +18,11 @@ import { isDeviceOnline } from './connectivity';
 import type { OutboxItem } from './types';
 import {
   closeLastOpenPeriod,
+  compactClosedShiftPeriods,
   isShiftPaused,
   normalizeShiftPeriods,
+  pauseShiftPeriods,
+  resumeShiftPeriods,
   type LiveShift,
 } from '../services/shifts';
 
@@ -69,6 +73,7 @@ async function syncShiftStart(item: Extract<OutboxItem, { type: 'shift_start' }>
     teamId: item.payload.teamId,
     geofenceId: item.payload.geofenceId ?? null,
     geofenceName: item.payload.geofenceName ?? null,
+    workCategory: item.payload.workCategory ?? null,
     status: 'open',
     locked: false,
     paused: false,
@@ -95,12 +100,11 @@ async function syncShiftPause(item: Extract<OutboxItem, { type: 'shift_pause' }>
 
   const nowIso = item.payload.recordedAtIso;
   const { workPeriods, breakPeriods } = normalizeShiftPeriods(data);
-  const nextWork = closeLastOpenPeriod(workPeriods, nowIso);
-  const nextBreak = [...breakPeriods, { startIso: nowIso }];
+  const periods = pauseShiftPeriods(workPeriods, breakPeriods, nowIso);
 
   await updateDoc(ref, {
-    workPeriods: nextWork,
-    breakPeriods: nextBreak,
+    workPeriods: periods.workPeriods,
+    breakPeriods: periods.breakPeriods,
     paused: true,
     updatedAt: serverTimestamp(),
     source: 'offline',
@@ -120,12 +124,11 @@ async function syncShiftResume(item: Extract<OutboxItem, { type: 'shift_resume' 
 
   const nowIso = item.payload.recordedAtIso;
   const { workPeriods, breakPeriods } = normalizeShiftPeriods(data);
-  const nextBreak = closeLastOpenPeriod(breakPeriods, nowIso);
-  const nextWork = [...workPeriods, { startIso: nowIso }];
+  const periods = resumeShiftPeriods(workPeriods, breakPeriods, nowIso);
 
   await updateDoc(ref, {
-    workPeriods: nextWork,
-    breakPeriods: nextBreak,
+    workPeriods: periods.nextWork ? [...periods.workPeriods, periods.nextWork] : periods.workPeriods,
+    breakPeriods: periods.breakPeriods,
     paused: false,
     updatedAt: serverTimestamp(),
     source: 'offline',
@@ -156,9 +159,15 @@ async function syncShiftEnd(item: Extract<OutboxItem, { type: 'shift_end' }>) {
     workPeriods = closeLastOpenPeriod(workPeriods, nowIso);
   }
 
+  const compacted = compactClosedShiftPeriods(workPeriods, breakPeriods, new Date(nowIso).getTime());
+  if (!compacted.hasAccountableWork) {
+    await deleteDoc(ref);
+    return;
+  }
+
   await updateDoc(ref, {
-    workPeriods,
-    breakPeriods,
+    workPeriods: compacted.workPeriods,
+    breakPeriods: compacted.breakPeriods,
     status: 'closed',
     locked: true,
     paused: false,

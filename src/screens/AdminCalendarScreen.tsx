@@ -13,7 +13,6 @@ import {
   Dimensions,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { CalendarList } from 'react-native-calendars';
 import { 
   collection, 
@@ -27,7 +26,11 @@ import {
 import { db } from '../services/firebase';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { openUserProfile } from '../navigation/openUserProfile';
 import { Avatars, AvatarKey } from '../../assets/avatars';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import { CalendarMonthHeader, HIDDEN_CALENDAR_HEADER_THEME, toMonthStartKey } from '../components/PizzaFireCalendar';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminCalendar'>;
 
@@ -47,6 +50,7 @@ export default function AdminCalendarScreen({ navigation }: Props) {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [visibleMonth, setVisibleMonth] = useState(() => toMonthStartKey(new Date()));
   const [viewMode, setViewMode] = useState<'day' | 'week' | 'month'>('month');
   
   // Edit Modal State
@@ -196,9 +200,14 @@ export default function AdminCalendarScreen({ navigation }: Props) {
     const avatarKey = (user?.avatarUrl as AvatarKey) || 'man-1';
 
     return (
-      <TouchableOpacity style={styles.shiftCard} onPress={() => openEdit(item)}>
-        <Image source={Avatars[avatarKey]} style={styles.cardAvatar} />
-        <View style={styles.shiftInfo}>
+      <View style={styles.shiftCard}>
+        <TouchableOpacity
+          onPress={() => openUserProfile(navigation, { userId: item.userId, userName: item.userName })}
+          activeOpacity={0.85}
+        >
+          <Image source={Avatars[avatarKey]} style={styles.cardAvatar} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.shiftInfo} onPress={() => openEdit(item)} activeOpacity={0.85}>
           <Text style={styles.shiftUser}>{item.userName}</Text>
           <Text style={styles.shiftWorksite}>{item.worksiteName}</Text>
           <View style={styles.timeRow}>
@@ -207,11 +216,11 @@ export default function AdminCalendarScreen({ navigation }: Props) {
             </Text>
             <Text style={styles.durationLabel}>Duration: {getDuration(item.startTime, item.endTime)}</Text>
           </View>
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity onPress={() => handleDelete(item.id)}>
           <Text style={styles.deleteLink}>Delete</Text>
         </TouchableOpacity>
-      </TouchableOpacity>
+      </View>
     );
   };
 
@@ -230,7 +239,8 @@ export default function AdminCalendarScreen({ navigation }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
+    <View style={styles.safe}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Back</Text>
@@ -255,39 +265,49 @@ export default function AdminCalendarScreen({ navigation }: Props) {
 
       <View style={styles.content}>
         {loading ? (
-          <ActivityIndicator color="#C9782B" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={PIZZA_FIRE.accent} style={{ marginTop: 40 }} />
         ) : viewMode === 'month' ? (
-          <CalendarList
-            theme={{
-              backgroundColor: '#1E1813',
-              calendarBackground: '#1E1813',
-              textSectionTitleColor: '#A88E73',
-              selectedDayBackgroundColor: '#C9782B',
-              selectedDayTextColor: '#1E1813',
-              todayTextColor: '#C9782B',
-              dayTextColor: '#F6EDE2',
-              textDisabledColor: '#3A2D24',
-              monthTextColor: '#F6EDE2',
-              indicatorColor: '#C9782B',
-              arrowColor: '#C9782B',
-            }}
-            pastScrollRange={0}
-            futureScrollRange={0}
-            scrollEnabled={false}
-            firstDay={1}
-            dayComponent={DayComponent}
-            style={[styles.calendar, { height: CAL_HEIGHT }]}
-            calendarHeight={CAL_HEIGHT}
-          />
+          <View style={styles.monthView}>
+            <View style={styles.monthNav}>
+              <CalendarMonthHeader monthKey={visibleMonth} onChange={setVisibleMonth} />
+            </View>
+            <CalendarList
+              key={visibleMonth}
+              current={visibleMonth}
+              theme={{
+                backgroundColor: PIZZA_FIRE.surfaceInset,
+                calendarBackground: 'transparent',
+                textSectionTitleColor: '#A88E73',
+                selectedDayBackgroundColor: PIZZA_FIRE.accent,
+                selectedDayTextColor: PIZZA_FIRE.charcoal,
+                todayTextColor: PIZZA_FIRE.accent,
+                dayTextColor: '#F6EDE2',
+                textDisabledColor: '#3A2D24',
+                monthTextColor: '#F6EDE2',
+                indicatorColor: PIZZA_FIRE.accent,
+                arrowColor: PIZZA_FIRE.accent,
+                ...HIDDEN_CALENDAR_HEADER_THEME,
+              }}
+              hideArrows
+              renderHeader={() => null}
+              pastScrollRange={0}
+              futureScrollRange={0}
+              scrollEnabled={false}
+              firstDay={1}
+              dayComponent={DayComponent}
+              style={[styles.calendar, { height: CAL_HEIGHT }]}
+              calendarHeight={CAL_HEIGHT}
+            />
+          </View>
         ) : viewMode === 'week' ? (
           <ScrollView style={styles.weekScroll}>
             {getWeekDays().map(date => {
               const dayShifts = shiftsByDate[date] || [];
               const isSelected = date === selectedDate;
               return (
-                <View key={date} style={[styles.weekDayRow, isSelected && { borderColor: '#C9782B', backgroundColor: 'rgba(201,120,43,0.05)' }]}>
+                <View key={date} style={[styles.weekDayRow, isSelected && { borderColor: PIZZA_FIRE.accent, backgroundColor: 'rgba(201,120,43,0.05)' }]}>
                   <TouchableOpacity style={styles.weekDayLabel} onPress={() => setSelectedDate(date)}>
-                    <Text style={[styles.weekDayNum, isSelected && { color: '#C9782B' }]}>{date.split('-')[2]}</Text>
+                    <Text style={[styles.weekDayNum, isSelected && { color: PIZZA_FIRE.accent }]}>{date.split('-')[2]}</Text>
                     <Text style={styles.weekDayName}>{new Date(date).toLocaleDateString('en-US', { weekday: 'short' })}</Text>
                   </TouchableOpacity>
                   <View style={styles.weekShifts}>
@@ -365,32 +385,37 @@ export default function AdminCalendarScreen({ navigation }: Props) {
                 style={styles.saveBtn}
                 disabled={saving}
               >
-                {saving ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.saveBtnText}>Update</Text>}
+                {saving ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : <Text style={styles.saveBtnText}>Update</Text>}
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
+    </PizzaFireScreen>
   );
 }
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-const CAL_HEIGHT = SCREEN_HEIGHT - 180;
+const CAL_HEIGHT = SCREEN_HEIGHT - 232;
 const DAY_H = Math.floor(CAL_HEIGHT / 6);
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#2A211B' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#1E1813', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#3A2D24' },
-  back: { color: '#EBDCCB', fontSize: 16 },
-  title: { color: '#F6EDE2', fontSize: 18, fontWeight: '800' },
-  createBtn: { color: '#C9782B', fontSize: 16, fontWeight: 'bold' },
-  viewSelector: { flexDirection: 'row', backgroundColor: '#1E1813', padding: 8, borderBottomWidth: 1, borderBottomColor: '#3A2D24' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: 'transparent', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
+  back: { color: PIZZA_FIRE.gold, fontSize: 16 },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '800' },
+  createBtn: { color: PIZZA_FIRE.accent, fontSize: 16, fontWeight: 'bold' },
+  viewSelector: { flexDirection: 'row', backgroundColor: PIZZA_FIRE.bgMid, padding: 8, borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
   modeBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
-  modeBtnActive: { backgroundColor: '#3A2D24' },
-  modeBtnText: { color: '#A88E73', fontSize: 12, fontWeight: 'bold' },
-  modeBtnTextActive: { color: '#C9782B' },
+  modeBtnActive: { backgroundColor: PIZZA_FIRE.inputBg },
+  modeBtnText: { color: PIZZA_FIRE.textMuted, fontSize: 12, fontWeight: 'bold' },
+  modeBtnTextActive: { color: PIZZA_FIRE.accent },
   content: { flex: 1 },
+  monthView: { flex: 1 },
+  monthNav: {
+    paddingHorizontal: 8,
+  },
   calendar: { 
     width: '100%',
   },
@@ -401,49 +426,49 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-start',
   },
-  daySelected: { backgroundColor: '#3A2D24' },
-  dayText: { color: '#F6EDE2', fontSize: 14, fontWeight: '600' },
+  daySelected: { backgroundColor: PIZZA_FIRE.inputBg },
+  dayText: { color: PIZZA_FIRE.textPrimary, fontSize: 14, fontWeight: '600' },
   dayDisabled: { color: '#3A2D24' },
-  todayText: { color: '#C9782B' },
-  daySelectedText: { color: '#C9782B', fontWeight: 'bold' },
+  todayText: { color: PIZZA_FIRE.accent },
+  daySelectedText: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
   pillContainer: { width: '100%', gap: 2, marginTop: 4 },
-  pill: { backgroundColor: '#C9782B', borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2, width: '100%' },
-  pillText: { color: '#1E1813', fontSize: 9, fontWeight: '800', textAlign: 'center' },
-  moreText: { color: '#A88E73', fontSize: 9, textAlign: 'center', marginTop: 2 },
+  pill: { backgroundColor: PIZZA_FIRE.accent, borderRadius: 4, paddingHorizontal: 4, paddingVertical: 2, width: '100%' },
+  pillText: { color: PIZZA_FIRE.charcoal, fontSize: 9, fontWeight: '800', textAlign: 'center' },
+  moreText: { color: PIZZA_FIRE.textMuted, fontSize: 9, textAlign: 'center', marginTop: 2 },
   dayView: { flex: 1 },
-  dayHeader: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#3A2D24' },
-  dayTitle: { color: '#F6EDE2', fontSize: 16, fontWeight: '700' },
-  shiftCard: { flexDirection: 'row', backgroundColor: '#1E1813', padding: 16, borderRadius: 16, marginBottom: 12, alignItems: 'center', borderWidth: 1, borderColor: '#3A2D24' },
-  cardAvatar: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: '#C9782B' },
+  dayHeader: { padding: 16, borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
+  dayTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
+  shiftCard: { flexDirection: 'row', backgroundColor: PIZZA_FIRE.surface, padding: 16, borderRadius: 16, marginBottom: 12, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  cardAvatar: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: PIZZA_FIRE.accent },
   shiftInfo: { flex: 1, marginLeft: 16 },
-  shiftUser: { color: '#F6EDE2', fontSize: 16, fontWeight: '900' },
-  shiftWorksite: { color: '#A88E73', fontSize: 13, marginBottom: 6 },
+  shiftUser: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '900' },
+  shiftWorksite: { color: PIZZA_FIRE.textMuted, fontSize: 13, marginBottom: 6 },
   timeRow: { flexDirection: 'column' },
-  shiftTimeRange: { color: '#C9782B', fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
-  durationLabel: { color: '#A88E73', fontSize: 11, marginTop: 2, fontStyle: 'italic' },
+  shiftTimeRange: { color: PIZZA_FIRE.accent, fontSize: 15, fontWeight: '800', letterSpacing: 0.5 },
+  durationLabel: { color: PIZZA_FIRE.textMuted, fontSize: 11, marginTop: 2, fontStyle: 'italic' },
   deleteLink: { color: '#9E3C2E', fontSize: 12, fontWeight: 'bold', marginLeft: 8 },
   weekScroll: { flex: 1, padding: 16 },
-  weekDayRow: { flexDirection: 'row', backgroundColor: '#1E1813', borderRadius: 12, marginBottom: 8, padding: 12, borderWidth: 1, borderColor: '#3A2D24' },
+  weekDayRow: { flexDirection: 'row', backgroundColor: PIZZA_FIRE.surface, borderRadius: 12, marginBottom: 8, padding: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   weekDayLabel: { width: 50, alignItems: 'center', borderRightWidth: 1, borderRightColor: '#3A2D24', marginRight: 12 },
-  weekDayNum: { color: '#F6EDE2', fontSize: 18, fontWeight: '900' },
-  weekDayName: { color: '#A88E73', fontSize: 10, textTransform: 'uppercase' },
+  weekDayNum: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
+  weekDayName: { color: PIZZA_FIRE.textMuted, fontSize: 10, textTransform: 'uppercase' },
   weekShifts: { flex: 1, gap: 4 },
-  weekPill: { backgroundColor: '#C9782B', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
-  weekPillText: { color: '#1E1813', fontSize: 11, fontWeight: '800' },
-  empty: { color: '#A88E73', textAlign: 'center', marginTop: 40 },
-  emptySmall: { color: '#3A2D24', fontSize: 11, fontStyle: 'italic', marginTop: 8 },
+  weekPill: { backgroundColor: PIZZA_FIRE.accent, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  weekPillText: { color: PIZZA_FIRE.charcoal, fontSize: 11, fontWeight: '800' },
+  empty: { color: PIZZA_FIRE.textMuted, textAlign: 'center', marginTop: 40 },
+  emptySmall: { color: PIZZA_FIRE.textMuted, fontSize: 11, fontStyle: 'italic', marginTop: 8 },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: '#1E1813', borderRadius: 20, padding: 24, borderWidth: 1, borderColor: '#3A2D24' },
+  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  modalTitle: { color: '#F6EDE2', fontSize: 20, fontWeight: '800' },
+  modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 20, fontWeight: '800' },
   deleteBtnText: { color: '#9E3C2E', fontSize: 13, fontWeight: 'bold' },
-  modalSub: { color: '#A88E73', fontSize: 14, marginBottom: 4 },
-  label: { color: '#A88E73', fontSize: 12, textTransform: 'uppercase', marginBottom: 8, marginTop: 16, fontWeight: '700' },
-  input: { backgroundColor: '#2A211B', color: '#F6EDE2', padding: 12, borderRadius: 8 },
+  modalSub: { color: PIZZA_FIRE.textMuted, fontSize: 14, marginBottom: 4 },
+  label: { color: PIZZA_FIRE.textMuted, fontSize: 12, textTransform: 'uppercase', marginBottom: 8, marginTop: 16, fontWeight: '700' },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 12, borderRadius: 8 },
   row: { flexDirection: 'row' },
   modalActions: { flexDirection: 'row', marginTop: 24, gap: 12 },
   cancelBtn: { flex: 1, paddingVertical: 12, alignItems: 'center' },
-  cancelBtnText: { color: '#A88E73', fontWeight: 'bold' },
-  saveBtn: { flex: 2, backgroundColor: '#C9782B', paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
-  saveBtnText: { color: '#1E1813', fontWeight: 'bold' },
+  cancelBtnText: { color: PIZZA_FIRE.textMuted, fontWeight: 'bold' },
+  saveBtn: { flex: 2, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
+  saveBtnText: { color: PIZZA_FIRE.charcoal, fontWeight: 'bold' },
 });

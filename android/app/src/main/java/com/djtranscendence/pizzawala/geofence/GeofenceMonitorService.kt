@@ -1,17 +1,10 @@
 package com.djtranscendence.pizzawala.geofence
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ServiceInfo
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import com.djtranscendence.pizzawala.R
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -24,16 +17,11 @@ import com.google.android.gms.location.Priority
 class GeofenceMonitorService : Service() {
     companion object {
         private const val TAG = "GeofenceMonitor"
-        private const val NOTIFICATION_ID = 92002
-        private const val CHANNEL_ID = "geofence-monitor"
 
         fun start(context: Context) {
-            val intent = Intent(context, GeofenceMonitorService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            if (!ShiftOngoingStore.isActive(context)) return
+            // ShiftOngoingService already owns the location FGS notification.
+            context.startService(Intent(context, GeofenceMonitorService::class.java))
         }
 
         fun stop(context: Context) {
@@ -42,6 +30,7 @@ class GeofenceMonitorService : Service() {
         }
 
         fun boostAccuracy(context: Context) {
+            if (!ShiftOngoingStore.isActive(context)) return
             val intent = Intent(context, GeofenceMonitorService::class.java).apply {
                 action = "BOOST_ACCURACY"
             }
@@ -53,9 +42,7 @@ class GeofenceMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Service created. Starting foreground mode.")
-        ensureChannel()
-        startInForeground()
+        Log.d(TAG, "Service created.")
         requestStimulantUpdates()
     }
 
@@ -71,43 +58,6 @@ class GeofenceMonitorService : Service() {
         Log.d(TAG, "Service destroyed. Cleaning up location updates.")
         stopStimulantUpdates()
         super.onDestroy()
-    }
-
-    private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val mgr = getSystemService(NotificationManager::class.java) ?: return
-        if (mgr.getNotificationChannel(CHANNEL_ID) != null) return
-        
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Worksite Monitoring",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Keeps PizzaWala aware of worksite locations in the background."
-            setShowBadge(false)
-        }
-        mgr.createNotificationChannel(channel)
-    }
-
-    private fun startInForeground() {
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Worksite monitoring is active")
-            .setContentText("PizzaWala will notify you when you arrive at a worksite.")
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
     }
 
     private fun requestStimulantUpdates() {

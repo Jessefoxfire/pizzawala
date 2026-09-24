@@ -12,9 +12,8 @@ import {
   Image,
   Alert,
   Modal,
-  ImageBackground,
 } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AvatarKey } from '../../assets/avatars';
 import {
   addDoc,
@@ -35,6 +34,7 @@ import {
 } from '@react-native-firebase/firestore';
 import { auth, uploadStorageRef, uploadStorageRefFallback } from '../services/firebase';
 import { resolveAvatarSource } from '../utils/avatar';
+import { openUserProfile } from '../navigation/openUserProfile';
 import { Icons } from '../components/Icons';
 import {
   launchImageLibrary,
@@ -42,8 +42,9 @@ import {
 } from 'react-native-image-picker';
 import { ensureImagePickerPermission } from '../utils/imagePickerPermissions';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
-const chatBg = require('../../assets/Chat background.png');
 const DEBUG_TAG = '[ChatImageDebug]';
 const REACTION_OPTIONS = ['👍', '❤️', '🔥', '😂', '👏', '😮', '😢', '😡'];
 
@@ -656,8 +657,17 @@ export default function ChatScreen({ navigation, route }: any) {
         style={[styles.messageBubble, isMe ? styles.myMessage : { ...styles.theirMessage, backgroundColor: `${avatarColor}E6` }]}
       >
         <View style={[styles.senderHeader, isMe && styles.senderHeaderMe]}>
+          <TouchableOpacity
+            onPress={() => {
+              const uid = isMe ? user?.uid : item.senderId;
+              if (!uid) return;
+              openUserProfile(navigation, { userId: uid, userName: isMe ? userProfile?.name : item.senderName });
+            }}
+            style={{ flexDirection: 'row', alignItems: 'center' }}
+          >
           {avatarSource && <Image source={avatarSource} style={[styles.miniAvatar, isMe && styles.miniAvatarMe]} />}
           <Text style={styles.senderName}>{displayName}</Text>
+          </TouchableOpacity>
         </View>
 
         {photoUri && (
@@ -706,7 +716,7 @@ export default function ChatScreen({ navigation, route }: any) {
         )}
         {showOthersPhotoPending && (
           <View style={styles.photoPendingRow}>
-            <ActivityIndicator size="small" color="#F6EDE2" />
+            <ActivityIndicator size="small" color={PIZZA_FIRE.textPrimary} />
             <Text style={styles.photoPendingText}>Sending photo…</Text>
           </View>
         )}
@@ -743,9 +753,9 @@ export default function ChatScreen({ navigation, route }: any) {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <PizzaFireScreen edges={['top', 'left', 'right']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}><Icons.arrowLeft color="#F6EDE2" width={24} height={24} /></TouchableOpacity>
+        <TouchableOpacity onPress={() => navigation.goBack()}><Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} /></TouchableOpacity>
         <Text style={styles.headerTitle}>
           {chatMode === 'private'
             ? `Private: ${selectedDmUser?.name || selectedDmUser?.email || 'Select User'}`
@@ -828,8 +838,7 @@ export default function ChatScreen({ navigation, route }: any) {
             renderItem={({ item }) => (
               <TouchableOpacity
                 style={[styles.presentChip, item.id === user?.uid && styles.presentChipDisabled]}
-                onPress={() => startPrivateChatWith(item)}
-                disabled={item.id === user?.uid}
+                onPress={() => openUserProfile(navigation, { userId: item.id, userName: item.name })}
                 activeOpacity={0.85}
               >
                 <Image source={resolveAvatarSource(item.avatarUrl, item.customAvatarUrl)} style={styles.presentAvatar} />
@@ -844,10 +853,9 @@ export default function ChatScreen({ navigation, route }: any) {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 52 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 56 : 0}
       >
         <View style={{ flex: 1 }}>
-          <ImageBackground source={chatBg} style={styles.chatBg}>
             {isLoading ? (
               <View style={styles.centered}><ActivityIndicator size="large" color="#F3E6D3" /></View>
             ) : (
@@ -867,9 +875,8 @@ export default function ChatScreen({ navigation, route }: any) {
                 onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
               />
             )}
-          </ImageBackground>
 
-          <View style={styles.inputContainer}>
+          <View style={[styles.inputContainer, { paddingBottom: 12 + insets.bottom }]}>
             <TextInput
               style={styles.input}
               placeholder="Type a message…"
@@ -968,14 +975,14 @@ export default function ChatScreen({ navigation, route }: any) {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#2A211B' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: '#1E1813' },
-  headerTitle: { fontSize: 20, fontWeight: '900', color: '#F6EDE2' },
+  container: { flex: 1, backgroundColor: PIZZA_FIRE.bgTop },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: 'transparent' },
+  headerTitle: { fontSize: 20, fontWeight: '900', color: PIZZA_FIRE.textPrimary },
   tabsRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -983,7 +990,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingBottom: 10,
     paddingTop: 2,
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
   },
   eventTabsList: {
     gap: 10,
@@ -1003,15 +1010,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(201,120,43,0.95)',
   },
   tabPillText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontWeight: '800',
     fontSize: 12,
   },
   tabPillTextActive: {
-    color: '#1E1813',
+    color: PIZZA_FIRE.charcoal,
   },
   eventLinkRow: {
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
     paddingHorizontal: 12,
     paddingBottom: 8,
     alignItems: 'center',
@@ -1025,7 +1032,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(201,120,43,0.22)',
   },
   eventLinkText: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0.4,
@@ -1040,7 +1047,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   presentRow: {
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
     paddingHorizontal: 12,
     paddingBottom: 10,
   },
@@ -1084,25 +1091,24 @@ const styles = StyleSheet.create({
     borderRadius: 11,
   },
   presentName: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 12,
     fontWeight: '800',
     maxWidth: 160,
   },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  chatBg: { flex: 1 },
   listContent: { padding: 16 },
   messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 16, marginBottom: 12 },
-  myMessage: { alignSelf: 'flex-end', backgroundColor: '#C9782B' },
+  myMessage: { alignSelf: 'flex-end', backgroundColor: PIZZA_FIRE.accent },
   theirMessage: { alignSelf: 'flex-start' },
   senderHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
   senderHeaderMe: { justifyContent: 'flex-end', flexDirection: 'row-reverse' },
   miniAvatar: { width: 28, height: 28, borderRadius: 14, marginRight: 8 },
   miniAvatarMe: { marginRight: 0, marginLeft: 8 },
   senderName: { fontSize: 10, fontWeight: '900', color: 'rgba(255,255,255,0.7)', textTransform: 'uppercase' },
-  messageText: { fontSize: 15, color: '#F6EDE2' },
+  messageText: { fontSize: 15, color: PIZZA_FIRE.textPrimary },
   myMessageText: { color: '#FFF' },
-  theirMessageText: { color: '#F6EDE2' },
+  theirMessageText: { color: PIZZA_FIRE.textPrimary },
   reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
   reactionChip: {
     paddingHorizontal: 8,
@@ -1114,11 +1120,11 @@ const styles = StyleSheet.create({
   },
   reactionChipMine: {
     backgroundColor: 'rgba(201,120,43,0.35)',
-    borderColor: '#D9A441',
+    borderColor: PIZZA_FIRE.gold,
   },
-  reactionChipText: { color: '#F6EDE2', fontSize: 12, fontWeight: '700' },
+  reactionChipText: { color: PIZZA_FIRE.textPrimary, fontSize: 12, fontWeight: '700' },
   photoContainer: { width: '100%', marginBottom: 6, borderRadius: 12, overflow: 'hidden' },
-  messagePhoto: { width: '100%', height: 220, backgroundColor: '#1E1813' },
+  messagePhoto: { width: '100%', height: 220, backgroundColor: PIZZA_FIRE.surfaceInset },
   photoLoader: { position: 'absolute', top: '45%', left: '45%' },
   errorText: { color: '#fff', fontSize: 10, fontWeight: 'bold', marginTop: 4 },
   photoPendingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
@@ -1126,19 +1132,26 @@ const styles = StyleSheet.create({
   timeContainer: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 4 },
   messageTime: { fontSize: 10, color: 'rgba(255,255,255,0.6)' },
   sentCheck: { fontSize: 10, color: 'rgba(255,255,255,0.6)' },
-  inputContainer: { flexDirection: 'row', padding: 12, backgroundColor: '#1E1813', alignItems: 'center' },
-  input: { flex: 1, backgroundColor: '#2A211B', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, color: '#F6EDE2', maxHeight: 100 },
-  sendButton: { backgroundColor: '#C9782B', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10 },
-  sendButtonText: { color: '#1E1813', fontWeight: '900' },
+  inputContainer: { flexDirection: 'row', padding: 12, backgroundColor: PIZZA_FIRE.bgMid, alignItems: 'center' },
+  input: { flex: 1, backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, color: PIZZA_FIRE.textPrimary, maxHeight: 100 },
+  sendButton: {
+    backgroundColor: PIZZA_FIRE.qlFillStrong,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.qlBorder,
+  },
+  sendButtonText: { color: PIZZA_FIRE.textPrimary, fontWeight: '800' },
   attachButton: { marginRight: 12 },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: '#1E1813', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: '#3A2D24' },
-  modalTitle: { color: '#F6EDE2', fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
-  modalInput: { backgroundColor: '#2A211B', color: '#F6EDE2', padding: 16, borderRadius: 12, fontSize: 16, minHeight: 100, textAlignVertical: 'top' },
+  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, padding: 20, borderRadius: 20, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
+  modalInput: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 16, borderRadius: 12, fontSize: 16, minHeight: 100, textAlignVertical: 'top' },
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 16, gap: 20 },
-  modalCancel: { color: '#A88E73', fontWeight: '600' },
-  modalSave: { backgroundColor: '#C9782B', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10 },
-  modalSaveText: { color: '#1E1813', fontWeight: 'bold' },
+  modalCancel: { color: PIZZA_FIRE.textMuted, fontWeight: '600' },
+  modalSave: { backgroundColor: PIZZA_FIRE.accent, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10 },
+  modalSaveText: { color: PIZZA_FIRE.charcoal, fontWeight: 'bold' },
   reactionPickerGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1150,11 +1163,11 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 12,
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.inputBg,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   reactionOptionText: { fontSize: 26 },
   userRow: {
@@ -1163,9 +1176,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
   userRowAvatar: { width: 32, height: 32, borderRadius: 16, marginRight: 10 },
-  userRowText: { color: '#F6EDE2', fontSize: 15, fontWeight: '600' },
-  groupEmpty: { color: '#A88E73', textAlign: 'center', paddingVertical: 16 },
+  userRowText: { color: PIZZA_FIRE.textPrimary, fontSize: 15, fontWeight: '600' },
+  groupEmpty: { color: PIZZA_FIRE.textMuted, textAlign: 'center', paddingVertical: 16 },
 });

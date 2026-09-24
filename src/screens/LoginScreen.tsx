@@ -8,16 +8,15 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  ImageBackground,
-  StatusBar,
   KeyboardAvoidingView,
   ScrollView,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { loginWithEmail, resetPassword } from '../services/firebase';
 import { RootStackParamList } from '../navigation/AppNavigator';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
@@ -86,13 +85,7 @@ export default function LoginScreen({ navigation }: Props) {
   };
 
   return (
-    <View style={styles.container}>
-      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
-      <ImageBackground
-        source={require('../../assets/Flames background.png')}
-        style={styles.background}
-        resizeMode="cover"
-      >
+    <PizzaFireScreen>
         <KeyboardAvoidingView
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -174,19 +167,11 @@ export default function LoginScreen({ navigation }: Props) {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
-      </ImageBackground>
-    </View>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#2A211B',
-  },
-  background: {
-    flex: 1,
-  },
   content: {
     flex: 1,
     alignItems: 'center',
@@ -206,7 +191,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 30,
     fontWeight: '700',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     textShadowColor: 'rgba(0, 0, 0, 0.35)',
     textShadowOffset: { width: 0, height: 2 },
     textShadowRadius: 6,
@@ -216,31 +201,31 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 24,
     textAlign: 'center',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     paddingHorizontal: 24,
   },
   form: {
     width: '100%',
     marginTop: 24,
-    backgroundColor: 'rgba(31, 41, 55, 0.92)',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     padding: 16,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   input: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     paddingVertical: 12,
     paddingHorizontal: 14,
     borderRadius: 10,
     fontSize: 16,
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     marginBottom: 12,
   },
   passwordRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     borderRadius: 10,
     marginBottom: 12,
   },
@@ -249,19 +234,19 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     fontSize: 16,
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
   },
   toggleButton: {
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
   toggleText: {
-    color: '#C9782B',
+    color: PIZZA_FIRE.accent,
     fontWeight: '600',
     fontSize: 13,
   },
   primaryButton: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
@@ -270,7 +255,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
   },
   secondaryButton: {
     paddingVertical: 12,
@@ -280,7 +265,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     fontSize: 14,
     textDecorationLine: 'underline',
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
   },
   resetButton: {
     paddingVertical: 10,
@@ -290,6 +275,6 @@ const styles = StyleSheet.create({
   resetButtonText: {
     fontSize: 13,
     textDecorationLine: 'underline',
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
   },
 });

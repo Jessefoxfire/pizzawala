@@ -5,9 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.djtranscendence.pizzawala.R
 
 /**
@@ -18,7 +20,24 @@ import com.djtranscendence.pizzawala.R
  */
 object GeofenceHeadlessFg {
   const val NOTIFICATION_ID: Int = 92001
-  private const val CHANNEL_ID = "geofence-headless"
+  private const val CHANNEL_ID = "geofence-headless-min"
+
+  fun startEventService(context: Context, intent: Intent) {
+    try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ShiftOngoingStore.isActive(context)) {
+        context.startService(intent)
+      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        ContextCompat.startForegroundService(context, intent)
+      } else {
+        context.startService(intent)
+      }
+    } catch (_: Exception) {
+      try {
+        context.startService(intent)
+      } catch (_: Exception) {
+      }
+    }
+  }
 
   fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -28,7 +47,7 @@ object GeofenceHeadlessFg {
       NotificationChannel(
         CHANNEL_ID,
         "Worksite background sync",
-        NotificationManager.IMPORTANCE_LOW
+        NotificationManager.IMPORTANCE_MIN
       ).apply {
         setShowBadge(false)
       }
@@ -36,14 +55,20 @@ object GeofenceHeadlessFg {
   }
 
   fun start(service: Service) {
+    // Shift timer FGS is already showing; do not post a second title-only notification.
+    if (ShiftOngoingStore.isActive(service)) {
+      return
+    }
+
     ensureChannel(service)
     val notification: Notification = NotificationCompat.Builder(service, CHANNEL_ID)
       .setContentTitle(service.getString(R.string.app_name))
-      .setContentText("Processing worksite event…")
+      .setContentText("")
       .setSmallIcon(R.mipmap.ic_launcher)
-      .setOngoing(true)
-      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setSilent(true)
+      .setPriority(NotificationCompat.PRIORITY_MIN)
       .setCategory(NotificationCompat.CATEGORY_SERVICE)
+      .setShowWhen(false)
       .build()
 
     if (Build.VERSION.SDK_INT >= 34) {
@@ -59,10 +84,13 @@ object GeofenceHeadlessFg {
 
   fun stop(service: Service) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-      service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+      val flag =
+        if (ShiftOngoingStore.isActive(service)) Service.STOP_FOREGROUND_DETACH
+        else Service.STOP_FOREGROUND_REMOVE
+      service.stopForeground(flag)
     } else {
       @Suppress("DEPRECATION")
-      service.stopForeground(true)
+      service.stopForeground(!ShiftOngoingStore.isActive(service))
     }
   }
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   Alert,
@@ -9,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   collection,
@@ -23,6 +24,7 @@ import type { RootStackParamList } from '../navigation/AppNavigator';
 import { auth } from '../services/firebase';
 import { formatDateTime } from '../services/hygiene';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import {
   CHECKLIST_HELP,
   GERMAN_COMPLIANCE_INTRO,
@@ -39,12 +41,28 @@ type UserProfile = {
 };
 
 export default function RequiredDocumentsScreen({ navigation }: Props) {
-  const { pickAndUpload, nameConfirmModal } = useHygieneCredentialUpload();
+  const { pickAndUpload, nameConfirmModal, sourcePickerModal } = useHygieneCredentialUpload();
   const userId = auth.currentUser?.uid || null;
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [credentials, setCredentials] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
+  const [showIntro, setShowIntro] = useState(false);
+  const [introChecked, setIntroChecked] = useState(false);
+
+  useEffect(() => {
+    if (!userId) { setIntroChecked(true); return; }
+    const key = `pizzawala.documentsIntroSeen.${userId}`;
+    void AsyncStorage.getItem(key).then(value => {
+      setShowIntro(value !== 'true');
+      setIntroChecked(true);
+    });
+  }, [userId]);
+
+  const dismissIntro = () => {
+    if (userId) void AsyncStorage.setItem(`pizzawala.documentsIntroSeen.${userId}`, 'true');
+    setShowIntro(false);
+  };
 
   useEffect(() => {
     if (!userId) {
@@ -120,16 +138,17 @@ export default function RequiredDocumentsScreen({ navigation }: Props) {
 
   return (
     <>
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Home</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Required Documents</Text>
+        <Text style={styles.title}>Documents</Text>
         <View style={{ width: 56 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {showIntro && introChecked ? <>
         <View style={styles.heroCard}>
           <Text style={styles.heroEyebrow}>DOCUMENT UPLOADS</Text>
           <Text style={styles.heroTitle}>
@@ -150,13 +169,21 @@ export default function RequiredDocumentsScreen({ navigation }: Props) {
           <Text style={styles.tipText}>3. Avoid glare, blur, and folded corners.</Text>
           <Text style={styles.tipText}>4. If the text is small, move closer before uploading.</Text>
         </View>
+        <TouchableOpacity style={styles.introContinue} onPress={dismissIntro}>
+          <Text style={styles.introContinueText}>Continue to my documents</Text>
+        </TouchableOpacity>
+        </> : null}
 
-        <View style={styles.progressCard}>
-          <Text style={styles.progressLabel}>Status</Text>
-          <Text style={styles.progressValue}>
-            {requiredDocuments.length - missingCount}/{requiredDocuments.length} required documents uploaded
-          </Text>
+        <View style={styles.receiptsCard}>
+          <View style={styles.receiptsText}><Text style={styles.receiptsTitle}>Receipts & Expenses</Text><Text style={styles.receiptsSub}>Submit business receipts for fuel, parking, tolls and supplies.</Text></View>
+          <TouchableOpacity style={styles.receiptsButton} onPress={() => navigation.navigate('ReceiptsExpenses')}><Text style={styles.receiptsButtonText}>Open</Text></TouchableOpacity>
         </View>
+
+        <Text style={styles.myDocumentsHeading}>My Documents</Text>
+
+        <Text style={styles.statusLine}>
+          {requiredDocuments.length - missingCount}/{requiredDocuments.length} required documents uploaded
+        </Text>
 
         {loading ? (
           <View style={styles.loadingCard}>
@@ -227,14 +254,15 @@ export default function RequiredDocumentsScreen({ navigation }: Props) {
           })
         )}
       </ScrollView>
-    </SafeAreaView>
+    </PizzaFireScreen>
     {nameConfirmModal}
+    {sourcePickerModal}
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#16110E' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -243,75 +271,69 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#332720',
-    backgroundColor: '#1D1612',
+    borderBottomColor: PIZZA_FIRE.divider,
+    backgroundColor: 'transparent',
   },
-  back: { color: '#E2A14A', fontSize: 16, fontWeight: '700' },
-  title: { color: '#F8F1E8', fontSize: 24, fontWeight: '800' },
+  back: { color: PIZZA_FIRE.gold, fontSize: 16, fontWeight: '700' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 24, fontWeight: '800' },
   content: { padding: 18, paddingBottom: 40, gap: 16 },
   heroCard: {
-    backgroundColor: '#2B2019',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 20,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#4B382B',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   heroEyebrow: { color: '#D8B07A', fontSize: 11, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
   heroTitle: { color: '#FFF6EC', fontSize: 28, fontWeight: '900', lineHeight: 32, marginBottom: 8 },
-  heroText: { color: '#D6C0AC', fontSize: 14, lineHeight: 20 },
+  heroText: { color: PIZZA_FIRE.textSecondary, fontSize: 14, lineHeight: 20 },
   tipCard: {
-    backgroundColor: '#211915',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#3C2E25',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   tipTitle: { color: '#F8F1E8', fontSize: 18, fontWeight: '800', marginBottom: 8 },
   tipText: { color: '#CBB8A7', fontSize: 13, lineHeight: 19, marginBottom: 4 },
-  progressCard: {
-    backgroundColor: '#221A15',
-    borderRadius: 18,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#3C2E25',
-  },
-  progressLabel: {
-    color: '#C7AA86',
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 6,
-  },
-  progressValue: { color: '#FFF7ED', fontSize: 22, fontWeight: '900' },
+  introContinue: { backgroundColor: PIZZA_FIRE.accent, borderRadius: 12, padding: 14, alignItems: 'center' },
+  introContinueText: { color: PIZZA_FIRE.charcoal, fontWeight: '900' },
+  receiptsCard: { backgroundColor: PIZZA_FIRE.surface, borderRadius: 18, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder, flexDirection: 'row', gap: 12, alignItems: 'center' },
+  receiptsText: { flex: 1 },
+  receiptsTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900', marginBottom: 4 },
+  receiptsSub: { color: PIZZA_FIRE.textSecondary, fontSize: 13, lineHeight: 18 },
+  receiptsButton: { backgroundColor: PIZZA_FIRE.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11 },
+  receiptsButtonText: { color: PIZZA_FIRE.charcoal, fontWeight: '900' },
+  myDocumentsHeading: { color: '#D8B07A', fontSize: 12, fontWeight: '900', letterSpacing: 1, marginTop: 4 },
+  statusLine: { color: PIZZA_FIRE.textSecondary, fontSize: 13, fontWeight: '700', paddingHorizontal: 2 },
   loadingCard: {
-    backgroundColor: '#221A15',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#3C2E25',
+    borderColor: PIZZA_FIRE.qlBorder,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
   loadingText: { color: '#D8C4B2', fontSize: 13, fontWeight: '700' },
   emptyCard: {
-    backgroundColor: '#211915',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#3C2E25',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   emptyText: { color: '#BFA690', fontSize: 14 },
   docCard: {
-    backgroundColor: '#211915',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#5A4030',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   docCardComplete: {
-    borderColor: '#45664A',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   docHeader: {
     flexDirection: 'row',
@@ -347,11 +369,11 @@ const styles = StyleSheet.create({
   uploadButtonText: { color: '#24160D', fontSize: 13, fontWeight: '900' },
   uploadMetaCard: {
     marginTop: 12,
-    backgroundColor: '#17120F',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderRadius: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: '#3B2D24',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   uploadMetaText: { color: '#E6D6C8', fontSize: 13, lineHeight: 18, marginBottom: 4 },
   linkText: { color: '#E2A14A', fontSize: 13, fontWeight: '800', marginTop: 4 },

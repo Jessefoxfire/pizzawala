@@ -1,5 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Alert } from 'react-native';
+import HygieneUploadSourceModal from '../components/HygieneUploadSourceModal';
 import DocumentNameConfirmModal from '../components/DocumentNameConfirmModal';
 import {
   pickHygieneCredentialDraft,
@@ -8,6 +9,7 @@ import {
   type HygieneEmployeeOverride,
   type HygieneUploadOptions,
 } from '../utils/hygieneCredentialPicker';
+import type { DocumentNameSource } from '../utils/suggestDocumentName';
 import { rerunAiDocumentFix, isImageForAiEnhance } from '../utils/documentAiEnhance';
 import { suggestDocumentName } from '../utils/suggestDocumentName';
 
@@ -29,13 +31,31 @@ export function useHygieneCredentialUpload() {
   const [isPicking, setIsPicking] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [sourcePickerVisible, setSourcePickerVisible] = useState(false);
+  const sourcePickerResolveRef = useRef<((source: DocumentNameSource | null) => void) | null>(null);
+
+  const promptSource = useCallback(
+    () =>
+      new Promise<DocumentNameSource | null>(resolve => {
+        sourcePickerResolveRef.current = resolve;
+        setSourcePickerVisible(true);
+      }),
+    []
+  );
+
+  const closeSourcePicker = useCallback((source: DocumentNameSource | null) => {
+    setSourcePickerVisible(false);
+    sourcePickerResolveRef.current?.(source);
+    sourcePickerResolveRef.current = null;
+  }, []);
 
   const pickAndUpload = useCallback(
     async (employeeOverride?: HygieneEmployeeOverride, uploadOptions?: HygieneUploadOptions) => {
       setIsPicking(true);
       let draft: HygieneCredentialDraft | null = null;
       try {
-        draft = await pickHygieneCredentialDraft(uploadOptions);
+        const source = await promptSource();
+        if (source) draft = await pickHygieneCredentialDraft(uploadOptions, source);
       } finally {
         setIsPicking(false);
       }
@@ -62,7 +82,7 @@ export function useHygieneCredentialUpload() {
         pendingRef.current = { resolve, reject };
       });
     },
-    []
+    [promptSource]
   );
 
   const cancelUpload = useCallback(() => {
@@ -151,9 +171,18 @@ export function useHygieneCredentialUpload() {
     />
   );
 
+  const sourcePickerModal = (
+    <HygieneUploadSourceModal
+      visible={sourcePickerVisible}
+      onSelect={source => closeSourcePicker(source)}
+      onCancel={() => closeSourcePicker(null)}
+    />
+  );
+
   return {
     pickAndUpload,
     nameConfirmModal,
+    sourcePickerModal,
     isPicking,
     isEnhancing,
     isConfirming: !!pendingUpload,

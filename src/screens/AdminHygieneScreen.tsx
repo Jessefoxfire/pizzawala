@@ -4,29 +4,43 @@ import {
   Alert,
   Image,
   Linking,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { collection, getFirestore, onSnapshot, query } from '@react-native-firebase/firestore';
 import { resolveAvatarSource } from '../utils/avatar';
 import type { RootStackParamList } from '../navigation/AppNavigator';
+import { openUserProfile } from '../navigation/openUserProfile';
 import {
   deleteHygieneCredential,
   deleteTemperatureLog,
   formatDateTime,
   getTimestampMs,
+  updateHygieneCredentialFolder,
 } from '../services/hygiene';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
+import HygieneFolderPickerModal from '../components/HygieneFolderPickerModal';
+import {
+  credentialsInFolder,
+  HYGIENE_DOCUMENT_FOLDERS,
+  hygieneDocumentFolderLabel,
+  inferHygieneDocumentFolder,
+  type HygieneDocumentFolderKey,
+} from '../utils/hygieneDocumentFolders';
+import { isPersonnelDocument } from '../utils/personnelDocuments';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminHygiene'>;
 
 export default function AdminHygieneScreen({ navigation }: Props) {
-  const { pickAndUpload, nameConfirmModal } = useHygieneCredentialUpload();
+  const { pickAndUpload, nameConfirmModal, sourcePickerModal } = useHygieneCredentialUpload();
   const [temperatureLogs, setTemperatureLogs] = useState<any[]>([]);
   const [credentials, setCredentials] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -34,6 +48,11 @@ export default function AdminHygieneScreen({ navigation }: Props) {
   const [deletingTempId, setDeletingTempId] = useState<string | null>(null);
   const [deletingCredentialId, setDeletingCredentialId] = useState<string | null>(null);
   const [expandedEmployeeIds, setExpandedEmployeeIds] = useState<Record<string, boolean>>({});
+  const [folderPicker, setFolderPicker] = useState<{
+    mode: 'upload' | 'move';
+    employee?: any;
+    credential?: any;
+  } | null>(null);
 
   useEffect(() => {
     const fs = getFirestore();
@@ -50,11 +69,13 @@ export default function AdminHygieneScreen({ navigation }: Props) {
       setTemperatureLogs(items.slice(0, 50));
     });
     const unsubCredentials = onSnapshot(query(collection(fs, 'hygieneCredentials')), snap => {
-      const items = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
+      const items = snap.docs
+        .map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
+        .filter(item => !isPersonnelDocument(item));
       items.sort(
         (a: any, b: any) => getTimestampMs(b.uploadedAt, b.uploadedAtIso) - getTimestampMs(a.uploadedAt, a.uploadedAtIso)
       );
-      setCredentials(items.slice(0, 40));
+      setCredentials(items);
     });
     return () => {
       unsubUsers();
@@ -84,21 +105,27 @@ export default function AdminHygieneScreen({ navigation }: Props) {
     });
   }, [credentials, users]);
 
-  const handleUploadForEmployee = async (employee: any) => {
+  const handleUploadForEmployee = async (employee: any, folder: HygieneDocumentFolderKey) => {
     try {
       setUploadingEmployeeId(employee.id);
-      const uploaded = await pickAndUpload({
-        userId: employee.id,
-        userName: employee.name || employee.email || 'Team member',
-        userEmail: employee.email || '',
-        avatarUrl: employee.avatarUrl || null,
-        customAvatarUrl: employee.customAvatarUrl || null,
-        teamId: employee.teamId || 'team-1',
-      });
+      const uploaded = await pickAndUpload(
+        {
+          userId: employee.id,
+          userName: employee.name || employee.email || 'Team member',
+          userEmail: employee.email || '',
+          avatarUrl: employee.avatarUrl || null,
+          customAvatarUrl: employee.customAvatarUrl || null,
+          teamId: employee.teamId || 'team-1',
+        },
+        { folder }
+      );
       if (!uploaded) return;
-      Alert.alert('Uploaded', `Card attached to ${employee.name || employee.email || 'employee'}.`);
+      Alert.alert(
+        'Uploaded',
+        `Saved to ${hygieneDocumentFolderLabel(folder)} for ${employee.name || employee.email || 'employee'}.`
+      );
     } catch (error: any) {
-      Alert.alert('Upload failed', error?.message || 'Could not upload hygiene card.');
+      Alert.alert('Upload failed', error?.message || 'Could not upload document.');
     } finally {
       setUploadingEmployeeId(null);
     }
@@ -125,6 +152,36 @@ export default function AdminHygieneScreen({ navigation }: Props) {
       await deleteHygieneCredential(item.id, item.storagePath);
     } catch (error: any) {
       Alert.alert('Could not delete', error?.message || 'Delete failed.');
+    } finally {
+      setDeletingCredentialId(null);
+    }
+  };
+
+  const handleCredentialLongPress = (item: any) => {
+    Alert.alert(item.fileName || 'Document', 'Choose an action', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Move',
+        onPress: () => setFolderPicker({ mode: 'move', credential: item }),
+      },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => confirmDeleteCredential(item),
+      },
+    ]);
+  };
+
+  const handleMoveCredential = async (folder: HygieneDocumentFolderKey) => {
+    const item = folderPicker?.credential;
+    setFolderPicker(null);
+    if (!item?.id) return;
+    if (inferHygieneDocumentFolder(item) === folder) return;
+    setDeletingCredentialId(item.id);
+    try {
+      await updateHygieneCredentialFolder(item.id, folder);
+    } catch (error: any) {
+      Alert.alert('Could not move', error?.message || 'Move failed.');
     } finally {
       setDeletingCredentialId(null);
     }
@@ -173,7 +230,12 @@ export default function AdminHygieneScreen({ navigation }: Props) {
     const previewableImage = isImageCredential(fileName) && !!item.downloadUrl;
 
     return (
-      <View key={item.id} style={styles.credentialTile}>
+      <Pressable
+        key={item.id}
+        style={styles.credentialTile}
+        onLongPress={() => handleCredentialLongPress(item)}
+        delayLongPress={450}
+      >
         <TouchableOpacity
           style={styles.credentialPreview}
           onPress={() => void Linking.openURL(String(item.downloadUrl || ''))}
@@ -191,32 +253,23 @@ export default function AdminHygieneScreen({ navigation }: Props) {
         <Text style={styles.credentialMeta} numberOfLines={2}>
           Uploaded {formatDateTime(item.uploadedAt, item.uploadedAtIso)}
         </Text>
-        <Text style={[styles.credentialMeta, overdue && styles.overdue]} numberOfLines={2}>
-          Due {item.nextEducationDueAtIso ? new Date(item.nextEducationDueAtIso).toLocaleDateString() : 'Unknown'}
-        </Text>
+        {inferHygieneDocumentFolder(item) === 'belehrung' ? (
+          <Text style={[styles.credentialMeta, overdue && styles.overdue]} numberOfLines={2}>
+            Due {item.nextEducationDueAtIso ? new Date(item.nextEducationDueAtIso).toLocaleDateString() : 'Unknown'}
+          </Text>
+        ) : null}
         <View style={styles.credentialTileActions}>
           <TouchableOpacity style={styles.tileLinkButton} onPress={() => void Linking.openURL(String(item.downloadUrl || ''))}>
             <Text style={styles.linkText}>Open</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={() => confirmDeleteCredential(item)}
-            disabled={deletingCredentialId === item.id}
-          >
-            {deletingCredentialId === item.id ? (
-              <ActivityIndicator color="#C97934" />
-            ) : (
-              <Text style={styles.deleteButtonText}>Delete</Text>
-            )}
-          </TouchableOpacity>
         </View>
-      </View>
+      </Pressable>
     );
   };
 
   return (
     <>
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Admin</Text>
@@ -286,9 +339,11 @@ export default function AdminHygieneScreen({ navigation }: Props) {
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Employee Hygiene Cards</Text>
-          <Text style={styles.sectionSub}>Certification photos and files (PDF, PNG, JPEG, HEIC) and recurring education due dates.</Text>
+        <View style={[styles.section, SHOW_DEBUG_ONLY_OPERATIONS && styles.hiddenPersonnelDocuments]}>
+          <Text style={styles.sectionTitle}>Documents</Text>
+          <Text style={styles.sectionSub}>
+            Employee hygiene files in Employee Hygiene Cards, Recurring Education, and Other. Long-press a file to move or delete it.
+          </Text>
           {users.map(user => {
             const busy = uploadingEmployeeId === user.id;
             const employeeCredentials = credentialsByEmployee[user.id] || [];
@@ -301,7 +356,17 @@ export default function AdminHygieneScreen({ navigation }: Props) {
                   style={styles.personCard}
                   onPress={() => toggleEmployeeExpanded(user.id, uploadCount > 0)}
                 >
-                  <Image source={resolveAvatarSource(user.avatarUrl, user.customAvatarUrl)} style={styles.avatar} />
+                  <TouchableOpacity
+                    onPress={() =>
+                      openUserProfile(navigation, {
+                        userId: user.id,
+                        userName: user.name || user.email,
+                      })
+                    }
+                    activeOpacity={0.85}
+                  >
+                    <Image source={resolveAvatarSource(user.avatarUrl, user.customAvatarUrl)} style={styles.avatar} />
+                  </TouchableOpacity>
                   <View style={styles.personBody}>
                     <Text style={styles.personTitle}>{user.name || user.email || 'Team member'}</Text>
                     <Text style={styles.personMeta}>{uploadCount === 0 ? (user.email || 'No email on file') : `${uploadCount} file${uploadCount === 1 ? '' : 's'} uploaded`}</Text>
@@ -311,14 +376,27 @@ export default function AdminHygieneScreen({ navigation }: Props) {
                   </View>
                   <View style={styles.personActions}>
                     {uploadCount > 0 ? <Text style={styles.expandIndicator}>{expanded ? '−' : '+'}</Text> : null}
-                    <TouchableOpacity style={styles.inlineAction} onPress={() => void handleUploadForEmployee(user)} disabled={busy}>
+                    <TouchableOpacity
+                      style={styles.inlineAction}
+                      onPress={() => setFolderPicker({ mode: 'upload', employee: user })}
+                      disabled={busy}
+                    >
                       {busy ? <ActivityIndicator color="#C97934" /> : <Text style={styles.inlineActionText}>Upload file</Text>}
                     </TouchableOpacity>
                   </View>
                 </TouchableOpacity>
                 {expanded ? (
-                  <View style={styles.credentialGrid}>
-                    {employeeCredentials.map(renderCredentialCard)}
+                  <View style={styles.credentialFolders}>
+                    {HYGIENE_DOCUMENT_FOLDERS.map(folder => {
+                      const items = credentialsInFolder(employeeCredentials, folder.key);
+                      if (items.length === 0) return null;
+                      return (
+                        <View key={folder.key} style={styles.folderBlock}>
+                          <Text style={styles.folderLabel}>{folder.label}</Text>
+                          <View style={styles.credentialGrid}>{items.map(renderCredentialCard)}</View>
+                        </View>
+                      );
+                    })}
                   </View>
                 ) : null}
               </View>
@@ -327,21 +405,50 @@ export default function AdminHygieneScreen({ navigation }: Props) {
           {orphanCredentials.length > 0 ? (
             <View style={styles.recordCard}>
               <Text style={styles.recordTitle}>Uploads without matching employee record</Text>
-              <View style={styles.credentialGrid}>
-                {orphanCredentials.map(renderCredentialCard)}
+              <View style={styles.credentialFolders}>
+                {HYGIENE_DOCUMENT_FOLDERS.map(folder => {
+                  const items = credentialsInFolder(orphanCredentials, folder.key);
+                  if (items.length === 0) return null;
+                  return (
+                    <View key={folder.key} style={styles.folderBlock}>
+                      <Text style={styles.folderLabel}>{folder.label}</Text>
+                      <View style={styles.credentialGrid}>{items.map(renderCredentialCard)}</View>
+                    </View>
+                  );
+                })}
               </View>
             </View>
           ) : null}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </PizzaFireScreen>
     {nameConfirmModal}
+    {sourcePickerModal}
+    <HygieneFolderPickerModal
+      visible={folderPicker !== null}
+      title={folderPicker?.mode === 'move' ? 'Move to folder' : 'Save document to'}
+      excludeFolder={
+        folderPicker?.mode === 'move' && folderPicker.credential
+          ? inferHygieneDocumentFolder(folderPicker.credential)
+          : null
+      }
+      onClose={() => setFolderPicker(null)}
+      onSelect={folder => {
+        if (folderPicker?.mode === 'move') {
+          void handleMoveCredential(folder);
+          return;
+        }
+        const employee = folderPicker?.employee;
+        setFolderPicker(null);
+        if (employee) void handleUploadForEmployee(employee, folder);
+      }}
+    />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#191513' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -350,24 +457,25 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 14,
   },
-  back: { color: '#C97934', fontSize: 16, fontWeight: '700' },
-  title: { color: '#F4EFE8', fontSize: 24, fontWeight: '800' },
+  back: { color: PIZZA_FIRE.gold, fontSize: 16, fontWeight: '700' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 24, fontWeight: '800' },
   content: { paddingHorizontal: 18, paddingBottom: 28 },
   section: { marginBottom: 26 },
+  hiddenPersonnelDocuments: { display: 'none' },
   sectionTitle: { color: '#F4EFE8', fontSize: 22, fontWeight: '800', marginBottom: 6 },
   sectionSub: { color: '#B9AA9A', fontSize: 14, lineHeight: 20, marginBottom: 14 },
   auditPanel: {
-    backgroundColor: '#221C18',
+    backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
-    borderColor: '#39312C',
-    borderRadius: 8,
+    borderColor: PIZZA_FIRE.qlBorder,
+    borderRadius: 16,
     padding: 16,
     gap: 10,
   },
   summaryRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
   summaryCell: {
     flex: 1,
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderWidth: 1,
     borderColor: '#39312C',
     borderRadius: 6,
@@ -389,29 +497,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
   },
   linkPanelTitle: { color: '#F4EFE8', fontSize: 16, fontWeight: '800', marginBottom: 4 },
   linkPanelText: { color: '#B9AA9A', fontSize: 13, lineHeight: 18, maxWidth: '90%' },
   linkPanelArrow: { color: '#C97934', fontSize: 22, fontWeight: '800' },
   auditCard: {
-    backgroundColor: '#221C18',
+    backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
-    borderColor: '#39312C',
-    borderRadius: 8,
+    borderColor: PIZZA_FIRE.qlBorder,
+    borderRadius: 16,
     padding: 16,
     marginBottom: 14,
   },
   tableCard: {
-    backgroundColor: '#221C18',
+    backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
-    borderColor: '#39312C',
-    borderRadius: 8,
+    borderColor: PIZZA_FIRE.qlBorder,
+    borderRadius: 16,
     overflow: 'hidden',
   },
   tableHeader: {
     flexDirection: 'row',
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderBottomWidth: 1,
     borderBottomColor: '#39312C',
     paddingHorizontal: 10,
@@ -439,21 +547,21 @@ const styles = StyleSheet.create({
   colAction: { flex: 0.7, alignItems: 'flex-end', justifyContent: 'center' },
   deleteButton: {
     borderWidth: 1,
-    borderColor: '#67483B',
-    backgroundColor: '#171311',
-    borderRadius: 6,
+    borderColor: 'rgba(255, 160, 150, 0.75)',
+    backgroundColor: 'rgba(255, 69, 58, 0.34)',
+    borderRadius: 16,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
-  deleteButtonText: { color: '#D89A79', fontWeight: '800', fontSize: 12 },
+  deleteButtonText: { color: '#FFE4E0', fontWeight: '800', fontSize: 12 },
   personCardWrap: { marginBottom: 10 },
   personCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#221C18',
+    backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
-    borderColor: '#39312C',
-    borderRadius: 8,
+    borderColor: PIZZA_FIRE.qlBorder,
+    borderRadius: 16,
     padding: 12,
   },
   avatar: {
@@ -462,7 +570,7 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     borderWidth: 1,
     borderColor: '#4B372B',
-    backgroundColor: '#140F0B',
+    backgroundColor: PIZZA_FIRE.inputBg,
     marginRight: 12,
   },
   personBody: { flex: 1 },
@@ -477,14 +585,14 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
   },
   inlineActionText: { color: '#C97934', fontWeight: '800', fontSize: 12 },
   recordCard: {
-    backgroundColor: '#221C18',
+    backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
-    borderColor: '#39312C',
-    borderRadius: 8,
+    borderColor: PIZZA_FIRE.qlBorder,
+    borderRadius: 16,
     padding: 14,
     marginBottom: 10,
   },
@@ -500,10 +608,24 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 10,
   },
+  credentialFolders: {
+    marginTop: 10,
+    gap: 12,
+  },
+  folderBlock: {
+    width: '100%',
+  },
+  folderLabel: {
+    color: '#D5C6B8',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+  },
   credentialTile: {
     width: '48%',
     minWidth: 150,
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderWidth: 1,
     borderColor: '#39312C',
     borderRadius: 8,
@@ -513,7 +635,7 @@ const styles = StyleSheet.create({
     height: 96,
     borderRadius: 6,
     overflow: 'hidden',
-    backgroundColor: '#110E0C',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: '#332B25',
     marginBottom: 10,
@@ -547,7 +669,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   input: {
-    backgroundColor: '#14110F',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderRadius: 6,
     borderWidth: 1,
     borderColor: '#39312C',

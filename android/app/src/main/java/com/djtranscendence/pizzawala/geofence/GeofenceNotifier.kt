@@ -19,9 +19,6 @@ import java.util.Locale
 object GeofenceNotifier {
   private const val CHANNEL_ID = "geofence-updates"
   private const val CHANNEL_NAME = "Worksite updates"
-  
-  // Dedup: prevents "multiple notifications" for same event
-  private val lastAlerts = mutableMapOf<String, Long>()
 
   private fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -47,17 +44,6 @@ object GeofenceNotifier {
         context, Manifest.permission.POST_NOTIFICATIONS
       ) == PackageManager.PERMISSION_GRANTED
       if (!granted) return
-    }
-
-    // Dedup only for immediate events, not for the delayed exit one which is unique
-    if (originalTs == null) {
-      val alertKey = transition
-      val now = System.currentTimeMillis()
-      val lastTime = lastAlerts[alertKey] ?: 0L
-      if (now - lastTime < 60000) { // 60s dedup window across all geofences
-          return
-      }
-      lastAlerts[alertKey] = now
     }
 
     val name = GeofencePrefs.getGeofenceName(context, geofenceId) ?: geofenceId
@@ -133,11 +119,7 @@ object GeofenceNotifier {
 
     val notification = builder.build()
 
-    val notificationId = if (isDelayedExit && geofenceId != null) {
-      geofenceId.hashCode()
-    } else {
-      (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
-    }
+    val notificationId = (geofenceId + ":" + transition).hashCode()
     NotificationManagerCompat.from(context).notify(notificationId, notification)
   }
 }
