@@ -1,6 +1,6 @@
 # PizzaWala iOS Mac handoff
 
-This branch prepares the single iOS app for the shared PizzaWala 2.6 source. There is intentionally no separately installable iOS debug app. Xcode's Debug and Release configurations both use:
+This branch prepares the single, standalone iOS app for the shared PizzaWala 2.6 source. There is intentionally no separately installable iOS debug app and no Metro dependency. Xcode's shared PizzaWala scheme runs the Release configuration with an embedded JavaScript bundle.
 
 - App name: `PizzaWala`
 - Bundle identifier: `com.pizzawala.app`
@@ -8,7 +8,7 @@ This branch prepares the single iOS app for the shared PizzaWala 2.6 source. The
 - Build number: `17`
 - Apple team currently recorded by the project: `3P23GA8YKC`
 
-Running a Debug build from Xcode can replace the existing PizzaWala installation because it uses the same bundle identifier.
+Running from the shared PizzaWala scheme or installing an archive replaces the existing PizzaWala installation because both use the same bundle identifier.
 
 ## 1. Update the source
 
@@ -108,13 +108,7 @@ For Firebase Cloud Messaging, open **Firebase Console → Project settings → C
 5. Press **Run** (`⌘R`).
 6. If prompted on the phone, trust the developer profile under **Settings → General → VPN & Device Management**.
 
-For the initial device build, Metro can be started from a second Terminal window:
-
-```sh
-npm start
-```
-
-Metro is configured for port `8082`. The Mac and iPhone must be able to reach each other on the same network. If the app reports that it cannot load the JavaScript bundle, first confirm macOS Firewall permits Node and that port 8082 is reachable.
+The shared scheme's Run action uses the Release configuration. Xcode bundles `main.jsbundle` into the app during the build, so do not start Metro. After installation, the app must open and work with the Mac disconnected.
 
 ## 7. Required smoke test
 
@@ -137,7 +131,7 @@ Known intentional gap: Android's compact shift-status chip is Android-native. Th
 
 After the device smoke test:
 
-1. Stop Metro and choose **Any iOS Device (arm64)** as the destination.
+1. Choose **Any iOS Device (arm64)** as the destination.
 2. Select **Product → Archive**.
 3. In Organizer, choose **Distribute App → App Store Connect → Upload** (or **TestFlight Internal Only**, if offered).
 4. Keep automatic signing enabled and upload symbols.
@@ -149,7 +143,7 @@ If App Store Connect says build `17` was already used, increment **Current Proje
 
 Send Dylan:
 
-- Whether the physical-device Debug build passed.
+- Whether the standalone physical-device Release build passed with the Mac disconnected.
 - The first failing Xcode error in full, if any.
 - Whether Firebase login/data and a push notification worked.
 - Whether the TestFlight upload was accepted.

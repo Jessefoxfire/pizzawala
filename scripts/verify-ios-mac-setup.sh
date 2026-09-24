@@ -29,6 +29,12 @@ FIREBASE_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :BUNDLE_ID' "$FIREBASE_P
 
 [[ -d "$ROOT_DIR/ios/PizzaWala.xcworkspace" ]] || fail "PizzaWala.xcworkspace is missing."
 
+grep -q 'buildConfiguration = "Release"' "$ROOT_DIR/ios/PizzaWala.xcodeproj/xcshareddata/xcschemes/PizzaWala.xcscheme" || fail "The shared PizzaWala scheme is not configured for Release."
+grep -q 'main", withExtension: "jsbundle"' "$ROOT_DIR/ios/PizzaWala/AppDelegate.swift" || fail "AppDelegate is not configured for the embedded JavaScript bundle."
+if grep -q 'RCTBundleURLProvider' "$ROOT_DIR/ios/PizzaWala/AppDelegate.swift"; then
+  fail "AppDelegate still contains a Metro bundle provider."
+fi
+
 cd "$ROOT_DIR"
 bundle check >/dev/null || fail "Ruby gems are missing. Run: bundle _4.0.3_ install"
 
