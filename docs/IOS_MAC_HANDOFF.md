@@ -99,20 +99,41 @@ Xcode may create or update an entitlements file. Commit that file and the corres
 
 For Firebase Cloud Messaging, open **Firebase Console → Project settings → Cloud Messaging** and verify that an APNs authentication key or certificate is configured for the iOS app. If one is already valid, do not replace it. If none exists, the Apple team Account Holder/Admin must create or provide the APNs key and upload it securely.
 
-## 6. Install on the iPhone
+## 6. Create and upload the standalone iOS build
 
-1. Connect the iPhone by cable and tap **Trust** if asked.
-2. On the iPhone, enable **Settings → Privacy & Security → Developer Mode** if Xcode requests it; the phone will restart.
-3. In Xcode, choose the connected iPhone as the run destination.
-4. Keep the **PizzaWala** scheme selected.
-5. Press **Run** (`⌘R`).
-6. If prompted on the phone, trust the developer profile under **Settings → General → VPN & Device Management**.
+The iOS equivalent of the Android APK is a signed `.ipa`. Do not send the `.ipa` as an ordinary file or web link: iOS will reject it unless the receiving device and distribution method are provisioned correctly. Use TestFlight to provide the install link.
 
-The shared scheme's Run action uses the Release configuration. Xcode bundles `main.jsbundle` into the app during the build, so do not start Metro. After installation, the app must open and work with the Mac disconnected.
+In Xcode:
 
-## 7. Required smoke test
+1. Choose **Any iOS Device (arm64)** as the destination.
+2. Select **Product → Archive**.
+3. When Organizer opens, select the new archive and choose **Distribute App → App Store Connect → Upload**.
+4. Do **not** choose **TestFlight Internal Only** when the goal is a public installation link.
+5. Keep automatic signing enabled, include symbols, and complete the upload.
+6. Wait for build processing to finish in App Store Connect.
 
-Do not archive until all of these pass on the physical iPhone:
+This is a standalone Release build. Xcode embeds `main.jsbundle` in the app, so do not run `npm start` or Metro. The installed app works without Jesse's Mac, a cable, or a development server.
+
+If App Store Connect says build `17` was already used, increment **Current Project Version** to the next unused integer for both Debug and Release configurations, commit that change, then archive again. Do not change the `2.6` marketing version unless the intended App Store version is different.
+
+## 7. Create the TestFlight installation URL
+
+In App Store Connect:
+
+1. Open **Apps → PizzaWala → TestFlight** and complete any requested Test Information.
+2. Create an internal testing group if none exists; Apple requires this before external testing can be configured.
+3. Under **External Testing**, create a group such as `PizzaWala Testing`.
+4. Add the uploaded build, enter concise **What to Test** notes, and submit it for TestFlight App Review. The first externally shared build requires approval.
+5. After approval, open the external group, choose **Create Public Link**, set a small tester limit, and copy the generated URL.
+6. Send Dylan that URL. Dylan installs Apple's **TestFlight** app on the iPhone, opens the link, accepts the invitation, and taps **Install**.
+
+For future builds, increment the build number, upload the archive, and add it to the same external group. The group link can remain the same.
+
+The faster alternative is to add Dylan as an App Store Connect user and internal tester, but that sends an account/email invitation rather than the requested public installation URL.
+
+## 8. Required TestFlight smoke test
+
+After installing from TestFlight, verify all of the following on the physical iPhone:
 
 1. App opens without requesting location.
 2. Denying location does not block manual clock-in, manual worksite selection, hours, documents, or receipts.
@@ -127,26 +148,14 @@ Do not archive until all of these pass on the physical iPhone:
 
 Known intentional gap: Android's compact shift-status chip is Android-native. The iOS ActivityKit/Live Activity equivalent is not included in this baseline build and should be a separate follow-up after this build is stable.
 
-## 8. Create the release archive/TestFlight build
-
-After the device smoke test:
-
-1. Choose **Any iOS Device (arm64)** as the destination.
-2. Select **Product → Archive**.
-3. In Organizer, choose **Distribute App → App Store Connect → Upload** (or **TestFlight Internal Only**, if offered).
-4. Keep automatic signing enabled and upload symbols.
-5. In App Store Connect, wait for processing and add the build to an internal TestFlight group.
-
-If App Store Connect says build `17` was already used, increment **Current Project Version** to the next unused integer for both Debug and Release configurations, commit that change, then archive again. Do not change the `2.6` marketing version unless the intended App Store version is different.
-
 ## 9. Return the Mac-side results
 
 Send Dylan:
 
-- Whether the standalone physical-device Release build passed with the Mac disconnected.
+- Whether the standalone TestFlight build passed without Metro or a Mac connection.
 - The first failing Xcode error in full, if any.
 - Whether Firebase login/data and a push notification worked.
-- Whether the TestFlight upload was accepted.
+- Whether TestFlight App Review accepted the build and the public link works.
 - Output of `git status --short` and `git diff -- ios` before committing Xcode-generated project changes.
 
 Do not use Xcode's automatic **Perform Changes** migration on the first pass unless a build error specifically requires it; it can create a large unrelated project diff.
