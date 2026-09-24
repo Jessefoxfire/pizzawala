@@ -82,7 +82,9 @@ object ShiftOngoingStore {
   fun buildNotification(context: Context): Notification {
     ensureChannel(context)
     val appCtx = context.applicationContext
-    val text = "${label(appCtx)} · ${formatHms(elapsedMs(appCtx))}"
+    val status = label(appCtx)
+    val elapsed = elapsedMs(appCtx)
+    val text = "$status · ${formatHms(elapsed)}"
     val launch = Intent(appCtx, MainActivity::class.java).apply {
       flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
       putExtra("screen", "Home")
@@ -93,8 +95,8 @@ object ShiftOngoingStore {
       launch,
       PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     )
-    return NotificationCompat.Builder(appCtx, CHANNEL_ID)
-      .setSmallIcon(R.mipmap.ic_launcher)
+    val notification = NotificationCompat.Builder(appCtx, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_shift_clock)
       .setContentTitle(appCtx.getString(R.string.app_name))
       .setContentText(text)
       .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -106,7 +108,20 @@ object ShiftOngoingStore {
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .setCategory(NotificationCompat.CATEGORY_PROGRESS)
       .setContentIntent(pending)
-      .setShowWhen(false)
+      .setColor(0xFFFF6B00.toInt())
+      .setWhen(System.currentTimeMillis() - elapsed)
+      .setUsesChronometer(true)
+      .setChronometerCountDown(false)
       .build()
+
+    // Android 16+ can promote qualifying ongoing notifications into a status-bar live-update
+    // chip. Raw extras keep this compatible with the project's current AndroidX Core version;
+    // older Android releases safely ignore them.
+    notification.extras.putBoolean("android.requestPromotedOngoing", true)
+    notification.extras.putString(
+      "android.shortCriticalText",
+      if (status == "Break") "BREAK" else "WORK"
+    )
+    return notification
   }
 }

@@ -1,10 +1,20 @@
 package com.djtranscendence.pizzawala.geofence
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.djtranscendence.pizzawala.MainActivity
+import com.djtranscendence.pizzawala.R
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -17,11 +27,17 @@ import com.google.android.gms.location.Priority
 class GeofenceMonitorService : Service() {
     companion object {
         private const val TAG = "GeofenceMonitor"
+        private const val CHANNEL_ID = "pizzawala-location-monitor"
+        private const val NOTIFICATION_ID = 92003
 
         fun start(context: Context) {
             if (!ShiftOngoingStore.isActive(context)) return
-            // ShiftOngoingService already owns the location FGS notification.
-            context.startService(Intent(context, GeofenceMonitorService::class.java))
+            val intent = Intent(context, GeofenceMonitorService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(context, intent)
+            } else {
+                context.startService(intent)
+            }
         }
 
         fun stop(context: Context) {
@@ -34,7 +50,11 @@ class GeofenceMonitorService : Service() {
             val intent = Intent(context, GeofenceMonitorService::class.java).apply {
                 action = "BOOST_ACCURACY"
             }
-            context.startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(context, intent)
+            } else {
+                context.startService(intent)
+            }
         }
     }
 
@@ -43,6 +63,7 @@ class GeofenceMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created.")
+        enterForeground()
         requestStimulantUpdates()
     }
 
@@ -57,7 +78,62 @@ class GeofenceMonitorService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "Service destroyed. Cleaning up location updates.")
         stopStimulantUpdates()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         super.onDestroy()
+    }
+
+    private fun enterForeground() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            if (manager?.getNotificationChannel(CHANNEL_ID) == null) {
+                manager?.createNotificationChannel(
+                    NotificationChannel(
+                        CHANNEL_ID,
+                        "Location features",
+                        NotificationManager.IMPORTANCE_MIN
+                    ).apply {
+                        description = "Keeps enabled worksite location features active."
+                        setShowBadge(false)
+                        setSound(null, null)
+                        enableVibration(false)
+                        lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                    }
+                )
+            }
+        }
+
+        val launch = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("screen", "Home")
+        }
+        val pending = PendingIntent.getActivity(
+            this,
+            NOTIFICATION_ID,
+            launch,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_shift_clock)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText("Worksite location feature active")
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setContentIntent(pending)
+            .setShowWhen(false)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun requestStimulantUpdates() {

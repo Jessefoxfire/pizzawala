@@ -24,9 +24,7 @@ object GeofenceHeadlessFg {
 
   fun startEventService(context: Context, intent: Intent) {
     try {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ShiftOngoingStore.isActive(context)) {
-        context.startService(intent)
-      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         ContextCompat.startForegroundService(context, intent)
       } else {
         context.startService(intent)
@@ -55,11 +53,6 @@ object GeofenceHeadlessFg {
   }
 
   fun start(service: Service) {
-    // Shift timer FGS is already showing; do not post a second title-only notification.
-    if (ShiftOngoingStore.isActive(service)) {
-      return
-    }
-
     ensureChannel(service)
     val notification: Notification = NotificationCompat.Builder(service, CHANNEL_ID)
       .setContentTitle(service.getString(R.string.app_name))
@@ -84,13 +77,10 @@ object GeofenceHeadlessFg {
 
   fun stop(service: Service) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-      val flag =
-        if (ShiftOngoingStore.isActive(service)) Service.STOP_FOREGROUND_DETACH
-        else Service.STOP_FOREGROUND_REMOVE
-      service.stopForeground(flag)
+      service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
     } else {
       @Suppress("DEPRECATION")
-      service.stopForeground(!ShiftOngoingStore.isActive(service))
+      service.stopForeground(true)
     }
   }
 }
