@@ -388,7 +388,11 @@ export default function AdminHygieneScreen({ navigation }: Props) {
                 {expanded ? (
                   <View style={styles.credentialFolders}>
                     {HYGIENE_DOCUMENT_FOLDERS.map(folder => {
-                      const items = credentialsInFolder(employeeCredentials, folder.key);
+                      const items = credentialsInFolder(
+                        employeeCredentials,
+                        folder.key,
+                        HYGIENE_DOCUMENT_FOLDERS.map(entry => entry.key)
+                      );
                       if (items.length === 0) return null;
                       return (
                         <View key={folder.key} style={styles.folderBlock}>
@@ -407,7 +411,11 @@ export default function AdminHygieneScreen({ navigation }: Props) {
               <Text style={styles.recordTitle}>Uploads without matching employee record</Text>
               <View style={styles.credentialFolders}>
                 {HYGIENE_DOCUMENT_FOLDERS.map(folder => {
-                  const items = credentialsInFolder(orphanCredentials, folder.key);
+                  const items = credentialsInFolder(
+                    orphanCredentials,
+                    folder.key,
+                    HYGIENE_DOCUMENT_FOLDERS.map(entry => entry.key)
+                  );
                   if (items.length === 0) return null;
                   return (
                     <View key={folder.key} style={styles.folderBlock}>

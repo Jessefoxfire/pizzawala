@@ -20,10 +20,10 @@ import {
 import EventDayTimeModal from './EventDayTimeModal';
 import HoursChangeBadge from './HoursChangeBadge';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
-import { offlineOpenShiftToLiveShift, submitDaySummary, type LiveShift } from '../services/shifts';
-import { getOfflineOpenShift } from '../offline/outbox';
+import { applyPendingShiftEnds, offlineOpenShiftToLiveShift, submitDaySummary, type LiveShift } from '../services/shifts';
+import { getOfflineOpenShift, getPendingShiftEnds } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
-import type { WriteResult } from '../offline/types';
+import type { PendingShiftEnd, WriteResult } from '../offline/types';
 import {
   applyTimesToRow,
   buildDaySummaryRows,
@@ -71,6 +71,7 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
   const recentRef = useRef<LiveShift[]>([]);
   const openRef = useRef<LiveShift[]>([]);
   const offlineRef = useRef<LiveShift | null>(null);
+  const pendingEndsRef = useRef<PendingShiftEnd[]>([]);
   const activeShiftRef = useRef<LiveShift | null>(activeShift);
   activeShiftRef.current = activeShift;
 
@@ -86,7 +87,7 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
     if (offline) byId.set(offline.id, offline);
     const active = activeShiftRef.current;
     if (active && !active.isScheduled) byId.set(active.id, active);
-    setLiveShifts([...byId.values()]);
+    setLiveShifts(applyPendingShiftEnds([...byId.values()], pendingEndsRef.current));
   };
 
   useEffect(() => {
@@ -163,7 +164,8 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
     );
 
     const refreshOffline = async () => {
-      const offline = await getOfflineOpenShift();
+      const [offline, pending] = await Promise.all([getOfflineOpenShift(), getPendingShiftEnds()]);
+      pendingEndsRef.current = pending;
       offlineRef.current =
         offline && offline.userId === userId ? offlineOpenShiftToLiveShift(offline) : null;
       publishLiveShifts();

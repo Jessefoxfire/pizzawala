@@ -39,12 +39,14 @@ import { subscribeOutboxChanges } from '../offline/events';
 import {
   cleanupStoredSubMinuteShiftsForUser,
   offlineOpenShiftToLiveShift,
+  applyPendingShiftEnds,
   updateShiftPeriodTimes,
   isShiftPaused,
   pauseLiveShift,
   resumeLiveShift,
   type LiveShift,
 } from '../services/shifts';
+import { usePendingShiftEnds } from '../offline/usePendingShiftEnds';
 import { shareMonthlyTimesheetPdf } from '../services/monthlyTimesheetPdf';
 import {
   applyTimeToIso,
@@ -136,6 +138,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   );
   const [viewedUserName, setViewedUserName] = useState(route.params?.employeeName || '');
   const viewingOtherUser = Boolean(viewedUserId && currentUserId && viewedUserId !== currentUserId);
+  const pendingShiftEnds = usePendingShiftEnds();
   const userId = viewedUserId;
   const todayKey = localDateKey(new Date());
   const recentQueryDateKeys = useMemo(() => buildRecentDateKeys(7), []);
@@ -346,10 +349,9 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   const mergedShifts = useMemo(() => {
     const extras = historicalShifts.filter(s => !liveShifts.some(live => live.id === s.id));
     const base = extras.length ? [...liveShifts, ...extras] : liveShifts;
-    if (!offlineShift) return base;
-    const withoutOffline = base.filter(s => s.id !== offlineShift.id);
-    return [offlineShift, ...withoutOffline];
-  }, [liveShifts, historicalShifts, offlineShift]);
+    const withOffline = offlineShift ? [offlineShift, ...base.filter(s => s.id !== offlineShift.id)] : base;
+    return viewingOtherUser ? withOffline : applyPendingShiftEnds(withOffline, pendingShiftEnds);
+  }, [liveShifts, historicalShifts, offlineShift, pendingShiftEnds, viewingOtherUser]);
 
   const dayEntries = useMemo(
     () => buildDayTimeEntries(mergedShifts, selectedDateKey, nowMs),
@@ -804,7 +806,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
           setDaySummaryOpen(false);
           await refreshOfflineShift();
           if (result.queued) {
-            Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
           }
         }}
       />

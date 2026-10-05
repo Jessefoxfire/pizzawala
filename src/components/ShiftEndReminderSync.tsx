@@ -9,6 +9,8 @@ import {
 } from '@react-native-firebase/firestore';
 import { nativeAuth } from '../services/firebase';
 import { type LiveShift } from '../services/shifts';
+import { getPendingShiftEnds } from '../offline/outbox';
+import { subscribeOutboxChanges } from '../offline/events';
 import { pickScheduledEndMs, type ScheduledShiftRow } from '../utils/daySummary';
 import { cancelShiftEndReminders, syncShiftEndReminders } from '../notifications/shiftEndReminder';
 
@@ -21,6 +23,18 @@ export default function ShiftEndReminderSync() {
     let unsubScheduled: (() => void) | null = null;
     let liveShift: LiveShift | null = null;
     let scheduled: ScheduledShiftRow[] = [];
+    let pendingIds = new Set<string>();
+
+    const chooseOpenShift = (shifts: LiveShift[]) =>
+      shifts
+        .filter(shift => !shift.isScheduled && !pendingIds.has(shift.id))
+        .sort((a, b) => {
+          const toMs = (v: unknown) =>
+            v && typeof v === 'object' && typeof (v as { toDate?: () => Date }).toDate === 'function'
+              ? (v as { toDate: () => Date }).toDate().getTime()
+              : 0;
+          return toMs(b.startAt) - toMs(a.startAt);
+        })[0] || null;
 
     const publish = async () => {
       if (!liveShift) {
@@ -64,17 +78,8 @@ export default function ShiftEndReminderSync() {
         limit(5)
       );
       unsubOpen = onSnapshot(openQuery, snap => {
-        const best = [...(snap?.docs || [])]
-          .map(d => ({ id: d.id, ...d.data() } as LiveShift))
-          .filter(s => !s.isScheduled)
-          .sort((a, b) => {
-            const toMs = (v: unknown) =>
-              v && typeof v === 'object' && typeof (v as { toDate?: () => Date }).toDate === 'function'
-                ? (v as { toDate: () => Date }).toDate().getTime()
-                : 0;
-            return toMs(b.startAt) - toMs(a.startAt);
-          })[0];
-        liveShift = best || null;
+        const docs = [...(snap?.docs || [])].map(d => ({ id: d.id, ...d.data() } as LiveShift));
+        liveShift = chooseOpenShift(docs);
         void publish();
       });
 
@@ -94,10 +99,28 @@ export default function ShiftEndReminderSync() {
       });
     });
 
+    const unsubOutbox = subscribeOutboxChanges(() => {
+      void (async () => {
+        pendingIds = new Set((await getPendingShiftEnds()).map(item => item.shiftId));
+        if (liveShift && pendingIds.has(liveShift.id)) {
+          liveShift = null;
+        }
+        await publish();
+      })();
+    });
+    void getPendingShiftEnds().then(ends => {
+      pendingIds = new Set(ends.map(item => item.shiftId));
+      if (liveShift && pendingIds.has(liveShift.id)) {
+        liveShift = null;
+        void publish();
+      }
+    });
+
     return () => {
       unsubAuth();
       unsubOpen?.();
       unsubScheduled?.();
+      unsubOutbox();
       if (lastShiftIdRef.current) {
         void cancelShiftEndReminders(lastShiftIdRef.current);
       }

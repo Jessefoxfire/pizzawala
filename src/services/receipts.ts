@@ -1,61 +1,129 @@
-import { addDoc, collection, doc, getDoc, getFirestore, serverTimestamp } from '@react-native-firebase/firestore';
+import { addDoc, collection, doc, getDoc, getFirestore, serverTimestamp, updateDoc } from '@react-native-firebase/firestore';
 import { auth, uploadStorageRef, uploadStorageRefFallback } from './firebase';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
+import type { ReceiptPageRef, ReceiptType, RecognitionSnapshot, VatComponent } from '../domain/receipts/types';
 
-export const RECEIPT_CATEGORIES = ['Fuel', 'Parking', 'Toll', 'Supplies', 'Other'] as const;
-export type ReceiptCategory = (typeof RECEIPT_CATEGORIES)[number];
-
-export type ReceiptDraft = {
+export type ReceiptUploadPage = {
   localUri: string;
   fileName: string;
   mimeType: string;
-  receiptDate: string;
-  amount: string;
-  category: ReceiptCategory;
-  merchant: string;
-  note?: string;
-  association?: { id: string; label: string; kind: 'worksite' | 'event' } | null;
 };
 
-export async function submitReceipt(draft: ReceiptDraft) {
+export type ReceiptSubmitInput = {
+  pages: ReceiptUploadPage[];
+  type: ReceiptType;
+  eventId: string | null;
+  merchant: string;
+  receiptDate: string;
+  amountCents: number;
+  invoiceNumber: string;
+  note: string;
+  vatBreakdown: VatComponent[];
+  recognition: RecognitionSnapshot | null;
+};
+
+async function uploadReceiptPage(teamId: string, userId: string, page: ReceiptUploadPage): Promise<ReceiptPageRef> {
+  const safeName = page.fileName.replace(/[^A-Za-z0-9._-]+/g, '_') || `receipt-${Date.now()}.jpg`;
+  const storagePath = `receipts/${teamId}/${userId}/${Date.now()}-${safeName}`;
+  const url = await putFileAndGetDownloadUrl(
+    uploadStorageRef(storagePath),
+    page.localUri,
+    { contentType: page.mimeType || 'image/jpeg' },
+    { fallbackReference: () => uploadStorageRefFallback(storagePath) }
+  );
+  return { url, storagePath, mimeType: page.mimeType || 'image/jpeg', fileName: safeName };
+}
+
+export async function submitReceipt(draft: ReceiptSubmitInput) {
   const user = auth.currentUser;
   if (!user?.uid) throw new Error('You must be signed in to submit a receipt.');
-  const amount = Number(String(draft.amount).replace(',', '.'));
-  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter a valid amount.');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.receiptDate)) throw new Error('Use the receipt date format YYYY-MM-DD.');
+  if (!draft.pages.length) throw new Error('Add a receipt document before saving.');
 
   const fs = getFirestore();
   const profile = await getDoc(doc(fs, 'users', user.uid));
   const data = profile.exists() ? profile.data() : {};
   const userName = String(data?.name || data?.displayName || user.displayName || user.email || 'Team member').trim();
   const teamId = String(data?.teamId || 'team-1').trim() || 'team-1';
-  const safeName = draft.fileName.replace(/[^A-Za-z0-9._-]+/g, '_') || `receipt-${Date.now()}.jpg`;
-  const storagePath = `receipts/${teamId}/${user.uid}/${Date.now()}-${safeName}`;
-  const downloadUrl = await putFileAndGetDownloadUrl(
-    uploadStorageRef(storagePath),
-    draft.localUri,
-    { contentType: draft.mimeType || 'image/jpeg' },
-    { fallbackReference: () => uploadStorageRefFallback(storagePath) }
-  );
+  const pages: ReceiptPageRef[] = [];
+  for (const page of draft.pages) {
+    pages.push(await uploadReceiptPage(teamId, user.uid, page));
+  }
+  const primary = pages[0];
 
   await addDoc(collection(fs, 'receipts'), {
     userId: user.uid,
     userName,
     userEmail: user.email || '',
     teamId,
+    type: draft.type,
+    eventId: draft.eventId,
     receiptDate: draft.receiptDate,
-    amount,
+    amountCents: draft.amountCents,
+    amount: draft.amountCents / 100,
     currency: 'EUR',
-    category: draft.category,
     merchant: draft.merchant.trim(),
-    note: String(draft.note || '').trim(),
-    associationId: draft.association?.id || null,
-    associationLabel: draft.association?.label || null,
-    associationKind: draft.association?.kind || null,
-    imageUrl: downloadUrl,
-    storagePath,
+    invoiceNumber: draft.invoiceNumber.trim() || null,
+    note: draft.note.trim(),
+    vatBreakdown: draft.vatBreakdown,
+    category: null,
+    associationId: draft.eventId,
+    associationLabel: null,
+    associationKind: draft.eventId ? 'event' : null,
+    imageUrl: primary.url,
+    storagePath: primary.storagePath,
+    documentMimeType: primary.mimeType,
+    pages,
     submittedAtIso: new Date().toISOString(),
     submittedAt: serverTimestamp(),
-    ocr: { status: 'not_started', merchant: null, receiptDate: null, grossTotal: null, vat: null, receiptNumber: null },
+    recognitionStatus: 'saved',
+    recognition: draft.recognition,
+    ocr: draft.recognition
+      ? {
+          status: draft.recognition.status,
+          merchant: draft.recognition.merchant,
+          receiptDate: draft.recognition.receiptDate,
+          grossTotalCents: draft.recognition.totalCents,
+          vat: draft.recognition.vatBreakdown,
+          receiptNumber: draft.recognition.invoiceNumber,
+        }
+      : { status: 'failed', merchant: null, receiptDate: null, grossTotalCents: null, vat: [], receiptNumber: null },
   });
+}
+
+export type ReceiptAdminUpdate = {
+  type: ReceiptType | null;
+  eventId: string | null;
+  merchant: string;
+  receiptDate: string | null;
+  amountCents: number | null;
+  invoiceNumber: string | null;
+  note: string;
+  vatBreakdown: VatComponent[];
+  clearLegacyEventAssociation: boolean;
+};
+
+export async function updateReceiptDetails(receiptId: string, update: ReceiptAdminUpdate) {
+  const fs = getFirestore();
+  const payload: Record<string, unknown> = {
+    type: update.type,
+    eventId: update.eventId,
+    merchant: update.merchant.trim(),
+    receiptDate: update.receiptDate,
+    amountCents: update.amountCents,
+    invoiceNumber: update.invoiceNumber,
+    note: update.note.trim(),
+    vatBreakdown: update.vatBreakdown,
+    currency: 'EUR',
+  };
+  if (update.amountCents != null) payload.amount = update.amountCents / 100;
+  if (update.eventId) {
+    payload.associationId = update.eventId;
+    payload.associationKind = 'event';
+    payload.associationLabel = null;
+  } else if (update.clearLegacyEventAssociation) {
+    payload.associationId = null;
+    payload.associationKind = null;
+    payload.associationLabel = null;
+  }
+  await updateDoc(doc(fs, 'receipts', receiptId), payload);
 }

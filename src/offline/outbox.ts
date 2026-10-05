@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { OfflineOpenShift, OutboxItem } from './types';
+import type { OfflineOpenShift, OutboxItem, PendingShiftEnd } from './types';
 import { notifyOutboxChanged } from './events';
 
 const OUTBOX_KEY = 'offline_outbox_v1';
 const OFFLINE_OPEN_SHIFT_KEY = 'offline_open_shift_v1';
+const LAST_OPEN_SHIFT_ID_KEY = 'last_open_shift_id_v1';
 
 const randomId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -71,4 +72,35 @@ export async function setOfflineOpenShift(shift: OfflineOpenShift): Promise<void
 export async function clearOfflineOpenShift(): Promise<void> {
   await AsyncStorage.removeItem(OFFLINE_OPEN_SHIFT_KEY);
   notifyOutboxChanged();
+}
+
+export async function rememberOpenShiftId(shiftId: string): Promise<void> {
+  if (!shiftId) return;
+  await AsyncStorage.setItem(LAST_OPEN_SHIFT_ID_KEY, shiftId);
+}
+
+export async function getRememberedOpenShiftId(): Promise<string | null> {
+  return AsyncStorage.getItem(LAST_OPEN_SHIFT_ID_KEY);
+}
+
+export async function forgetOpenShiftId(shiftId?: string): Promise<void> {
+  if (!shiftId) {
+    await AsyncStorage.removeItem(LAST_OPEN_SHIFT_ID_KEY);
+    return;
+  }
+  const current = await AsyncStorage.getItem(LAST_OPEN_SHIFT_ID_KEY);
+  if (current === shiftId) await AsyncStorage.removeItem(LAST_OPEN_SHIFT_ID_KEY);
+}
+
+export async function getPendingShiftEnds(): Promise<PendingShiftEnd[]> {
+  const items = await loadOutbox();
+  const byId = new Map<string, PendingShiftEnd>();
+  items.forEach(item => {
+    if (item.type !== 'shift_end') return;
+    const existing = byId.get(item.payload.shiftId);
+    if (!existing || item.payload.recordedAtIso < existing.recordedAtIso) {
+      byId.set(item.payload.shiftId, item.payload);
+    }
+  });
+  return [...byId.values()];
 }

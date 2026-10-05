@@ -165,6 +165,11 @@ export default function AdminOptionsScreen({ navigation }: Props) {
       icon: require('../../assets/Icons/Medal.png'),
       onPress: () => navigation.navigate('Hygiene'),
     },
+    {
+      label: 'Receipts',
+      icon: require('../../assets/Icons/Admin.png'),
+      onPress: () => navigation.navigate('AdminReceipts'),
+    },
     ...(SHOW_DEBUG_ONLY_OPERATIONS
       ? [
           {

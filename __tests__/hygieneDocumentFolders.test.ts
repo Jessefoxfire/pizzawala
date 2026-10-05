@@ -1,4 +1,5 @@
-import { inferHygieneDocumentFolder } from '../src/utils/hygieneDocumentFolders';
+import { credentialsInFolder, inferHygieneDocumentFolder } from '../src/utils/hygieneDocumentFolders';
+import { isSharedTeamHygieneDocument } from '../src/utils/personnelDocuments';
 import {
   filterTemperatureLogsForMonth,
   groupTemperatureLogMonths,
@@ -30,6 +31,24 @@ describe('hygiene document folders', () => {
       })
     ).toBe('belehrung');
     expect(inferHygieneDocumentFolder({ fileName: 'Belehrung.pdf' })).toBe('belehrung');
+  });
+
+  it('shows a custom folder file under Other when that folder is not on screen', () => {
+    const files = [{ id: '1', folder: 'custom_archive', documentCategory: 'hygiene_card' }];
+    expect(credentialsInFolder(files, 'other', ['hygiene_cards', 'belehrung', 'other']).map(item => item.id)).toEqual(['1']);
+    expect(credentialsInFolder(files, 'hygiene_cards', ['hygiene_cards', 'belehrung', 'other'])).toEqual([]);
+  });
+
+  it('keeps team hygiene uploads and leaves identity documents off the shared list', () => {
+    expect(isSharedTeamHygieneDocument({ teamId: 'team-1', documentCategory: 'hygiene_card' }, 'team-1')).toBe(true);
+    expect(isSharedTeamHygieneDocument({ documentCategory: 'hygiene_card' }, 'team-1')).toBe(true);
+    expect(
+      isSharedTeamHygieneDocument(
+        { teamId: 'team-1', documentCategory: 'required_user_document', requiredDocumentType: 'Health insurance proof' },
+        'team-1'
+      )
+    ).toBe(false);
+    expect(isSharedTeamHygieneDocument({ teamId: 'team-2', documentCategory: 'hygiene_card' }, 'team-1')).toBe(false);
   });
 
   it('maps german compliance and extra documents to Other', () => {

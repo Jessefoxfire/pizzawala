@@ -175,7 +175,7 @@ export default function RequiredDocumentsScreen({ navigation }: Props) {
         </> : null}
 
         <View style={styles.receiptsCard}>
-          <View style={styles.receiptsText}><Text style={styles.receiptsTitle}>Receipts & Expenses</Text><Text style={styles.receiptsSub}>Submit business receipts for fuel, parking, tolls and supplies.</Text></View>
+          <View style={styles.receiptsText}><Text style={styles.receiptsTitle}>Receipts & Expenses</Text><Text style={styles.receiptsSub}>Scan Versorgung or Firma receipts and attach them to an event when needed.</Text></View>
           <TouchableOpacity style={styles.receiptsButton} onPress={() => navigation.navigate('ReceiptsExpenses')}><Text style={styles.receiptsButtonText}>Open</Text></TouchableOpacity>
         </View>
 

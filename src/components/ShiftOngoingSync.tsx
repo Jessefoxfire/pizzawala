@@ -12,13 +12,15 @@ import {
   offlineOpenShiftToLiveShift,
   type LiveShift,
 } from '../services/shifts';
-import { getOfflineOpenShift } from '../offline/outbox';
+import { getOfflineOpenShift, getPendingShiftEnds } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
+import type { PendingShiftEnd } from '../offline/types';
 import { stopNativeShiftOngoing, syncNativeShiftOngoing } from '../geofencing/native';
 import { shiftOngoingPayload, shiftOngoingSignature } from '../notifications/shiftOngoing';
 
 export default function ShiftOngoingSync() {
   const lastSigRef = useRef<string>('');
+  const pendingEndsRef = useRef<PendingShiftEnd[]>([]);
 
   useEffect(() => {
     let unsubOpen: (() => void) | null = null;
@@ -42,11 +44,15 @@ export default function ShiftOngoingSync() {
     };
 
     const publish = () => {
-      apply(offlineShift || firestoreShift);
+      const pendingIds = new Set(pendingEndsRef.current.map(item => item.shiftId));
+      const offline = offlineShift && !pendingIds.has(offlineShift.id) ? offlineShift : null;
+      const remote = firestoreShift && !pendingIds.has(firestoreShift.id) ? firestoreShift : null;
+      apply(offline || remote);
     };
 
     const refreshOffline = async () => {
-      const offline = await getOfflineOpenShift();
+      const [offline, pending] = await Promise.all([getOfflineOpenShift(), getPendingShiftEnds()]);
+      pendingEndsRef.current = pending;
       offlineShift = offline ? offlineOpenShiftToLiveShift(offline) : null;
       publish();
     };

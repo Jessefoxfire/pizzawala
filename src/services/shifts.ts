@@ -18,13 +18,18 @@ import {
   createOutboxId,
   enqueueOutbox,
   getOfflineOpenShift,
+  getPendingShiftEnds,
   setOfflineOpenShift,
   clearOfflineOpenShift,
   createClientShiftId,
+  forgetOpenShiftId,
+  getRememberedOpenShiftId,
   loadOutbox,
+  rememberOpenShiftId,
   removeOutboxItem,
+  replaceOutbox,
 } from '../offline/outbox';
-import type { WriteResult } from '../offline/types';
+import type { PendingShiftEnd, ShiftEndPayload, WriteResult } from '../offline/types';
 
 export type ShiftPeriod = {
   startIso: string;
@@ -245,6 +250,62 @@ export function formatCompactDuration(ms: number) {
 
 const SHIFT_START_REMOTE_MS = 8000;
 const SHIFT_START_FALLBACK_MS = 2500;
+const SHIFT_END_REMOTE_MS = 8000;
+const SHIFT_SUMMARY_REMOTE_MS = 12000;
+
+const PERMANENT_SHIFT_ERRORS = new Set([
+  'Finish time must be after start time.',
+  'You must be signed in to confirm the day.',
+  'Add at least one shift before confirming the day.',
+  'You can only confirm your own hours.',
+  'Scheduled shifts cannot be changed from Day Summary.',
+  'Connect to the internet to save edited or added hours.',
+  'Connect to the internet to confirm the day.',
+]);
+
+type ShiftEndOptions = {
+  recordedAtIso?: string;
+  timesChanged?: boolean;
+  actualStartIso?: string;
+  actualEndIso?: string;
+  originalStartIso?: string;
+  originalEndIso?: string;
+  editedBy?: string;
+};
+
+function isRetryableOfflineError(err: unknown): boolean {
+  if (!(err instanceof Error)) return true;
+  if (PERMANENT_SHIFT_ERRORS.has(err.message)) return false;
+  const code = String((err as { code?: string }).code || '');
+  if (code.includes('permission-denied') || code.includes('unauthenticated') || code.includes('invalid-argument')) {
+    return false;
+  }
+  return true;
+}
+
+function toShiftEndPayload(
+  shiftId: string,
+  endedBy: string,
+  recordedAtIso: string,
+  options?: ShiftEndOptions
+): ShiftEndPayload {
+  const timesChanged = !!(options?.timesChanged && options.actualStartIso && options.actualEndIso);
+  return {
+    shiftId,
+    endedBy,
+    recordedAtIso: timesChanged ? options!.actualEndIso! : recordedAtIso,
+    ...(timesChanged
+      ? {
+          timesChanged: true,
+          actualStartIso: options!.actualStartIso,
+          actualEndIso: options!.actualEndIso,
+          originalStartIso: options!.originalStartIso,
+          originalEndIso: options!.originalEndIso,
+          editedBy: options!.editedBy,
+        }
+      : {}),
+  };
+}
 
 async function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let handle: ReturnType<typeof setTimeout> | undefined;
@@ -279,20 +340,35 @@ async function lookupRemoteOpenLiveShift(userId: string) {
 }
 
 async function getOpenLiveShift(userId: string, opts?: { timeoutMs?: number }) {
+  const pendingIds = new Set((await getPendingShiftEnds()).map(item => item.shiftId));
   const offline = await getOfflineOpenShift();
-  if (offline && offline.userId === userId) {
+  if (offline && offline.userId === userId && !pendingIds.has(offline.clientShiftId)) {
+    await rememberOpenShiftId(offline.clientShiftId);
     return offlineOpenShiftToLiveShift(offline);
   }
 
+  const lookup = async () => {
+    const shift = await lookupRemoteOpenLiveShift(userId);
+    if (!shift || pendingIds.has(shift.id)) return null;
+    await rememberOpenShiftId(shift.id);
+    return shift;
+  };
+
   if (opts?.timeoutMs != null) {
     try {
-      return await raceTimeout(lookupRemoteOpenLiveShift(userId), opts.timeoutMs);
+      return await raceTimeout(lookup(), opts.timeoutMs);
     } catch {
       return null;
     }
   }
 
-  return lookupRemoteOpenLiveShift(userId);
+  return lookup();
+}
+
+export async function hasClockedInShift(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  const open = await getOpenLiveShift(userId, { timeoutMs: SHIFT_END_REMOTE_MS });
+  return !!open;
 }
 
 export function offlineOpenShiftToLiveShift(offline: import('../offline/types').OfflineOpenShift): LiveShift {
@@ -320,6 +396,7 @@ async function queueShiftStart(params: {
 }): Promise<string> {
   const offline = await getOfflineOpenShift();
   if (offline && offline.userId === params.userId) {
+    await rememberOpenShiftId(offline.clientShiftId);
     return offline.clientShiftId;
   }
 
@@ -364,6 +441,7 @@ async function queueShiftStart(params: {
     },
   });
 
+  await rememberOpenShiftId(clientShiftId);
   return clientShiftId;
 }
 
@@ -407,18 +485,30 @@ async function queueShiftResume(shiftId: string, recordedAtIso: string) {
   });
 }
 
-async function queueShiftEnd(shiftId: string, endedBy: string, recordedAtIso: string) {
+async function queueShiftEnd(
+  shiftId: string,
+  endedBy: string,
+  recordedAtIso: string,
+  options?: ShiftEndOptions
+) {
   const offline = await getOfflineOpenShift();
   if (offline && offline.clientShiftId === shiftId) {
     await clearOfflineOpenShift();
   }
 
-  await enqueueOutbox({
-    id: createOutboxId(),
-    type: 'shift_end',
-    createdAt: recordedAtIso,
-    payload: { shiftId, endedBy, recordedAtIso },
-  });
+  await forgetOpenShiftId(shiftId);
+  const payload = toShiftEndPayload(shiftId, endedBy, recordedAtIso, options);
+  const items = await loadOutbox();
+  const index = items.findIndex(item => item.type === 'shift_end' && item.payload.shiftId === shiftId);
+  const next = {
+    id: index >= 0 ? items[index].id : createOutboxId(),
+    type: 'shift_end' as const,
+    createdAt: payload.recordedAtIso,
+    payload,
+  };
+  if (index >= 0) items[index] = next;
+  else items.push(next);
+  await replaceOutbox(items);
 }
 
 /** One-time cleanup for previously saved accidental taps in a user's history. */
@@ -575,10 +665,14 @@ async function discardQueuedShift(shiftId: string) {
   const items = await loadOutbox();
   await Promise.all(
     items
-      .filter(item => item.clientShiftId === shiftId || ('shiftId' in item.payload && item.payload.shiftId === shiftId))
+      .filter(item =>
+        (item.type === 'shift_start' && item.clientShiftId === shiftId) ||
+        ('shiftId' in item.payload && item.payload.shiftId === shiftId)
+      )
       .map(item => removeOutboxItem(item.id))
   );
   await clearOfflineOpenShift();
+  await forgetOpenShiftId(shiftId);
 }
 
 export async function startLiveShift(params: {
@@ -590,6 +684,7 @@ export async function startLiveShift(params: {
 }): Promise<string> {
   const offline = await getOfflineOpenShift();
   if (offline && offline.userId === params.userId) {
+    await rememberOpenShiftId(offline.clientShiftId);
     return offline.clientShiftId;
   }
 
@@ -631,6 +726,7 @@ export async function startLiveShift(params: {
       SHIFT_START_REMOTE_MS
     );
 
+    await rememberOpenShiftId(ref.id);
     return ref.id;
   } catch {
     return queueShiftStart(params);
@@ -724,82 +820,65 @@ async function markVisitProcessedAfterShiftEnd(geofenceId?: string | null) {
   }
 }
 
-export async function endLiveShift(shiftId: string, endedBy = 'manual'): Promise<WriteResult> {
-  const nowIso = new Date().toISOString();
+async function queueLiveShiftEnd(shiftId: string, endedBy: string, recordedAtIso: string, options: ShiftEndOptions | undefined, geofenceId?: string | null) {
+  await queueShiftEnd(shiftId, endedBy, recordedAtIso, options);
+  await markVisitProcessedAfterShiftEnd(geofenceId);
+  return { queued: true, clientShiftId: shiftId } satisfies WriteResult;
+}
+
+export async function endLiveShift(shiftId: string, endedBy = 'manual', options?: ShiftEndOptions): Promise<WriteResult> {
+  const nowIso = options?.recordedAtIso || new Date().toISOString();
+  if (options?.timesChanged) {
+    assertValidActualRange(options.actualStartIso || '', options.actualEndIso || '');
+  }
+
   const offline = await getOfflineOpenShift();
   if (offline && offline.clientShiftId === shiftId) {
-    if (Date.parse(nowIso) - Date.parse(offline.recordedAtIso) < MIN_ACCOUNTABLE_SHIFT_MS) {
+    const endMs = Date.parse(options?.actualEndIso || nowIso);
+    const startMs = Date.parse(options?.actualStartIso || offline.recordedAtIso);
+    if (endMs - startMs < MIN_ACCOUNTABLE_SHIFT_MS) {
       await discardQueuedShift(shiftId);
       await markVisitProcessedAfterShiftEnd(offline.geofenceId);
       return { queued: false };
     }
-    await queueShiftEnd(shiftId, endedBy, nowIso);
-    await markVisitProcessedAfterShiftEnd(offline.geofenceId);
-    return { queued: true, clientShiftId: shiftId };
+    return queueLiveShiftEnd(shiftId, endedBy, nowIso, options, offline.geofenceId);
   }
 
-  const online = await isDeviceOnline();
+  let online = false;
+  try {
+    online = await raceTimeout(isDeviceOnline(), SHIFT_START_FALLBACK_MS);
+  } catch {
+    online = false;
+  }
   if (!online) {
-    await queueShiftEnd(shiftId, endedBy, nowIso);
-    await markVisitProcessedAfterShiftEnd(offline?.geofenceId);
-    return { queued: true, clientShiftId: shiftId };
+    return queueLiveShiftEnd(shiftId, endedBy, nowIso, options, offline?.geofenceId);
   }
 
   try {
-    const fs = getFirestore();
-    const ref = doc(fs, 'shifts', shiftId);
-    const snap = await getDoc(ref);
-    if (!snap.exists()) throw new Error('Shift not found.');
-    const data = { id: snap.id, ...snap.data() } as LiveShift;
-    if (data.status !== 'open') return { queued: false };
-
-    if (calcShiftSpanMs(data, new Date(nowIso).getTime()) < MIN_ACCOUNTABLE_SHIFT_MS) {
-      await deleteDoc(ref);
-      await markVisitProcessedAfterShiftEnd(data.geofenceId);
-      return { queued: false };
-    }
-
-    let { workPeriods, breakPeriods } = normalizeShiftPeriods(data);
-
-    if (isShiftPaused(data)) {
-      breakPeriods = closeLastOpenPeriod(breakPeriods, nowIso);
-    } else {
-      workPeriods = closeLastOpenPeriod(workPeriods, nowIso);
-    }
-
-    const compacted = compactClosedShiftPeriods(workPeriods, breakPeriods, new Date(nowIso).getTime());
-    if (!compacted.hasAccountableWork) {
-      await deleteDoc(ref);
-      await markVisitProcessedAfterShiftEnd(data.geofenceId);
-      return { queued: false };
-    }
-
-    await updateDoc(ref, {
-      workPeriods: compacted.workPeriods,
-      breakPeriods: compacted.breakPeriods,
-      status: 'closed',
-      locked: true,
-      paused: false,
-      endAt: serverTimestamp(),
-      endedBy,
-      updatedAt: serverTimestamp(),
-    });
-    try {
-      await markVisitProcessedAfterShiftEnd(data.geofenceId);
-    } catch (err) {
-      console.warn('Failed to mark geofence visit after shift end:', err);
+    const outcome = await raceTimeout(
+      commitRemoteShiftEnd(shiftId, endedBy, nowIso, options),
+      SHIFT_END_REMOTE_MS
+    );
+    if (outcome === 'missing') {
+      return queueLiveShiftEnd(shiftId, endedBy, nowIso, options, offline?.geofenceId);
     }
     return { queued: false };
   } catch {
-    await queueShiftEnd(shiftId, endedBy, nowIso);
-    return { queued: true, clientShiftId: shiftId };
+    return queueLiveShiftEnd(shiftId, endedBy, nowIso, options, offline?.geofenceId);
   }
 }
 
 export async function endLiveShiftForUser(userId: string, endedBy = 'geofence') {
-  const open = await getOpenLiveShift(userId);
-  if (!open) return;
-  await endLiveShift(open.id, endedBy);
+  const open = await getOpenLiveShift(userId, { timeoutMs: SHIFT_END_REMOTE_MS });
+  if (open) {
+    await endLiveShift(open.id, endedBy);
+    return;
+  }
+  const remembered = await getRememberedOpenShiftId();
+  if (!remembered) return;
+  const pending = await getPendingShiftEnds();
+  if (pending.some(item => item.shiftId === remembered)) return;
+  await endLiveShift(remembered, endedBy);
 }
 
 export type DaySummarySubmitRow = {
@@ -865,6 +944,146 @@ function replaceShiftWithActualRange(
   };
 }
 
+export function buildOfflineShiftEndWrite(
+  shift: LiveShift,
+  payload: ShiftEndPayload
+): { kind: 'skip' } | { kind: 'delete' } | { kind: 'update'; fields: Record<string, unknown> } {
+  if (shift.status !== 'open') return { kind: 'skip' };
+
+  const endIso = payload.timesChanged && payload.actualEndIso ? payload.actualEndIso : payload.recordedAtIso;
+  if (payload.timesChanged && payload.actualStartIso && payload.actualEndIso) {
+    const span = Date.parse(payload.actualEndIso) - Date.parse(payload.actualStartIso);
+    if (!Number.isFinite(span) || span < MIN_ACCOUNTABLE_SHIFT_MS) return { kind: 'delete' };
+    const periods = replaceShiftWithActualRange(
+      shift,
+      payload.actualStartIso,
+      payload.actualEndIso,
+      payload.originalStartIso || payload.actualStartIso,
+      payload.originalEndIso || payload.actualEndIso
+    );
+    return {
+      kind: 'update',
+      fields: {
+        ...periods,
+        status: 'closed',
+        locked: true,
+        paused: false,
+        endAt: payload.actualEndIso,
+        endedBy: payload.endedBy,
+        manuallyEdited: true,
+        editedBy: payload.editedBy || null,
+        originalStartAt: shift.originalStartAt || payload.originalStartIso || payload.actualStartIso,
+        originalEndAt: shift.originalEndAt || payload.originalEndIso || payload.actualEndIso,
+      },
+    };
+  }
+
+  if (calcShiftSpanMs(shift, new Date(endIso).getTime()) < MIN_ACCOUNTABLE_SHIFT_MS) {
+    return { kind: 'delete' };
+  }
+
+  let { workPeriods, breakPeriods } = normalizeShiftPeriods(shift);
+  if (isShiftPaused(shift)) {
+    breakPeriods = closeLastOpenPeriod(breakPeriods, endIso);
+  } else {
+    workPeriods = closeLastOpenPeriod(workPeriods, endIso);
+  }
+  const compacted = compactClosedShiftPeriods(workPeriods, breakPeriods, new Date(endIso).getTime());
+  if (!compacted.hasAccountableWork) return { kind: 'delete' };
+
+  return {
+    kind: 'update',
+    fields: {
+      workPeriods: compacted.workPeriods,
+      breakPeriods: compacted.breakPeriods,
+      status: 'closed',
+      locked: true,
+      paused: false,
+      endAt: endIso,
+      endedBy: payload.endedBy,
+    },
+  };
+}
+
+export function applyPendingShiftEnds(shifts: LiveShift[], pending: PendingShiftEnd[]): LiveShift[] {
+  if (!pending.length) return shifts;
+  const byId = new Map(pending.map(item => [item.shiftId, item]));
+  return shifts.map(shift => {
+    const end = byId.get(shift.id);
+    if (!end || shift.status !== 'open') return shift;
+    const write = buildOfflineShiftEndWrite(shift, end);
+    if (write.kind === 'update') {
+      return { ...shift, ...write.fields, status: 'closed' as const };
+    }
+    const endAt = end.actualEndIso || end.recordedAtIso;
+    const periods = closeShiftPeriodsAt(shift, endAt);
+    return { ...shift, ...periods, status: 'closed' as const, locked: true, paused: false, endAt };
+  });
+}
+
+async function commitRemoteShiftEnd(
+  shiftId: string,
+  endedBy: string,
+  recordedAtIso: string,
+  options?: ShiftEndOptions
+): Promise<'done' | 'missing'> {
+  const fs = getFirestore();
+  const ref = doc(fs, 'shifts', shiftId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return 'missing';
+  const data = { id: snap.id, ...snap.data() } as LiveShift;
+  const write = buildOfflineShiftEndWrite(data, toShiftEndPayload(shiftId, endedBy, recordedAtIso, options));
+  if (write.kind === 'skip') {
+    await forgetOpenShiftId(shiftId);
+    return 'done';
+  }
+  if (write.kind === 'delete') {
+    await deleteDoc(ref);
+    await forgetOpenShiftId(shiftId);
+    await markVisitProcessedAfterShiftEnd(data.geofenceId);
+    return 'done';
+  }
+  await updateDoc(ref, {
+    ...write.fields,
+    updatedAt: serverTimestamp(),
+  });
+  await forgetOpenShiftId(shiftId);
+  await markVisitProcessedAfterShiftEnd(data.geofenceId);
+  return 'done';
+}
+
+async function confirmDaySummaryOffline(params: {
+  userId: string;
+  rows: DaySummarySubmitRow[];
+  endedBy?: string;
+}): Promise<WriteResult> {
+  const openRow = params.rows.find(row => row.isOpen && !row.added && row.shiftId);
+  const otherChanges = params.rows.some(row => row.added || (row.timesChanged && !row.isOpen));
+  if (openRow?.shiftId) {
+    const result = await endLiveShift(openRow.shiftId, params.endedBy || 'manual', {
+      recordedAtIso: openRow.endIso,
+      timesChanged: openRow.timesChanged,
+      actualStartIso: openRow.startIso,
+      actualEndIso: openRow.endIso,
+      originalStartIso: openRow.originalStartIso,
+      originalEndIso: openRow.originalEndIso,
+      editedBy: params.userId,
+    });
+    if (!otherChanges) return result;
+    if (!result.queued) {
+      throw new Error('Connect to the internet to save edited or added hours.');
+    }
+    return {
+      ...result,
+      notice: 'Clock-out was saved on this phone. Connect to the internet to save other edited or added hours.',
+    };
+  }
+  if (otherChanges) {
+    throw new Error('Connect to the internet to save edited or added hours.');
+  }
+  throw new Error('Connect to the internet to confirm the day.');
+}
+
 export async function submitDaySummary(params: {
   userId: string;
   dateKey: string;
@@ -875,21 +1094,28 @@ export async function submitDaySummary(params: {
   if (!params.rows.length) throw new Error('Add at least one shift before confirming the day.');
   params.rows.forEach(row => assertValidActualRange(row.startIso, row.endIso));
 
-  const pendingChanges = params.rows.some(row => row.added || row.timesChanged);
-  const offline = await getOfflineOpenShift();
-  const online = await isDeviceOnline();
-  const openRow = params.rows.find(row => row.isOpen && !row.added);
-
-  if (!online || (offline && offline.userId === params.userId && pendingChanges)) {
-    if (pendingChanges) {
-      throw new Error('Connect to the internet to save edited or added hours.');
-    }
-    if (openRow?.shiftId) {
-      return endLiveShift(openRow.shiftId, params.endedBy || 'manual');
-    }
-    throw new Error('Connect to the internet to confirm the day.');
+  let online = false;
+  try {
+    online = await raceTimeout(isDeviceOnline(), SHIFT_START_FALLBACK_MS);
+  } catch {
+    online = false;
   }
+  if (!online) return confirmDaySummaryOffline(params);
 
+  try {
+    return await raceTimeout(commitDaySummaryRemote(params), SHIFT_SUMMARY_REMOTE_MS);
+  } catch (err) {
+    if (!isRetryableOfflineError(err)) throw err;
+    return confirmDaySummaryOffline(params);
+  }
+}
+
+async function commitDaySummaryRemote(params: {
+  userId: string;
+  dateKey: string;
+  rows: DaySummarySubmitRow[];
+  endedBy?: string;
+}): Promise<WriteResult> {
   const fs = getFirestore();
   const batch = writeBatch(fs);
   let openGeofenceId: string | null | undefined;

@@ -48,6 +48,7 @@ import TruckManagementScreen from '../screens/TruckManagementScreen';
 import DepartureChecklistScreen from '../screens/DepartureChecklistScreen';
 import RequiredDocumentsScreen from '../screens/RequiredDocumentsScreen';
 import ReceiptsExpensesScreen from '../screens/ReceiptsExpensesScreen';
+import AdminReceiptsScreen from '../screens/AdminReceiptsScreen';
 import WorkingHoursScreen from '../screens/WorkingHoursScreen';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 
@@ -86,6 +87,7 @@ export type RootStackParamList = {
   DepartureChecklist: undefined;
   RequiredDocuments: undefined;
   ReceiptsExpenses: undefined;
+  AdminReceipts: undefined;
   WorkingHours: { initialDateKey?: string; employeeUserId?: string; employeeName?: string } | undefined;
 };
 
@@ -351,6 +353,7 @@ export default function AppNavigator() {
             {SHOW_DEBUG_ONLY_OPERATIONS ? <Stack.Screen name="DepartureChecklist" component={DepartureChecklistScreen} /> : null}
             <Stack.Screen name="RequiredDocuments" component={RequiredDocumentsScreen} />
             <Stack.Screen name="ReceiptsExpenses" component={ReceiptsExpensesScreen} />
+            <Stack.Screen name="AdminReceipts" component={AdminReceiptsScreen} />
             <Stack.Screen name="WorkingHours" component={WorkingHoursScreen} />
           </>
         )}

@@ -9,6 +9,7 @@ import {
   Image,
   Modal,
   ScrollView,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -41,6 +42,7 @@ import {
 } from '../services/shifts';
 import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
+import { usePendingShiftEnds } from '../offline/usePendingShiftEnds';
 import CircularShiftTimer from '../components/CircularShiftTimer';
 import HomeBottomNav from '../components/HomeBottomNav';
 import DaySummaryModal from '../components/DaySummaryModal';
@@ -78,9 +80,24 @@ const QUICK_LINKS: QuickLink[] = [
   { label: 'Profile', icon: require('../../assets/Icons/Profile.png'), route: 'EditProfile' },
 ];
 
+const TIMER_MAX = 248;
+const BOTTOM_NAV_BAR = 72;
+
+function homeTimerSize(windowHeight: number, topInset: number, bottomInset: number, isAdmin: boolean) {
+  const short = windowHeight < 700;
+  const navHeight = BOTTOM_NAV_BAR + Math.max(bottomInset, 8);
+  const header = short ? 96 : 148;
+  const admin = isAdmin ? (short ? 68 : 100) : 0;
+  const underTimer = short ? 84 : 120;
+  const verticalPadding = topInset + 10 + 16;
+  const budget = windowHeight - navHeight - verticalPadding - header - admin - underTimer;
+  return Math.round(Math.max(168, Math.min(TIMER_MAX, budget)));
+}
+
 export default function HomeScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Home'>>();
   const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
   const authState = useAuth();
   const [userName, setUserName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -98,6 +115,7 @@ export default function HomeScreen() {
   const [daySummaryOpen, setDaySummaryOpen] = useState(false);
   const [shiftNowMs, setShiftNowMs] = useState(() => Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
+  const pendingShiftEnds = usePendingShiftEnds();
   const [requiredDocuments, setRequiredDocuments] = useState<string[]>([]);
   const [userCredentials, setUserCredentials] = useState<any[]>([]);
   const [credentialsLoaded, setCredentialsLoaded] = useState(false);
@@ -105,6 +123,8 @@ export default function HomeScreen() {
   const requiredDocsPromptedRef = useRef(false);
 
   const isAdmin = authState.status === 'admin' || profileIsAdmin;
+  const shortHome = windowHeight < 700;
+  const timerSize = homeTimerSize(windowHeight, insets.top, insets.bottom, isAdmin);
   const firstName = userName?.trim().split(/\s+/)[0] || '';
   const welcomeText = firstName ? `Hey, ${firstName}` : 'Hey there';
 
@@ -289,7 +309,12 @@ export default function HomeScreen() {
     return () => clearInterval(t);
   }, []);
 
-  const activeShift = useMemo(() => offlineShift || openShift, [offlineShift, openShift]);
+  const activeShift = useMemo(() => {
+    const shift = offlineShift || openShift;
+    if (!shift) return null;
+    if (pendingShiftEnds.some(item => item.shiftId === shift.id)) return null;
+    return shift;
+  }, [offlineShift, openShift, pendingShiftEnds]);
   const activeWorksites = useMemo(() => worksites.filter(worksite => worksite.active !== false), [worksites]);
   const insideWorksite = useMemo(
     () => activeWorksites.find(worksite => worksite.id === insideWorksiteId) || null,
@@ -452,8 +477,8 @@ export default function HomeScreen() {
       <PizzaFireBackground />
 
       <SafeAreaView style={styles.safe} edges={['left', 'right']}>
-        <View style={[styles.content, { paddingTop: insets.top + 10 }]}>
-          <View style={styles.header}>
+        <View style={[styles.content, { paddingTop: insets.top + (shortHome ? 6 : 10) }]}>
+          <View style={[styles.header, shortHome && styles.headerCompact]}>
             <TouchableOpacity
               onPress={() => navigation.navigate('EditProfile')}
               activeOpacity={0.85}
@@ -463,21 +488,21 @@ export default function HomeScreen() {
               {(avatarUrl || customAvatarUrl) ? (
                 <Image
                   source={resolveAvatarSource(avatarUrl, customAvatarUrl)}
-                  style={styles.avatar}
+                  style={[styles.avatar, shortHome && styles.avatarCompact]}
                   resizeMode="cover"
                 />
               ) : (
                 <Image
                   source={require('../../assets/Pizza Wala Logo.png')}
-                  style={styles.logoFallback}
+                  style={[styles.logoFallback, shortHome && styles.avatarCompact]}
                   resizeMode="contain"
                 />
               )}
             </TouchableOpacity>
-            <Text style={styles.welcomeTitle}>{welcomeText}</Text>
+            <Text style={[styles.welcomeTitle, shortHome && styles.welcomeTitleCompact]}>{welcomeText}</Text>
           </View>
 
-          <View style={styles.timerSection}>
+          <View style={[styles.timerSection, shortHome && styles.timerSectionCompact]}>
             <TouchableOpacity
               activeOpacity={0.92}
               onPress={() => {
@@ -498,12 +523,13 @@ export default function HomeScreen() {
                 elapsedMs={timerElapsedMs}
                 state={timerState}
                 label={timerLabel}
+                size={timerSize}
               />
             </TouchableOpacity>
 
-            <Text style={styles.tapHint}>{tapHint}</Text>
+            <Text style={[styles.tapHint, shortHome && styles.tapHintCompact]}>{tapHint}</Text>
 
-            <View style={styles.statusBlock}>
+            <View style={[styles.statusBlock, shortHome && styles.statusBlockCompact]}>
               {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
               <TouchableOpacity style={styles.selectWorksiteButton} onPress={openWorksitePicker} activeOpacity={0.82}>
                 <Icons.location color={PIZZA_FIRE.gold} width={16} height={16} />
@@ -520,7 +546,7 @@ export default function HomeScreen() {
 
           {isAdmin ? (
             <TouchableOpacity
-              style={styles.adminButton}
+              style={[styles.adminButton, shortHome && styles.adminButtonCompact]}
               onPress={() => navigation.navigate('AdminOptions')}
               activeOpacity={0.88}
             >
@@ -548,7 +574,7 @@ export default function HomeScreen() {
           setDaySummaryOpen(false);
           await refreshOfflineShift();
           if (result.queued) {
-            Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
           }
         }}
       />
@@ -676,17 +702,25 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 8,
-    paddingBottom: 130,
+    paddingBottom: 16,
   },
   header: {
     alignItems: 'center',
     marginBottom: 20,
+  },
+  headerCompact: {
+    marginBottom: 8,
   },
   avatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
     backgroundColor: PIZZA_FIRE.cheese,
+  },
+  avatarCompact: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
   },
   logoFallback: {
     width: 80,
@@ -701,12 +735,20 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.textPrimary,
     textAlign: 'center',
   },
+  welcomeTitleCompact: {
+    marginTop: 6,
+    fontSize: 22,
+  },
   timerSection: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 18,
     paddingBottom: 8,
+  },
+  timerSectionCompact: {
+    paddingTop: 4,
+    paddingBottom: 0,
   },
   tapHint: {
     marginTop: 16,
@@ -715,6 +757,9 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.textSecondary,
     textAlign: 'center',
     letterSpacing: 0.2,
+  },
+  tapHintCompact: {
+    marginTop: 8,
   },
   selectWorksiteButton: {
     marginTop: 12,
@@ -741,6 +786,10 @@ const styles = StyleSheet.create({
     gap: 8,
     minHeight: 46,
   },
+  statusBlockCompact: {
+    marginTop: 8,
+    minHeight: 0,
+  },
   worksiteRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -764,6 +813,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 12,
     marginTop: 33,
+  },
+  adminButtonCompact: {
+    marginTop: 8,
+    paddingVertical: 6,
   },
   adminIcon: {
     width: 28,

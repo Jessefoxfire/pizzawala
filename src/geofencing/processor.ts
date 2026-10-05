@@ -1,18 +1,13 @@
 import { Alert, Vibration } from 'react-native';
 import {
-  collection,
   doc,
-  getDocs,
   getFirestore,
-  limit,
-  query,
   serverTimestamp,
   setDoc,
-  where,
 } from '@react-native-firebase/firestore';
 import type { Geofence } from '../types';
 import type { GeofenceEventSource, GeofenceEventType, GeofencePromptPayload } from './types';
-import { endLiveShiftForUser, startLiveShift } from '../services/shifts';
+import { endLiveShiftForUser, hasClockedInShift, startLiveShift } from '../services/shifts';
 import {
   getDeviceId,
   saveLastGeofenceEvent,
@@ -236,16 +231,7 @@ export const endShift = async (userId: string, _endTime?: Date) => {
 
 export const isShiftInProgress = async (userId: string): Promise<boolean> => {
   try {
-    const fs = getFirestore();
-    const shiftsRef = collection(fs, 'shifts');
-    const q = query(
-      shiftsRef,
-      where('userId', '==', userId),
-      where('status', '==', 'open'),
-      limit(1)
-    );
-    const snap = await getDocs(q);
-    return !snap.empty;
+    return await hasClockedInShift(userId);
   } catch (error) {
     console.warn('Failed to check shift status:', error);
     return false;

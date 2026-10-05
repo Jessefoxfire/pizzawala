@@ -5,7 +5,7 @@ This branch prepares the single, standalone iOS app for the shared PizzaWala 2.6
 - App name: `PizzaWala`
 - Bundle identifier: `com.pizzawala.app`
 - Marketing version: `2.6`
-- Build number: `17`
+- Build number: `20`
 - Apple team currently recorded by the project: `3P23GA8YKC`
 
 Running from the shared PizzaWala scheme or installing an archive replaces the existing PizzaWala installation because both use the same bundle identifier.
@@ -114,7 +114,7 @@ In Xcode:
 
 This is a standalone Release build. Xcode embeds `main.jsbundle` in the app, so do not run `npm start` or Metro. The installed app works without Jesse's Mac, a cable, or a development server.
 
-If App Store Connect says build `17` was already used, increment **Current Project Version** to the next unused integer for both Debug and Release configurations, commit that change, then archive again. Do not change the `2.6` marketing version unless the intended App Store version is different.
+If App Store Connect says build `20` was already used, increment **Current Project Version** to the next unused integer for both Debug and Release configurations, commit that change, then archive again. Do not change the `2.6` marketing version unless the intended App Store version is different.
 
 ## 7. Restore the permanent PizzaWala download page
 

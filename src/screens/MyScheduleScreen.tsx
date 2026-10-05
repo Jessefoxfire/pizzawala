@@ -17,6 +17,7 @@ import {
   calcWorkedMsInRange,
   formatShiftDuration,
   getTimestampMs,
+  applyPendingShiftEnds,
   isShiftPaused,
   pauseLiveShift,
   resumeLiveShift,
@@ -24,6 +25,7 @@ import {
   startLiveShift,
   type LiveShift,
 } from '../services/shifts';
+import { usePendingShiftEnds } from '../offline/usePendingShiftEnds';
 import DaySummaryModal from '../components/DaySummaryModal';
 import HoursChangeBadge from '../components/HoursChangeBadge';
 import { hoursChangeKind } from '../utils/workingHours';
@@ -164,15 +166,20 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
   const [expandedCompletedGroups, setExpandedCompletedGroups] = useState<Record<string, boolean>>({});
 
   const userId = auth.currentUser?.uid || null;
+  const pendingShiftEnds = usePendingShiftEnds();
+  const shiftsForView = useMemo(
+    () => applyPendingShiftEnds(historyShifts, pendingShiftEnds),
+    [historyShifts, pendingShiftEnds]
+  );
 
   const openShift = useMemo(
-    () => historyShifts.find(s => s.status === 'open' && !s.isScheduled) || null,
-    [historyShifts]
+    () => shiftsForView.find(s => s.status === 'open' && !s.isScheduled) || null,
+    [shiftsForView]
   );
 
   const liveShifts = useMemo(
-    () => historyShifts.filter(s => !s.isScheduled && (s.status === 'open' || s.status === 'closed')),
-    [historyShifts]
+    () => shiftsForView.filter(s => !s.isScheduled && (s.status === 'open' || s.status === 'closed')),
+    [shiftsForView]
   );
 
   useEffect(() => {
@@ -780,8 +787,11 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
         userId={userId}
         activeShift={openShift}
         onCancel={() => setDaySummaryOpen(false)}
-        onConfirmed={() => {
+        onConfirmed={result => {
           setDaySummaryOpen(false);
+          if (result.queued) {
+            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
+          }
         }}
       />
 

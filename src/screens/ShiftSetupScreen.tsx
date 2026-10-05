@@ -44,6 +44,7 @@ import {
 import DaySummaryModal from '../components/DaySummaryModal';
 import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
+import { usePendingShiftEnds } from '../offline/usePendingShiftEnds';
 import { useOffline } from '../context/OfflineContext';
 import {
   collection,
@@ -99,6 +100,14 @@ export default function ShiftSetupScreen() {
     center?: { lat: number; lng: number };
   } | null>(null);
   const [offlineShift, setOfflineShift] = useState<LiveShift | null>(null);
+  const pendingShiftEnds = usePendingShiftEnds();
+  const openShift = useMemo(() => {
+    const fromFirestore = historyShifts.find(s => s.status === 'open' && !s.isScheduled) || null;
+    const shift = offlineShift || fromFirestore;
+    if (!shift) return null;
+    if (pendingShiftEnds.some(item => item.shiftId === shift.id)) return null;
+    return shift;
+  }, [historyShifts, offlineShift, pendingShiftEnds]);
   const { isOnline, pendingCount } = useOffline();
   const activeWorksites = useMemo(() => worksites.filter(worksite => worksite.active !== false), [worksites]);
   const displayedWorksite = openShift
@@ -125,12 +134,6 @@ export default function ShiftSetupScreen() {
       void refreshOfflineShift();
     });
   }, [refreshOfflineShift]);
-
-  const openShift = useMemo(() => {
-    const fromFirestore = historyShifts.find(s => s.status === 'open' && !s.isScheduled) || null;
-    if (offlineShift) return offlineShift;
-    return fromFirestore;
-  }, [historyShifts, offlineShift]);
 
   const shiftPaused = openShift ? isShiftPaused(openShift) : false;
 
@@ -594,7 +597,7 @@ export default function ShiftSetupScreen() {
           setLocalStartAt(null);
           await refreshOfflineShift();
           if (result.queued) {
-            Alert.alert('Saved offline', 'Shift end will sync when you are back online.');
+            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
           }
         }}
       />

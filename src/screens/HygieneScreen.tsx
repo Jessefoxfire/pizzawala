@@ -25,7 +25,6 @@ import {
   getFirestore,
   onSnapshot,
   query,
-  where,
 } from '@react-native-firebase/firestore';
 import { auth } from '../services/firebase';
 import { useAuth } from '../auth/useAuth';
@@ -65,7 +64,7 @@ import {
 } from '../utils/hygieneTemperatureLogs';
 import { dateToTimeString, timeStringToDate } from '../utils/eventDays';
 import { DEFAULT_COOLING_UNITS, saveCoolingUnits, subscribeCoolingUnits, type CoolingUnit } from '../services/hygieneUnits';
-import { isPersonnelDocument } from '../utils/personnelDocuments';
+import { isSharedTeamHygieneDocument } from '../utils/personnelDocuments';
 import {
   createCustomHygieneDocumentFolder,
   deleteDefaultHygieneDocumentFolder,
@@ -200,22 +199,22 @@ export default function HygieneScreen({ navigation }: Props) {
       setExportsList(items.slice(0, 10));
     });
 
+    return () => {
+      unsubTemps();
+      unsubExports();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!userId) {
       setCredentials([]);
-      return () => {
-        unsubTemps();
-        unsubExports();
-      };
+      return undefined;
     }
 
-    const credentialQuery = query(
-      collection(fs, 'hygieneCredentials'),
-      where('employeeUid', '==', userId)
-    );
-    const unsubCredentials = onSnapshot(credentialQuery, snap => {
+    return onSnapshot(collection(getFirestore(), 'hygieneCredentials'), snap => {
       const items = snap.docs
         .map(docSnap => ({ id: docSnap.id, ...docSnap.data() }))
-        .filter(item => !isPersonnelDocument(item));
+        .filter(item => isSharedTeamHygieneDocument(item, teamId));
       items.sort((a: any, b: any) => {
         const aMs = new Date(a.uploadedAtIso || 0).getTime();
         const bMs = new Date(b.uploadedAtIso || 0).getTime();
@@ -223,13 +222,7 @@ export default function HygieneScreen({ navigation }: Props) {
       });
       setCredentials(items);
     });
-
-    return () => {
-      unsubTemps();
-      unsubCredentials();
-      unsubExports();
-    };
-  }, [userId]);
+  }, [teamId, userId]);
 
   useEffect(() => {
     if (!userId) {
@@ -301,19 +294,20 @@ export default function HygieneScreen({ navigation }: Props) {
     ],
     [customDocFolders, docFolderPreferences]
   );
+  const visibleFolderKeys = useMemo(() => documentFolders.map(folder => folder.key), [documentFolders]);
   const folderCounts = useMemo(
     () =>
       Object.fromEntries(
         documentFolders.map(folder => [
           folder.key,
-          credentialsInFolder(credentials, folder.key).length,
+          credentialsInFolder(credentials, folder.key, visibleFolderKeys).length,
         ])
       ) as Record<HygieneDocumentFolderKey, number>,
-    [credentials, documentFolders]
+    [credentials, documentFolders, visibleFolderKeys]
   );
   const folderDocuments = useMemo(
-    () => (openDocFolder ? credentialsInFolder(credentials, openDocFolder) : []),
-    [credentials, openDocFolder]
+    () => (openDocFolder ? credentialsInFolder(credentials, openDocFolder, visibleFolderKeys) : []),
+    [credentials, openDocFolder, visibleFolderKeys]
   );
 
   const updateTemperature = (targetKey: string, value: string) => {
@@ -1627,6 +1621,7 @@ export default function HygieneScreen({ navigation }: Props) {
                     </TouchableOpacity>
                   </View>
                   <Text style={styles.muted}>Uploaded: {formatDateTime(item.uploadedAt, item.uploadedAtIso)}</Text>
+                  {item.employeeName ? <Text style={styles.muted}>{item.employeeName}</Text> : null}
                   {openDocFolder === 'belehrung' ? (
                     <Text style={styles.muted}>
                       Education due: {item.nextEducationDueAtIso ? new Date(item.nextEducationDueAtIso).toLocaleDateString() : 'Unknown'}

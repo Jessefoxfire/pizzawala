@@ -80,7 +80,19 @@ export function inferHygieneDocumentFolder(item: {
 
 export function credentialsInFolder<T extends Parameters<typeof inferHygieneDocumentFolder>[0]>(
   items: T[],
-  folder: HygieneDocumentFolderKey
+  folder: HygieneDocumentFolderKey,
+  visibleFolderKeys?: readonly string[]
 ) {
-  return items.filter(item => inferHygieneDocumentFolder(item) === folder);
+  return items.filter(item => displayHygieneFolderKey(item, visibleFolderKeys) === folder);
+}
+
+/** Keep a stored custom folder when that folder is on screen. Otherwise show the file under Other. */
+export function displayHygieneFolderKey(
+  item: Parameters<typeof inferHygieneDocumentFolder>[0],
+  visibleFolderKeys?: readonly string[]
+) {
+  const inferred = inferHygieneDocumentFolder(item);
+  if (!visibleFolderKeys || visibleFolderKeys.includes(inferred)) return inferred;
+  if (visibleFolderKeys.includes('other')) return 'other';
+  return visibleFolderKeys[0] || inferred;
 }
