@@ -36,6 +36,13 @@
     </queries>
 
 
+    <supports-screens
+        android:anyDensity="true"
+        android:smallScreens="true"
+        android:normalScreens="true"
+        android:largeScreens="true"
+        android:xlargeScreens="true" />
+
     <application
         android:name=".MainApplication"
         android:label="@string/app_name"

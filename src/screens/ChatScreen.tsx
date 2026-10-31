@@ -853,7 +853,7 @@ export default function ChatScreen({ navigation, route }: any) {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 56 : 0}
+        keyboardVerticalOffset={0}
       >
         <View style={{ flex: 1 }}>
             {isLoading ? (

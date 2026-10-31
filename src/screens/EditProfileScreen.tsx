@@ -31,6 +31,7 @@ import { Avatars, type AvatarKey } from '../../assets/avatars';
 import { ensureImagePickerPermission } from '../utils/imagePickerPermissions';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { formColumnFrame, useAppLayout } from '../theme/responsiveLayout';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -98,6 +99,7 @@ const emptyCompliance = (): GermanComplianceProfile => ({
 });
 
 export default function EditProfileScreen({ navigation, route }: NativeStackScreenProps<RootStackParamList, 'EditProfile'>) {
+  const layout = useAppLayout();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
@@ -421,7 +423,7 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
           )}
         </View>
 
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView contentContainerStyle={[styles.scrollContent, formColumnFrame(layout)]}>
           <View style={styles.avatarSection}>
             <TouchableOpacity
               style={styles.mainAvatarContainer}

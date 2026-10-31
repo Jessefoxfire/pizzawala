@@ -24,10 +24,12 @@ import { filterReceipts, summarizeReceipts } from '../domain/receipts/totals';
 import { receiptTypeLabel, type ReceiptType } from '../domain/receipts/types';
 import { updateReceiptDetails } from '../services/receipts';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { formColumnFrame, useAppLayout } from '../theme/responsiveLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminReceipts'>;
 
 export default function AdminReceiptsScreen({ navigation }: Props) {
+  const layout = useAppLayout();
   const [receipts, setReceipts] = useState<NormalizedReceipt[]>([]);
   const [events, setEvents] = useState<{ id: string; title: string }[]>([]);
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -147,7 +149,7 @@ export default function AdminReceiptsScreen({ navigation }: Props) {
         <Text style={styles.title}>Receipts</Text>
         <View style={styles.headerSpacer} />
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, formColumnFrame(layout)]}>
         <View style={styles.monthRow}>
           <TouchableOpacity onPress={() => setMonth(current => shiftMonth(current, -1))}><Text style={styles.monthArrow}>‹</Text></TouchableOpacity>
           <Text style={styles.monthTitle}>RECEIPTS · {monthTitle(month).toUpperCase()}</Text>

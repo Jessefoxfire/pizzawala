@@ -18,6 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, tilePixelWidth, useAppLayout } from '../theme/responsiveLayout';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import { useOffline } from '../context/OfflineContext';
 import {
@@ -42,6 +43,8 @@ type AdminTile = {
 };
 
 export default function AdminOptionsScreen({ navigation }: Props) {
+  const layout = useAppLayout();
+  const tileWidth = tilePixelWidth(layout);
   const insets = useSafeAreaInsets();
   const { syncBannerVisible } = useOffline();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
@@ -191,7 +194,7 @@ export default function AdminOptionsScreen({ navigation }: Props) {
     },
   ];
 
-  const headerTopInset = insets.top + (syncBannerVisible ? 18 : 8);
+  const headerTopInset = insets.top + (syncBannerVisible ? 18 : layout.isShort ? 6 : 8);
 
   return (
     <View style={styles.screen}>
@@ -213,14 +216,15 @@ export default function AdminOptionsScreen({ navigation }: Props) {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingHorizontal: layout.space.screenX }]}>
         <View style={styles.tileGrid}>
           {adminTiles.map((tile, index) => (
             <TouchableOpacity
               key={tile.label}
               style={[
                 styles.menuTile,
-                adminTiles.length % 3 === 1 && index === adminTiles.length - 1 && styles.menuTileCentered,
+                { width: tileWidth },
+                !layout.isTablet && adminTiles.length % 3 === 1 && index === adminTiles.length - 1 && styles.menuTileCentered,
               ]}
               onPress={tile.onPress}
               activeOpacity={0.8}
@@ -234,7 +238,7 @@ export default function AdminOptionsScreen({ navigation }: Props) {
 
       <Modal visible={adminModalVisible} transparent animationType="fade">
         <View style={styles.modalBg}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, sheetCardStyle(layout)]}>
             <Text style={styles.modalTitle}>Update Admin Role</Text>
             <Text style={styles.modalSub}>Select the user to update.</Text>
             
@@ -278,7 +282,7 @@ export default function AdminOptionsScreen({ navigation }: Props) {
       </Modal>
       <Modal visible={userPickerVisible} transparent animationType="slide">
         <View style={styles.modalBg}>
-          <View style={[styles.modalCard, { maxHeight: '80%' }]}>
+          <View style={[styles.modalCard, sheetCardStyle(layout), { maxHeight: '80%' }]}>
             <Text style={styles.modalTitle}>Select User</Text>
             
             <TextInput

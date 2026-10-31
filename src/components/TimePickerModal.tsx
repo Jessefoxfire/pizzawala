@@ -3,6 +3,7 @@ import { Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { dateToTimeString, timeStringToDate } from '../utils/eventDays';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 
 type Props = {
   visible: boolean;
@@ -13,6 +14,7 @@ type Props = {
 };
 
 export default function TimePickerModal({ visible, value, title = 'Select time', onClose, onConfirm }: Props) {
+  const layout = useAppLayout();
   const [draft, setDraft] = useState(() => timeStringToDate(value));
 
   useEffect(() => {
@@ -35,7 +37,7 @@ export default function TimePickerModal({ visible, value, title = 'Select time',
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.card}>
+        <View style={[styles.card, sheetCardStyle(layout)]}>
           <Text style={styles.title}>{title}</Text>
           <DateTimePicker
             value={draft}

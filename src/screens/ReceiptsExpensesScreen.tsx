@@ -41,12 +41,14 @@ import {
 import { recognizeReceiptImages } from '../services/receiptRecognition';
 import { submitReceipt } from '../services/receipts';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { formColumnFrame, useAppLayout } from '../theme/responsiveLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ReceiptsExpenses'>;
 
 const EMPTY_TOUCH: ReviewTouch = { merchant: false, date: false, amount: false, invoice: false, vat: false };
 
 export default function ReceiptsExpensesScreen({ navigation }: Props) {
+  const layout = useAppLayout();
   const userId = auth.currentUser?.uid || null;
   const authState = useAuth();
   const isAdmin = authState.status === 'admin';
@@ -261,7 +263,7 @@ export default function ReceiptsExpensesScreen({ navigation }: Props) {
         <Text style={styles.title}>Receipts</Text>
         <View style={styles.headerSpacer} />
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, formColumnFrame(layout)]}>
         <Text style={styles.subtitle}>Scan a Versorgung or Firma receipt, check the amount, then save.</Text>
         <TouchableOpacity style={styles.scanButton} onPress={() => setChooser(true)}>
           <Text style={styles.scanText}>+ Receipt</Text>

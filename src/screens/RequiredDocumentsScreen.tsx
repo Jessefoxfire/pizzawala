@@ -25,6 +25,7 @@ import { auth } from '../services/firebase';
 import { formatDateTime } from '../services/hygiene';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { formColumnFrame, useAppLayout } from '../theme/responsiveLayout';
 import {
   CHECKLIST_HELP,
   GERMAN_COMPLIANCE_INTRO,
@@ -41,6 +42,7 @@ type UserProfile = {
 };
 
 export default function RequiredDocumentsScreen({ navigation }: Props) {
+  const layout = useAppLayout();
   const { pickAndUpload, nameConfirmModal, sourcePickerModal } = useHygieneCredentialUpload();
   const userId = auth.currentUser?.uid || null;
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -147,7 +149,7 @@ export default function RequiredDocumentsScreen({ navigation }: Props) {
         <View style={{ width: 56 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, formColumnFrame(layout)]}>
         {showIntro && introChecked ? <>
         <View style={styles.heroCard}>
           <Text style={styles.heroEyebrow}>DOCUMENT UPLOADS</Text>

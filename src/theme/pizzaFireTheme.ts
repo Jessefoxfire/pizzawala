@@ -58,6 +58,16 @@ export const PIZZA_FIRE_RADIUS = {
   pill: 999,
 } as const;
 
+/** Base spacing. Scale these through `useAppLayout()` — do not copy height < 700 checks. */
+export const PIZZA_FIRE_SPACE = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  screen: 20,
+} as const;
+
 export const PIZZA_FIRE_SHADOW = {
   glow: {
     shadowColor: '#FF6B2C',

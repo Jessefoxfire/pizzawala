@@ -17,10 +17,12 @@ import { loginWithEmail, resetPassword } from '../services/firebase';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { useAppLayout } from '../theme/responsiveLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
 export default function LoginScreen({ navigation }: Props) {
+  const layout = useAppLayout();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -94,10 +96,14 @@ export default function LoginScreen({ navigation }: Props) {
             contentContainerStyle={styles.scrollContent}
             keyboardShouldPersistTaps="handled"
           >
-            <View style={styles.content}>
+            <View style={[styles.content, { maxWidth: layout.formMaxWidth, width: '100%', alignSelf: 'center' }]}>
               <Image
                 source={require('../../assets/Pizza Wala Logo.png')}
-                style={styles.logo}
+                style={[
+                  styles.logo,
+                  layout.isTablet && { width: 240, height: 120 },
+                  layout.isShort && { width: 148, height: 74 },
+                ]}
                 resizeMode="contain"
               />
               <Text style={styles.title}>PizzaWala</Text>

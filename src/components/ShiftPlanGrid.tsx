@@ -1,6 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { useAppLayout } from '../theme/responsiveLayout';
 import type { ShiftPlanCell, ShiftPlanGrid } from '../utils/shiftPlanGrid';
 
 type Props = {
@@ -13,17 +14,20 @@ const NAME_W = 92;
 const DAY_W = 108;
 
 export default function ShiftPlanGrid({ grid, onPressEmployee, onPressCell }: Props) {
+  const layout = useAppLayout();
+  const nameW = layout.isTablet ? 120 : NAME_W;
+  const dayW = layout.isTablet ? 128 : DAY_W;
   return (
     <View style={styles.wrap}>
       <Text style={styles.title}>{grid.title}</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View>
           <View style={styles.row}>
-            <View style={[styles.headerCell, styles.nameCell]}>
+            <View style={[styles.headerCell, styles.nameCell, { width: nameW }]}>
               <Text style={styles.headerText}>MITARBEITER</Text>
             </View>
             {grid.dayHeaders.map(day => (
-              <View key={day.dateKey} style={[styles.headerCell, styles.dayCell]}>
+              <View key={day.dateKey} style={[styles.headerCell, styles.dayCell, { width: dayW }]}>
                 <Text style={styles.headerText}>{day.weekday}</Text>
                 <Text style={styles.headerSub}>{day.dateLabel}</Text>
               </View>
@@ -33,7 +37,7 @@ export default function ShiftPlanGrid({ grid, onPressEmployee, onPressCell }: Pr
           {grid.rows.map(row => (
             <View key={row.userId} style={styles.row}>
               <TouchableOpacity
-                style={[styles.bodyCell, styles.nameCell]}
+                style={[styles.bodyCell, styles.nameCell, { width: nameW }]}
                 onPress={() => onPressEmployee?.(row.userId, row.userName)}
                 activeOpacity={0.8}
               >
@@ -44,7 +48,7 @@ export default function ShiftPlanGrid({ grid, onPressEmployee, onPressCell }: Pr
               {row.cells.map(cell => (
                 <TouchableOpacity
                   key={cell.dateKey}
-                  style={[styles.bodyCell, styles.dayCell, cell.empty && styles.emptyCell]}
+                  style={[styles.bodyCell, styles.dayCell, { width: dayW }, cell.empty && styles.emptyCell]}
                   onPress={() => onPressCell?.(cell, row.userId, row.userName)}
                   activeOpacity={cell.empty ? 1 : 0.8}
                   disabled={cell.empty || !onPressCell}
@@ -56,11 +60,11 @@ export default function ShiftPlanGrid({ grid, onPressEmployee, onPressCell }: Pr
           ))}
 
           <View style={styles.row}>
-            <View style={[styles.footerCell, styles.nameCell]}>
+            <View style={[styles.footerCell, styles.nameCell, { width: nameW }]}>
               <Text style={styles.footerText}>TAGESBESATZUNG</Text>
             </View>
             {grid.staffing.map(item => (
-              <View key={item.dateKey} style={[styles.footerCell, styles.dayCell]}>
+              <View key={item.dateKey} style={[styles.footerCell, styles.dayCell, { width: dayW }]}>
                 <Text style={styles.footerText}>{item.label}</Text>
               </View>
             ))}

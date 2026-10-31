@@ -20,10 +20,12 @@ import { Icons } from '../components/Icons';
 import { resolveAvatarSource } from '../utils/avatar';
 import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { formColumnFrame, useAppLayout } from '../theme/responsiveLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ManualShiftEntry'>;
 
 export default function ManualShiftEntryScreen({ navigation }: Props) {
+  const layout = useAppLayout();
   const [users, setUsers] = useState<any[]>([]);
   const [worksites, setWorksites] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,7 +121,7 @@ export default function ManualShiftEntryScreen({ navigation }: Props) {
         <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, formColumnFrame(layout)]}>
         <Text style={styles.label}>1. Select Team Member</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.userPicker}>
           {users.map(u => (

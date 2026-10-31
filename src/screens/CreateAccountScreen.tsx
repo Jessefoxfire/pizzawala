@@ -23,6 +23,7 @@ import { ensureImagePickerPermission } from '../utils/imagePickerPermissions';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { useAppLayout } from '../theme/responsiveLayout';
 
 type CreateAccountScreenProps = NativeStackScreenProps<RootStackParamList, 'CreateAccount'>;
 
@@ -31,6 +32,7 @@ const avatarOptions: { id: AvatarKey }[] = Object.keys(Avatars).map(key => ({
 }));
 
 export default function CreateAccountScreen({ navigation }: CreateAccountScreenProps) {
+  const layout = useAppLayout();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -117,7 +119,7 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
     <PizzaFireScreen>
         <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
-            <View style={styles.card}>
+            <View style={[styles.card, { maxWidth: layout.formMaxWidth }]}>
               <TouchableOpacity style={styles.homeButton} onPress={() => navigation.replace('Login')}>
                 <View style={styles.homeButtonContent}>
                   <Icons.arrowLeft color="#EBDCCB" width={16} height={16} />
@@ -210,7 +212,7 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   scrollContainer: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, paddingVertical: 60 },
-  card: { width: '100%', maxWidth: 380, backgroundColor: PIZZA_FIRE.surfaceInset, paddingHorizontal: 24, paddingVertical: 32, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
+  card: { width: '100%', backgroundColor: PIZZA_FIRE.surfaceInset, paddingHorizontal: 24, paddingVertical: 32, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
   homeButton: { alignSelf: 'flex-start', marginBottom: 16, backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginTop: -8 },
   homeButtonContent: { flexDirection: 'row', alignItems: 'center' },
   homeButtonText: { fontSize: 13, color: PIZZA_FIRE.textSecondary, fontWeight: '600', marginLeft: 6 },

@@ -10,7 +10,6 @@ import {
   Modal,
   TextInput,
   ScrollView,
-  Dimensions,
   Image,
 } from 'react-native';
 import { CalendarList } from 'react-native-calendars';
@@ -31,6 +30,7 @@ import { Avatars, AvatarKey } from '../../assets/avatars';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { CalendarMonthHeader, HIDDEN_CALENDAR_HEADER_THEME, toMonthStartKey } from '../components/PizzaFireCalendar';
+import { calendarMonthMetrics, sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminCalendar'>;
 
@@ -46,6 +46,8 @@ type ScheduledShift = {
 };
 
 export default function AdminCalendarScreen({ navigation }: Props) {
+  const layout = useAppLayout();
+  const cal = calendarMonthMetrics(layout);
   const [shifts, setShifts] = useState<ScheduledShift[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -147,7 +149,11 @@ export default function AdminCalendarScreen({ navigation }: Props) {
 
     return (
       <TouchableOpacity 
-        style={[styles.dayContainer, isSelected && styles.daySelected]} 
+        style={[
+          styles.dayContainer,
+          { height: cal.dayHeight, width: cal.dayWidth },
+          isSelected && styles.daySelected,
+        ]} 
         onPress={() => {
           setSelectedDate(dateString);
           setViewMode('day');
@@ -295,8 +301,8 @@ export default function AdminCalendarScreen({ navigation }: Props) {
               scrollEnabled={false}
               firstDay={1}
               dayComponent={DayComponent}
-              style={[styles.calendar, { height: CAL_HEIGHT }]}
-              calendarHeight={CAL_HEIGHT}
+              style={[styles.calendar, { height: cal.height }]}
+              calendarHeight={cal.height}
             />
           </View>
         ) : viewMode === 'week' ? (
@@ -343,7 +349,7 @@ export default function AdminCalendarScreen({ navigation }: Props) {
 
       <Modal visible={editModalVisible} transparent animationType="fade">
         <View style={styles.modalBg}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, sheetCardStyle(layout)]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Shift</Text>
               <TouchableOpacity onPress={() => handleDelete(editingShift?.id || '')}>
@@ -396,10 +402,6 @@ export default function AdminCalendarScreen({ navigation }: Props) {
   );
 }
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-const CAL_HEIGHT = SCREEN_HEIGHT - 232;
-const DAY_H = Math.floor(CAL_HEIGHT / 6);
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
   header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: 'transparent', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
@@ -420,8 +422,6 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   dayContainer: {
-    height: DAY_H,
-    width: SCREEN_WIDTH / 7 - 4,
     padding: 2,
     alignItems: 'center',
     justifyContent: 'flex-start',

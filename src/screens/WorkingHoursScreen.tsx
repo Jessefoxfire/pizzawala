@@ -30,6 +30,7 @@ import PizzaFireBackground from '../components/PizzaFireBackground';
 import { Icons } from '../components/Icons';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import { formatTimeRange } from '../utils/eventDays';
 import { auth } from '../services/firebase';
 import { useAuth } from '../auth/useAuth';
@@ -125,6 +126,7 @@ const DATE_ITEM_WIDTH = 64;
 const VISIBLE_DATE_COUNT = 5;
 
 export default function WorkingHoursScreen({ navigation, route }: Props) {
+  const layout = useAppLayout();
   const insets = useSafeAreaInsets();
   const { syncBannerVisible } = useOffline();
   const currentUserId = auth.currentUser?.uid || null;
@@ -519,13 +521,13 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     }
   };
 
-  const headerTopInset = insets.top + (syncBannerVisible ? 18 : 12);
+  const headerTopInset = insets.top + (syncBannerVisible ? 18 : layout.isShort ? 6 : 12);
 
   return (
     <View style={styles.screen}>
       <PizzaFireBackground />
       <SafeAreaView style={styles.safe} edges={['left', 'right']}>
-      <View style={[styles.header, { paddingTop: headerTopInset }]}>
+      <View style={[styles.header, { paddingTop: headerTopInset, paddingHorizontal: layout.space.screenX }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Icons.arrowLeft color={PIZZA_FIRE.gold} width={22} height={22} />
         </TouchableOpacity>
@@ -817,7 +819,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
         onRequestClose={() => setDatePickerOpen(false)}
       >
         <View style={styles.datePickerBackdrop}>
-          <View style={styles.datePickerCard}>
+          <View style={[styles.datePickerCard, sheetCardStyle(layout)]}>
             <Text style={styles.datePickerTitle}>Select date</Text>
             <PizzaFireCalendar
               current={selectedDateKey}

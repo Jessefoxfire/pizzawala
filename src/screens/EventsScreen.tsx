@@ -68,6 +68,7 @@ import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
 import type { Geofence } from '../types';
 import { getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { startNewNamedSeason } from '../services/eventSeasons';
@@ -120,6 +121,7 @@ type UserProfile = {
 };
 
 export default function EventsScreen({ navigation, route }: Props) {
+  const layout = useAppLayout();
   const authState = useAuth();
   const [userProfile, setUserProfile] = useState<any>(null);
   const profileIsAdmin = Array.isArray(userProfile?.roles) && userProfile.roles.includes('admin');
@@ -1533,7 +1535,7 @@ export default function EventsScreen({ navigation, route }: Props) {
       )}
 
       <Modal visible={!!menuEditor && isAdmin} transparent animationType="fade" onRequestClose={() => setMenuEditor(null)}>
-        <View style={styles.modalBg}><View style={styles.modalCard}>
+        <View style={styles.modalBg}><View style={[styles.modalCard, sheetCardStyle(layout)]}>
           <Text style={styles.modalTitle}>{menuEditor?.item ? 'Edit menu item' : 'Add menu item'}</Text>
           <Text style={styles.label}>Item name</Text>
           <TextInput style={styles.input} value={menuItemName} onChangeText={setMenuItemName} placeholder="e.g. Margherita" placeholderTextColor="#5A4739" autoFocus />
@@ -1880,7 +1882,7 @@ export default function EventsScreen({ navigation, route }: Props) {
 
       <Modal visible={seasonModalVisible && isAdmin} animationType="fade" transparent onRequestClose={() => setSeasonModalVisible(false)}>
         <View style={styles.modalBg}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, sheetCardStyle(layout)]}>
             <Text style={styles.modalTitle}>Start New Season</Text>
             <Text style={styles.hintInline}>
               Name the file for events so far. Next you will create the first event of the new season. Nothing changes until that event is saved.
@@ -1915,7 +1917,7 @@ export default function EventsScreen({ navigation, route }: Props) {
       {/* Availability Notes Modal */}
       <Modal visible={availModalVisible} animationType="fade" transparent>
         <View style={styles.modalBg}>
-          <View style={styles.modalCard}>
+          <View style={[styles.modalCard, sheetCardStyle(layout)]}>
             <Text style={styles.modalTitle}>Set Availability</Text>
             <Text style={styles.label}>Availability Notes (Optional)</Text>
             <TextInput style={[styles.input, styles.textArea]} value={availNotes} onChangeText={setAvailNotes} placeholder="Available Friday & Saturday only." placeholderTextColor="#5A4739" multiline />

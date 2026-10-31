@@ -108,9 +108,11 @@ import OfflineBanner from '../components/OfflineBanner';
 import BirthdayGreeting from '../components/BirthdayGreeting';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { useAppLayout } from '../theme/responsiveLayout';
 
 export default function AppNavigator() {
   const auth = useAuth();
+  const layout = useAppLayout();
   const pendingInvitePromptedForUidRef = React.useRef<string | null>(null);
 
   /* ───────────────────────── NOTIFICATIONS ───────────────────────── */
@@ -285,7 +287,11 @@ export default function AppNavigator() {
         <PizzaFireBackground />
         <Image
           source={require('../../assets/Pizza Wala Logo.png')}
-          style={styles.loadingLogo}
+          style={[
+            styles.loadingLogo,
+            layout.isTablet && { width: 148, height: 148 },
+            layout.isShort && { width: 88, height: 88 },
+          ]}
           resizeMode="contain"
         />
         <Text style={styles.loadingText}>

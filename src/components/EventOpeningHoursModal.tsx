@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import {
   dateToTimeString,
   formatOfficialOpeningRange,
@@ -26,6 +27,7 @@ export default function EventOpeningHoursModal({
   onClose,
   onConfirm,
 }: Props) {
+  const layout = useAppLayout();
   const [startDraft, setStartDraft] = useState(startTime);
   const [endDraft, setEndDraft] = useState(endTime);
   const [picking, setPicking] = useState<'start' | 'end' | null>(null);
@@ -66,7 +68,7 @@ export default function EventOpeningHoursModal({
     <>
       <Modal visible transparent animationType="fade" onRequestClose={onClose}>
         <View style={styles.backdrop}>
-          <View style={styles.card}>
+          <View style={[styles.card, sheetCardStyle(layout)]}>
             <Text style={styles.title}>{dayLabel || 'Official opening'}</Text>
             <Text style={styles.subtitle}>24-hour clock. Closing may be after midnight.</Text>
 

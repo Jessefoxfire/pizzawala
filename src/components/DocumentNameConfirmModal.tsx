@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import {
   ActivityIndicator,
   Image,
@@ -35,6 +36,7 @@ export default function DocumentNameConfirmModal({
   onConfirm,
   onAiFix,
 }: Props) {
+  const layout = useAppLayout();
   const [name, setName] = useState(suggestedName);
 
   useEffect(() => {
@@ -46,7 +48,7 @@ export default function DocumentNameConfirmModal({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
       <Pressable style={styles.backdrop} onPress={onCancel}>
-        <Pressable style={styles.card} onPress={event => event.stopPropagation()}>
+        <Pressable style={[styles.card, sheetCardStyle(layout)]} onPress={event => event.stopPropagation()}>
           <View style={styles.header}>
             <Text style={styles.title}>Name this document</Text>
             <TouchableOpacity

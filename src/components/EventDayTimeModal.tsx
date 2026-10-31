@@ -5,6 +5,7 @@ import DateTimePicker, {
   DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import {
   dateToTimeString,
   formatTimeLabel24,
@@ -31,6 +32,7 @@ export default function EventDayTimeModal({
   onClose,
   onConfirm,
 }: Props) {
+  const layout = useAppLayout();
   const [startDraft, setStartDraft] = useState(startTime);
   const [endDraft, setEndDraft] = useState(endTime);
   const [picking, setPicking] = useState<Field | null>(null);
@@ -123,7 +125,7 @@ export default function EventDayTimeModal({
   return (
     <Modal visible transparent animationType="fade" onRequestClose={handleCancel}>
       <View style={styles.backdrop}>
-        <View style={styles.card}>
+        <View style={[styles.card, sheetCardStyle(layout)]}>
           <Text style={styles.title}>{dayLabel || 'Day hours'}</Text>
           <Text style={styles.subtitle}>24-hour clock. Tap Start or Finish to change a time.</Text>
 

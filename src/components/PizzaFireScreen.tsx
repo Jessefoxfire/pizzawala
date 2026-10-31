@@ -26,11 +26,13 @@ export default function PizzaFireScreen({
   return (
     <View style={[styles.root, style]}>
       <PizzaFireBackground />
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
-        <SafeAreaView style={styles.safe} edges={withStatusBarEdge(edges)}>
-          {children}
-        </SafeAreaView>
-      </TouchableWithoutFeedback>
+      <View style={styles.safe}>
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+          <SafeAreaView style={styles.safe} edges={withStatusBarEdge(edges)}>
+            {children}
+          </SafeAreaView>
+        </TouchableWithoutFeedback>
+      </View>
     </View>
   );
 }

@@ -20,6 +20,7 @@ import {
 import EventDayTimeModal from './EventDayTimeModal';
 import HoursChangeBadge from './HoursChangeBadge';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import { applyPendingShiftEnds, offlineOpenShiftToLiveShift, submitDaySummary, type LiveShift } from '../services/shifts';
 import { getOfflineOpenShift, getPendingShiftEnds } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
@@ -53,6 +54,7 @@ function isLiveShift(shift: LiveShift) {
 }
 
 export default function DaySummaryModal({ visible, userId, activeShift = null, onCancel, onConfirmed }: Props) {
+  const layout = useAppLayout();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [liveShifts, setLiveShifts] = useState<LiveShift[]>([]);
@@ -300,14 +302,17 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
     <>
     <Modal visible transparent animationType="fade" onRequestClose={handleCancel}>
       <View style={styles.backdrop}>
-        <View style={styles.card}>
+        <View style={[styles.card, sheetCardStyle(layout), { maxHeight: layout.isShort ? '92%' : '88%' }]}>
           <Text style={styles.title}>Day Summary</Text>
           <Text style={styles.subtitle}>Today's shifts</Text>
 
           {loading && rows.length === 0 ? (
             <ActivityIndicator color={PIZZA_FIRE.gold} style={{ marginVertical: 24 }} />
           ) : (
-            <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+            <ScrollView
+              style={[styles.list, { maxHeight: layout.isShort ? Math.round(layout.height * 0.42) : 360 }]}
+              contentContainerStyle={styles.listContent}
+            >
               {rows.length === 0 ? (
                 <Text style={styles.empty}>No shifts recorded for today yet. Add a shift if you worked.</Text>
               ) : (

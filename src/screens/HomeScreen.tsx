@@ -9,7 +9,6 @@ import {
   Image,
   Modal,
   ScrollView,
-  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -49,6 +48,7 @@ import DaySummaryModal from '../components/DaySummaryModal';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { Icons } from '../components/Icons';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { homeChrome, homeTimerSize, useAppLayout } from '../theme/responsiveLayout';
 import type { Geofence } from '../types';
 import { getDistanceMeters, normalizeLatLng } from '../utils/geo';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
@@ -80,24 +80,11 @@ const QUICK_LINKS: QuickLink[] = [
   { label: 'Profile', icon: require('../../assets/Icons/Profile.png'), route: 'EditProfile' },
 ];
 
-const TIMER_MAX = 248;
-const BOTTOM_NAV_BAR = 72;
-
-function homeTimerSize(windowHeight: number, topInset: number, bottomInset: number, isAdmin: boolean) {
-  const short = windowHeight < 700;
-  const navHeight = BOTTOM_NAV_BAR + Math.max(bottomInset, 8);
-  const header = short ? 96 : 148;
-  const admin = isAdmin ? (short ? 68 : 100) : 0;
-  const underTimer = short ? 84 : 120;
-  const verticalPadding = topInset + 10 + 16;
-  const budget = windowHeight - navHeight - verticalPadding - header - admin - underTimer;
-  return Math.round(Math.max(168, Math.min(TIMER_MAX, budget)));
-}
-
 export default function HomeScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Home'>>();
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
+  const layout = useAppLayout();
+  const chrome = homeChrome(layout, insets.top);
   const authState = useAuth();
   const [userName, setUserName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -123,8 +110,7 @@ export default function HomeScreen() {
   const requiredDocsPromptedRef = useRef(false);
 
   const isAdmin = authState.status === 'admin' || profileIsAdmin;
-  const shortHome = windowHeight < 700;
-  const timerSize = homeTimerSize(windowHeight, insets.top, insets.bottom, isAdmin);
+  const timerSize = homeTimerSize(layout, insets.top, insets.bottom, isAdmin);
   const firstName = userName?.trim().split(/\s+/)[0] || '';
   const welcomeText = firstName ? `Hey, ${firstName}` : 'Hey there';
 
@@ -477,8 +463,16 @@ export default function HomeScreen() {
       <PizzaFireBackground />
 
       <SafeAreaView style={styles.safe} edges={['left', 'right']}>
-        <View style={[styles.content, { paddingTop: insets.top + (shortHome ? 6 : 10) }]}>
-          <View style={[styles.header, shortHome && styles.headerCompact]}>
+        <View
+          style={[
+            styles.content,
+            {
+              paddingTop: chrome.paddingTop,
+              paddingHorizontal: layout.space.screenX,
+            },
+          ]}
+        >
+          <View style={[styles.header, { marginBottom: chrome.headerGap }]}>
             <TouchableOpacity
               onPress={() => navigation.navigate('EditProfile')}
               activeOpacity={0.85}
@@ -488,21 +482,37 @@ export default function HomeScreen() {
               {(avatarUrl || customAvatarUrl) ? (
                 <Image
                   source={resolveAvatarSource(avatarUrl, customAvatarUrl)}
-                  style={[styles.avatar, shortHome && styles.avatarCompact]}
+                  style={[
+                    styles.avatar,
+                    {
+                      width: chrome.avatar,
+                      height: chrome.avatar,
+                      borderRadius: chrome.avatar / 2,
+                    },
+                  ]}
                   resizeMode="cover"
                 />
               ) : (
                 <Image
                   source={require('../../assets/Pizza Wala Logo.png')}
-                  style={[styles.logoFallback, shortHome && styles.avatarCompact]}
+                  style={[
+                    styles.logoFallback,
+                    {
+                      width: chrome.avatar,
+                      height: chrome.avatar,
+                      borderRadius: chrome.avatar / 2,
+                    },
+                  ]}
                   resizeMode="contain"
                 />
               )}
             </TouchableOpacity>
-            <Text style={[styles.welcomeTitle, shortHome && styles.welcomeTitleCompact]}>{welcomeText}</Text>
+            <Text style={[styles.welcomeTitle, { marginTop: chrome.titleGap, fontSize: chrome.titleSize }]}>
+              {welcomeText}
+            </Text>
           </View>
 
-          <View style={[styles.timerSection, shortHome && styles.timerSectionCompact]}>
+          <View style={[styles.timerSection, { paddingTop: chrome.timerPadTop, paddingBottom: layout.isShort ? 0 : 8 }]}>
             <TouchableOpacity
               activeOpacity={0.92}
               onPress={() => {
@@ -527,9 +537,18 @@ export default function HomeScreen() {
               />
             </TouchableOpacity>
 
-            <Text style={[styles.tapHint, shortHome && styles.tapHintCompact]}>{tapHint}</Text>
+            <Text style={[styles.tapHint, { marginTop: chrome.hintGap }]}>{tapHint}</Text>
 
-            <View style={[styles.statusBlock, shortHome && styles.statusBlockCompact]}>
+            <View
+              style={[
+                styles.statusBlock,
+                {
+                  marginTop: chrome.statusGap,
+                  minHeight: layout.isShort ? 0 : 46,
+                  maxWidth: layout.isTablet ? 420 : 320,
+                },
+              ]}
+            >
               {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
               <TouchableOpacity style={styles.selectWorksiteButton} onPress={openWorksitePicker} activeOpacity={0.82}>
                 <Icons.location color={PIZZA_FIRE.gold} width={16} height={16} />
@@ -546,7 +565,7 @@ export default function HomeScreen() {
 
           {isAdmin ? (
             <TouchableOpacity
-              style={[styles.adminButton, shortHome && styles.adminButtonCompact]}
+              style={[styles.adminButton, { marginTop: chrome.adminGap, paddingVertical: chrome.adminPad }]}
               onPress={() => navigation.navigate('AdminOptions')}
               activeOpacity={0.88}
             >
@@ -587,7 +606,7 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="Close quick links"
           />
-          <View style={styles.menuSheet}>
+          <View style={[styles.menuSheet, layout.isTablet && styles.menuSheetTablet]}>
             <View style={styles.menuSheetHeader}>
               <View style={styles.menuHandle} />
               <Text style={styles.menuTitle}>Quick links</Text>
@@ -637,7 +656,7 @@ export default function HomeScreen() {
       <Modal visible={worksitePickerOpen} transparent animationType="slide" onRequestClose={() => setWorksitePickerOpen(false)}>
         <View style={styles.worksitePickerBackdrop}>
           <Pressable style={styles.menuDismissArea} onPress={() => setWorksitePickerOpen(false)} />
-          <View style={styles.worksitePickerSheet}>
+          <View style={[styles.worksitePickerSheet, layout.isTablet && styles.menuSheetTablet]}>
             <View style={styles.menuHandle} />
             <Text style={styles.worksitePickerTitle}>Select Worksite</Text>
             <Text style={styles.worksitePickerSubtitle}>Optional — you can start without one.</Text>
@@ -702,25 +721,17 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 8,
-    paddingBottom: 16,
+    paddingBottom: 12,
   },
   header: {
     alignItems: 'center',
     marginBottom: 20,
-  },
-  headerCompact: {
-    marginBottom: 8,
   },
   avatar: {
     width: 80,
     height: 80,
     borderRadius: 40,
     backgroundColor: PIZZA_FIRE.cheese,
-  },
-  avatarCompact: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
   },
   logoFallback: {
     width: 80,
@@ -735,20 +746,12 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.textPrimary,
     textAlign: 'center',
   },
-  welcomeTitleCompact: {
-    marginTop: 6,
-    fontSize: 22,
-  },
   timerSection: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingTop: 18,
     paddingBottom: 8,
-  },
-  timerSectionCompact: {
-    paddingTop: 4,
-    paddingBottom: 0,
   },
   tapHint: {
     marginTop: 16,
@@ -757,9 +760,6 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.textSecondary,
     textAlign: 'center',
     letterSpacing: 0.2,
-  },
-  tapHintCompact: {
-    marginTop: 8,
   },
   selectWorksiteButton: {
     marginTop: 12,
@@ -786,10 +786,6 @@ const styles = StyleSheet.create({
     gap: 8,
     minHeight: 46,
   },
-  statusBlockCompact: {
-    marginTop: 8,
-    minHeight: 0,
-  },
   worksiteRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -812,11 +808,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
-    marginTop: 33,
-  },
-  adminButtonCompact: {
-    marginTop: 8,
-    paddingVertical: 6,
+    marginTop: 20,
   },
   adminIcon: {
     width: 28,
@@ -851,6 +843,13 @@ const styles = StyleSheet.create({
     maxHeight: '72%',
     borderTopWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
+  },
+  menuSheetTablet: {
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 720,
+    paddingHorizontal: 28,
+    maxHeight: '64%',
   },
   worksitePickerBackdrop: {
     flex: 1,

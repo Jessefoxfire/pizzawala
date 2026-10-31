@@ -9,9 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icons } from './Icons';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
-
-const BAR_HEIGHT = 72;
-const CENTER_BUTTON_SIZE = 58;
+import { useAppLayout } from '../theme/responsiveLayout';
 
 type Props = {
   hasOpenShift: boolean;
@@ -29,16 +27,22 @@ export default function HomeBottomNav({
   onEndShift,
 }: Props) {
   const insets = useSafeAreaInsets();
-  const safeBottom = Math.max(insets.bottom, 8);
+  const layout = useAppLayout();
+  const safeBottom = Math.max(insets.bottom, layout.isTablet ? 12 : 8);
+  const center = layout.navCenter;
 
   return (
     <View style={[styles.root, { paddingBottom: safeBottom }]} pointerEvents="box-none">
-      <View style={[styles.navBlock, { height: BAR_HEIGHT }]}>
+      <View style={[styles.navBlock, { height: layout.navBar }]}>
         <View style={styles.barSurface} />
 
-        <View style={styles.barContent}>
+        <View style={[styles.barContent, { paddingHorizontal: layout.isTablet ? 48 : 28 }]}>
           <Pressable
-            style={({ pressed }) => [styles.sideAction, pressed && styles.sideActionPressed]}
+            style={({ pressed }) => [
+              styles.sideAction,
+              { height: layout.navBar },
+              pressed && styles.sideActionPressed,
+            ]}
             onPress={onOpenMenu}
             hitSlop={10}
             accessibilityRole="button"
@@ -56,11 +60,20 @@ export default function HomeBottomNav({
             accessibilityRole="button"
             accessibilityLabel="Open working hours"
           >
-            <View style={styles.centerButton}>
+            <View
+              style={[
+                styles.centerButton,
+                {
+                  width: center,
+                  height: center,
+                  borderRadius: center / 2,
+                },
+              ]}
+            >
               {busy ? (
                 <ActivityIndicator color={PIZZA_FIRE.cheese} size="small" />
               ) : (
-                <Icons.clock color="#120A06" width={28} height={28} />
+                <Icons.clock color="#120A06" width={layout.isTablet ? 32 : 28} height={layout.isTablet ? 32 : 28} />
               )}
             </View>
             <Text style={styles.centerCaption}>Hours</Text>
@@ -69,6 +82,7 @@ export default function HomeBottomNav({
           <Pressable
             style={({ pressed }) => [
               styles.sideAction,
+              { height: layout.navBar },
               !hasOpenShift && styles.sideActionDisabled,
               pressed && hasOpenShift && !busy && styles.sideActionPressed,
             ]}
@@ -113,7 +127,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    height: BAR_HEIGHT,
   },
   centerAction: {
     alignItems: 'center',
@@ -135,9 +148,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   centerButton: {
-    width: CENTER_BUTTON_SIZE,
-    height: CENTER_BUTTON_SIZE,
-    borderRadius: CENTER_BUTTON_SIZE / 2,
     backgroundColor: PIZZA_FIRE.accent,
     alignItems: 'center',
     justifyContent: 'center',
