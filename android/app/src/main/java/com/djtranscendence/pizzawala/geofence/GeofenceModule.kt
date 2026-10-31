@@ -229,6 +229,26 @@ class GeofenceModule(private val reactContext: ReactApplicationContext) : ReactC
     GeofencePrefs.setSuppressEnterWhileOnShift(reactContext, suppressed)
   }
 
+  @ReactMethod
+  fun setEnterHandledForVisit(geofenceId: String, handled: Boolean) {
+    GeofencePrefs.setEnterHandledForVisit(reactContext, geofenceId, handled)
+  }
+
+  @ReactMethod
+  fun syncShiftOngoing(mode: String, periodStartMs: Double, baseElapsedMs: Double) {
+    ShiftOngoingService.sync(
+      reactContext,
+      mode,
+      periodStartMs.toLong(),
+      baseElapsedMs.toLong()
+    )
+  }
+
+  @ReactMethod
+  fun stopShiftOngoing() {
+    ShiftOngoingService.stop(reactContext)
+  }
+
   private fun isProbablyEmulator(): Boolean {
     return Build.FINGERPRINT.startsWith("generic") ||
       Build.FINGERPRINT.startsWith("unknown") ||

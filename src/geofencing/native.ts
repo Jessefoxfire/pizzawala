@@ -1,6 +1,7 @@
 import { NativeEventEmitter, NativeModules } from 'react-native';
 import type { Geofence } from '../types';
 import type { GeofenceEventType } from './types';
+import { effectiveGeofenceRadiusMeters } from './effectiveRadius';
 
 const { GeofenceModule } = NativeModules as {
   GeofenceModule?: {
@@ -16,6 +17,9 @@ const { GeofenceModule } = NativeModules as {
     getNotificationsEnabled?: () => Promise<boolean>;
     setAutoShiftEnabled?: (enabled: boolean) => void;
     setSuppressEnterWhileOnShift?: (suppressed: boolean) => void;
+    setEnterHandledForVisit?: (geofenceId: string, handled: boolean) => void;
+    syncShiftOngoing?: (mode: string, periodStartMs: number, baseElapsedMs: number) => void;
+    stopShiftOngoing?: () => void;
   };
 };
 
@@ -102,9 +106,7 @@ export const startNativeMonitoring = async (geofences: Geofence[]) => {
     name: geofence.name,
     latitude: geofence.center.lat,
     longitude: geofence.center.lng,
-    // Set Outer Boundary: actual radius + margin, but at least 110m for OS reliability.
-    // This makes EXIT triggers much more accurate than forcing 180m/200m.
-    radius: Math.max(110, (geofence.radiusMeters || 0) + 20),
+    radius: effectiveGeofenceRadiusMeters(geofence.radiusMeters),
   }));
   
   // Sync name during monitoring start to ensure they are together
@@ -148,6 +150,25 @@ export const setNativeSuppressEnterNotifications = async (suppressed: boolean) =
   if (GeofenceModule?.setSuppressEnterWhileOnShift) {
     GeofenceModule.setSuppressEnterWhileOnShift(suppressed);
   }
+};
+
+export const setNativeEnterHandledForVisit = (geofenceId: string, handled: boolean) => {
+  if (GeofenceModule?.setEnterHandledForVisit && geofenceId) {
+    GeofenceModule.setEnterHandledForVisit(geofenceId, handled);
+  }
+};
+
+export const syncNativeShiftOngoing = (
+  mode: 'working' | 'break',
+  periodStartMs: number,
+  baseElapsedMs: number
+) => {
+  if (!GeofenceModule?.syncShiftOngoing) return;
+  GeofenceModule.syncShiftOngoing(mode, periodStartMs, baseElapsedMs);
+};
+
+export const stopNativeShiftOngoing = () => {
+  GeofenceModule?.stopShiftOngoing?.();
 };
 
 export const getNativeStoredGeofenceSpecs = async (): Promise<NativeStoredGeofenceSpec[]> => {

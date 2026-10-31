@@ -1,0 +1,144 @@
+package com.djtranscendence.pizzawala.geofence
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import com.djtranscendence.pizzawala.MainActivity
+import com.djtranscendence.pizzawala.R
+
+object ShiftOngoingStore {
+  const val NOTIFICATION_ID = 92010
+  const val CHANNEL_ID = "pizzawala-shift-ongoing"
+
+  private const val PREFS = "pizzawala_shift_ongoing"
+  private const val KEY_ACTIVE = "active"
+  private const val KEY_MODE = "mode"
+  private const val KEY_PERIOD_START_MS = "period_start_ms"
+  private const val KEY_BASE_ELAPSED_MS = "base_elapsed_ms"
+
+  fun isActive(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ACTIVE, false)
+  }
+
+  fun save(context: Context, mode: String, periodStartMs: Long, baseElapsedMs: Long) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_ACTIVE, true)
+      .putString(KEY_MODE, if (mode == "break") "break" else "working")
+      .putLong(KEY_PERIOD_START_MS, periodStartMs)
+      .putLong(KEY_BASE_ELAPSED_MS, baseElapsedMs.coerceAtLeast(0L))
+      .commit()
+  }
+
+  fun clear(context: Context) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+  }
+
+  fun elapsedMs(context: Context, nowMs: Long = System.currentTimeMillis()): Long {
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    if (!prefs.getBoolean(KEY_ACTIVE, false)) return 0L
+    val periodStart = prefs.getLong(KEY_PERIOD_START_MS, nowMs)
+    val base = prefs.getLong(KEY_BASE_ELAPSED_MS, 0L)
+    return base + (nowMs - periodStart).coerceAtLeast(0L)
+  }
+
+  fun label(context: Context): String {
+    val mode = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MODE, "working")
+    return if (mode == "break") "Break" else "Working"
+  }
+
+  fun formatHms(ms: Long): String {
+    val totalSeconds = (ms / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return String.format("%02d:%02d:%02d", hours, minutes, seconds)
+  }
+
+  fun formatChipElapsed(ms: Long): String {
+    val totalMinutes = (ms / 60_000L).coerceAtLeast(0L)
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) {
+      "${hours.coerceAtMost(99L)}h${minutes.toString().padStart(2, '0')}"
+    } else {
+      "${minutes}m"
+    }
+  }
+
+  fun formatBodyElapsed(ms: Long): String {
+    val totalMinutes = (ms / 60_000L).coerceAtLeast(0L)
+    val hours = totalMinutes / 60L
+    val minutes = totalMinutes % 60L
+    return if (hours > 0L) "${hours}h ${minutes}m" else "${minutes}m"
+  }
+
+  fun ensureChannel(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+    val mgr = context.getSystemService(NotificationManager::class.java) ?: return
+    val existing = mgr.getNotificationChannel(CHANNEL_ID)
+    if (existing != null) return
+    val channel = NotificationChannel(
+      CHANNEL_ID,
+      "Shift timer",
+      NotificationManager.IMPORTANCE_LOW
+    ).apply {
+      description = "Shows your current shift time while you are clocked in."
+      setShowBadge(false)
+      setSound(null, null)
+      enableVibration(false)
+      lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+    }
+    mgr.createNotificationChannel(channel)
+  }
+
+  fun buildNotification(context: Context): Notification {
+    ensureChannel(context)
+    val appCtx = context.applicationContext
+    val status = label(appCtx)
+    val elapsed = elapsedMs(appCtx)
+    val elapsedText = formatBodyElapsed(elapsed)
+    val launch = Intent(appCtx, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+      putExtra("screen", "Home")
+    }
+    val pending = PendingIntent.getActivity(
+      appCtx,
+      NOTIFICATION_ID,
+      launch,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+    val notification = NotificationCompat.Builder(appCtx, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_shift_clock)
+      .setContentTitle(status)
+      .setContentText(elapsedText)
+      .setOngoing(true)
+      .setOnlyAlertOnce(true)
+      .setSilent(true)
+      .setSound(null)
+      .setVibrate(null)
+      .setPriority(NotificationCompat.PRIORITY_LOW)
+      .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+      .setContentIntent(pending)
+      .setColor(0xFFFF6B00.toInt())
+      .setWhen(System.currentTimeMillis() - elapsed)
+      .setUsesChronometer(true)
+      .setChronometerCountDown(false)
+      .build()
+
+    // Android 16+ can promote qualifying ongoing notifications into a status-bar live-update
+    // chip. Raw extras keep this compatible with the project's current AndroidX Core version;
+    // older Android releases safely ignore them.
+    notification.extras.putBoolean("android.requestPromotedOngoing", true)
+    notification.extras.putString(
+      "android.shortCriticalText",
+      formatChipElapsed(elapsed)
+    )
+    return notification
+  }
+}

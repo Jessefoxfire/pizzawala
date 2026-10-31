@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getFirestore,
@@ -10,19 +11,35 @@ import {
 } from '@react-native-firebase/firestore';
 import {
   clearOfflineOpenShift,
+  getOfflineOpenShift,
   loadOutbox,
   removeOutboxItem,
 } from './outbox';
 import { isDeviceOnline } from './connectivity';
 import type { OutboxItem } from './types';
 import {
-  closeLastOpenPeriod,
+  buildOfflineShiftEndWrite,
   isShiftPaused,
   normalizeShiftPeriods,
+  pauseShiftPeriods,
+  resumeShiftPeriods,
   type LiveShift,
 } from '../services/shifts';
 
 let syncing = false;
+const SYNC_ITEM_TIMEOUT_MS = 15000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      handle = setTimeout(() => reject(new Error('timeout')), ms);
+    }),
+  ]).finally(() => {
+    if (handle) clearTimeout(handle);
+  });
+}
 
 const OUTBOX_TYPE_ORDER: Record<OutboxItem['type'], number> = {
   shift_start: 0,
@@ -69,6 +86,7 @@ async function syncShiftStart(item: Extract<OutboxItem, { type: 'shift_start' }>
     teamId: item.payload.teamId,
     geofenceId: item.payload.geofenceId ?? null,
     geofenceName: item.payload.geofenceName ?? null,
+    workCategory: item.payload.workCategory ?? null,
     status: 'open',
     locked: false,
     paused: false,
@@ -95,12 +113,11 @@ async function syncShiftPause(item: Extract<OutboxItem, { type: 'shift_pause' }>
 
   const nowIso = item.payload.recordedAtIso;
   const { workPeriods, breakPeriods } = normalizeShiftPeriods(data);
-  const nextWork = closeLastOpenPeriod(workPeriods, nowIso);
-  const nextBreak = [...breakPeriods, { startIso: nowIso }];
+  const periods = pauseShiftPeriods(workPeriods, breakPeriods, nowIso);
 
   await updateDoc(ref, {
-    workPeriods: nextWork,
-    breakPeriods: nextBreak,
+    workPeriods: periods.workPeriods,
+    breakPeriods: periods.breakPeriods,
     paused: true,
     updatedAt: serverTimestamp(),
     source: 'offline',
@@ -120,12 +137,11 @@ async function syncShiftResume(item: Extract<OutboxItem, { type: 'shift_resume' 
 
   const nowIso = item.payload.recordedAtIso;
   const { workPeriods, breakPeriods } = normalizeShiftPeriods(data);
-  const nextBreak = closeLastOpenPeriod(breakPeriods, nowIso);
-  const nextWork = [...workPeriods, { startIso: nowIso }];
+  const periods = resumeShiftPeriods(workPeriods, breakPeriods, nowIso);
 
   await updateDoc(ref, {
-    workPeriods: nextWork,
-    breakPeriods: nextBreak,
+    workPeriods: periods.nextWork ? [...periods.workPeriods, periods.nextWork] : periods.workPeriods,
+    breakPeriods: periods.breakPeriods,
     paused: false,
     updatedAt: serverTimestamp(),
     source: 'offline',
@@ -138,33 +154,19 @@ async function syncShiftEnd(item: Extract<OutboxItem, { type: 'shift_end' }>) {
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     console.warn('[Offline] Dropping stale end — shift missing:', item.payload.shiftId);
-    await clearOfflineOpenShift();
     return;
   }
   const data = { id: snap.id, ...snap.data() } as LiveShift;
-  if (data.status !== 'open') {
-    await clearOfflineOpenShift();
+  const write = buildOfflineShiftEndWrite(data, item.payload);
+  if (write.kind === 'skip') return;
+  if (write.kind === 'delete') {
+    await deleteDoc(ref);
     return;
   }
 
-  const nowIso = item.payload.recordedAtIso;
-  let { workPeriods, breakPeriods } = normalizeShiftPeriods(data);
-
-  if (isShiftPaused(data)) {
-    breakPeriods = closeLastOpenPeriod(breakPeriods, nowIso);
-  } else {
-    workPeriods = closeLastOpenPeriod(workPeriods, nowIso);
-  }
-
   await updateDoc(ref, {
-    workPeriods,
-    breakPeriods,
-    status: 'closed',
-    locked: true,
-    paused: false,
-    endAt: serverTimestamp(),
-    endedBy: item.payload.endedBy,
-    offlineRecordedAtIso: nowIso,
+    ...write.fields,
+    offlineRecordedAtIso: item.payload.recordedAtIso,
     updatedAt: serverTimestamp(),
     source: 'offline',
   });
@@ -186,7 +188,12 @@ async function syncItem(item: OutboxItem): Promise<void> {
       return;
     case 'shift_end':
       await syncShiftEnd(item);
-      await clearOfflineOpenShift();
+      {
+        const offline = await getOfflineOpenShift();
+        if (offline?.clientShiftId === item.payload.shiftId) {
+          await clearOfflineOpenShift();
+        }
+      }
       return;
     default:
       return;
@@ -206,7 +213,7 @@ export async function flushOutbox(): Promise<{ synced: number; failed: number }>
     const items = sortOutboxItems(await loadOutbox());
     for (const item of items) {
       try {
-        await syncItem(item);
+        await withTimeout(syncItem(item), SYNC_ITEM_TIMEOUT_MS);
         await removeOutboxItem(item.id);
         synced += 1;
       } catch (error) {

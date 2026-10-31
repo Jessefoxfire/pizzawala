@@ -10,7 +10,7 @@ import {
   Alert,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 import {
   collection,
   addDoc,
@@ -26,13 +26,16 @@ import { auth } from '../services/firebase';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { Icons } from '../components/Icons';
-import { Calendar } from 'react-native-calendars';
+import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import { resolveAvatarSource } from '../utils/avatar';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AssignShifts'>;
 
-export default function AssignShiftsScreen({ navigation }: Props) {
+export default function AssignShiftsScreen({ navigation, route }: Props) {
   const fs = getFirestore();
+  const presetEventId = route.params?.eventId;
+  const presetUserId = route.params?.userId;
   const [users, setUsers] = useState<any[]>([]);
   const [worksites, setWorksites] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,8 +82,8 @@ export default function AssignShiftsScreen({ navigation }: Props) {
     } else {
       newSelected[dateStr] = { 
         selected: true, 
-        selectedColor: '#C9782B',
-        selectedTextColor: '#1E1813'
+        selectedColor: PIZZA_FIRE.accent,
+        selectedTextColor: PIZZA_FIRE.charcoal
       };
     }
     setSelectedDates(newSelected);
@@ -102,7 +105,7 @@ export default function AssignShiftsScreen({ navigation }: Props) {
   const handleSave = async () => {
     const dateKeys = Object.keys(selectedDates);
     if (!selectedUser || !selectedWorksite || dateKeys.length === 0) {
-      Alert.alert('Incomplete', 'Please select a user, worksite, and at least one date.');
+      Alert.alert('Incomplete', 'Please select a member, worksite, and at least one date.');
       return;
     }
 
@@ -115,6 +118,8 @@ export default function AssignShiftsScreen({ navigation }: Props) {
           userId: selectedUser.id,
           userName: selectedUser.name || selectedUser.email,
           worksiteName: selectedWorksite.name,
+          eventId: selectedWorksite.eventId || presetEventId || null,
+          geofenceId: selectedWorksite.id || null,
           date: d,
           startTime,
           endTime,
@@ -149,17 +154,17 @@ export default function AssignShiftsScreen({ navigation }: Props) {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <ActivityIndicator size="large" color="#C9782B" style={{ marginTop: 40 }} />
-      </SafeAreaView>
+      <PizzaFireScreen>
+        <ActivityIndicator size="large" color={PIZZA_FIRE.accent} style={{ marginTop: 40 }} />
+      </PizzaFireScreen>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Icons.arrowLeft color="#F6EDE2" width={24} height={24} />
+          <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
         </TouchableOpacity>
         <Text style={styles.title}>Schedule Planner</Text>
         <View style={{ width: 24 }} />
@@ -176,7 +181,7 @@ export default function AssignShiftsScreen({ navigation }: Props) {
             >
               <Image source={resolveAvatarSource(u.avatarUrl, u.customAvatarUrl)} style={styles.avatar} />
               <Text style={[styles.userName, selectedUser?.id === u.id && styles.userNameActive]} numberOfLines={1}>
-                {u.name?.split(' ')[0] || 'User'}
+                {u.name?.split(' ')[0] || 'Member'}
               </Text>
             </TouchableOpacity>
           ))}
@@ -198,20 +203,21 @@ export default function AssignShiftsScreen({ navigation }: Props) {
         </View>
 
         <Text style={styles.sectionLabel}>3. Select Dates (Tap multiple)</Text>
-        <Calendar
+        <PizzaFireCalendar
           minDate={new Date().toISOString().split('T')[0]}
+          firstDay={1}
           theme={{
-            backgroundColor: '#1E1813',
-            calendarBackground: '#1E1813',
+            backgroundColor: PIZZA_FIRE.surfaceInset,
+            calendarBackground: 'transparent',
             textSectionTitleColor: '#A88E73',
-            selectedDayBackgroundColor: '#C9782B',
-            selectedDayTextColor: '#1E1813',
-            todayTextColor: '#C9782B',
+            selectedDayBackgroundColor: PIZZA_FIRE.accent,
+            selectedDayTextColor: PIZZA_FIRE.charcoal,
+            todayTextColor: PIZZA_FIRE.accent,
             dayTextColor: '#F6EDE2',
             textDisabledColor: '#3A2D24',
             monthTextColor: '#F6EDE2',
-            indicatorColor: '#C9782B',
-            arrowColor: '#C9782B',
+            indicatorColor: PIZZA_FIRE.accent,
+            arrowColor: PIZZA_FIRE.accent,
           }}
           markedDates={selectedDates}
           onDayPress={onDayPress}
@@ -248,37 +254,37 @@ export default function AssignShiftsScreen({ navigation }: Props) {
           onPress={handleSave}
           disabled={saving}
         >
-          {saving ? <ActivityIndicator color="#1E1813" /> : <Text style={styles.saveBtnText}>Assign {Object.keys(selectedDates).length} Shifts</Text>}
+          {saving ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : <Text style={styles.saveBtnText}>Assign {Object.keys(selectedDates).length} Shifts</Text>}
         </TouchableOpacity>
         
         <View style={{ height: 40 }} />
       </ScrollView>
-    </SafeAreaView>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#2A211B' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: '#1E1813', alignItems: 'center' },
-  title: { color: '#F6EDE2', fontSize: 18, fontWeight: '900' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, backgroundColor: 'transparent', alignItems: 'center' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
   content: { padding: 16, gap: 12 },
-  sectionLabel: { color: '#C9782B', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1, marginTop: 12, marginBottom: 4 },
+  sectionLabel: { color: PIZZA_FIRE.accent, fontSize: 12, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1, marginTop: 12, marginBottom: 4 },
   userPicker: { flexDirection: 'row', marginBottom: 12 },
   userItem: { alignItems: 'center', marginRight: 16, width: 64 },
-  avatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: '#3A2D24', backgroundColor: '#1E1813' },
+  avatar: { width: 50, height: 50, borderRadius: 25, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, backgroundColor: PIZZA_FIRE.surfaceInset },
   userItemActive: { opacity: 1 },
-  userName: { fontSize: 11, color: '#A88E73', marginTop: 6, textAlign: 'center' },
-  userNameActive: { color: '#C9782B', fontWeight: 'bold' },
+  userName: { fontSize: 11, color: PIZZA_FIRE.textMuted, marginTop: 6, textAlign: 'center' },
+  userNameActive: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
   worksiteGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
-  worksitePill: { backgroundColor: '#1E1813', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: '#3A2D24' },
-  worksitePillActive: { borderColor: '#C9782B', backgroundColor: 'rgba(201, 120, 43, 0.1)' },
-  worksiteText: { color: '#A88E73', fontSize: 13, fontWeight: '600' },
-  worksiteTextActive: { color: '#C9782B', fontWeight: 'bold' },
-  calendar: { borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: '#3A2D24', marginBottom: 12 },
+  worksitePill: { backgroundColor: PIZZA_FIRE.surface, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  worksitePillActive: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accentSoft },
+  worksiteText: { color: PIZZA_FIRE.textMuted, fontSize: 13, fontWeight: '600' },
+  worksiteTextActive: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
+  calendar: { borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginBottom: 12 },
   timeRow: { flexDirection: 'row', marginBottom: 24 },
-  timeLabel: { color: '#A88E73', fontSize: 10, fontWeight: 'bold', marginBottom: 6 },
-  input: { backgroundColor: '#1E1813', color: '#F6EDE2', padding: 14, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: '#3A2D24' },
-  saveBtn: { backgroundColor: '#C9782B', paddingVertical: 16, borderRadius: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8 },
+  timeLabel: { color: PIZZA_FIRE.textMuted, fontSize: 10, fontWeight: 'bold', marginBottom: 6 },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 14, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  saveBtn: { backgroundColor: PIZZA_FIRE.hotAccent, paddingVertical: 16, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.hotAccentBorder },
   saveBtnDisabled: { opacity: 0.5 },
-  saveBtnText: { color: '#1E1813', fontWeight: '900', fontSize: 16, textTransform: 'uppercase' },
+  saveBtnText: { color: PIZZA_FIRE.textPrimary, fontWeight: '900', fontSize: 16, textTransform: 'uppercase' },
 });

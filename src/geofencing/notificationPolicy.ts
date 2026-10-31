@@ -1,14 +1,13 @@
 import { isShiftInProgress } from './processor';
 import {
-  getGeofenceRemindersStopped,
-  isGeofenceNotificationMuted,
   getSuppressGeofenceWhileOnShift,
-  setGeofenceRemindersStopped,
+  isEnterHandledForVisit,
+  markEnterHandledForInsideVisits,
   setSuppressGeofenceWhileOnShift,
 } from './storage';
 import { setNativeSuppressEnterNotifications } from './native';
 
-export type GeofenceNotificationVariant = 'prompt' | 'auto_result' | 'mute_offer';
+export type GeofenceNotificationVariant = 'prompt' | 'auto_result';
 
 export type GeofenceNotificationDecision =
   | { show: false }
@@ -16,12 +15,9 @@ export type GeofenceNotificationDecision =
 
 export async function decideGeofenceNotification(
   userId: string,
-  transition: 'enter' | 'exit'
+  transition: 'enter' | 'exit',
+  geofenceId?: string
 ): Promise<GeofenceNotificationDecision> {
-  if ((await getGeofenceRemindersStopped()) || (await isGeofenceNotificationMuted())) {
-    return { show: false };
-  }
-
   const inProgress = await isShiftInProgress(userId);
   const suppressed = await getSuppressGeofenceWhileOnShift();
 
@@ -29,10 +25,16 @@ export async function decideGeofenceNotification(
     if (inProgress || suppressed) {
       return { show: false };
     }
+    if (geofenceId && (await isEnterHandledForVisit(geofenceId))) {
+      return { show: false };
+    }
     return { show: true, variant: 'prompt' };
   }
 
-  return inProgress || suppressed ? { show: false } : { show: true, variant: 'prompt' };
+  if (!inProgress) {
+    return { show: false };
+  }
+  return { show: true, variant: 'prompt' };
 }
 
 export async function onShiftStarted(): Promise<void> {
@@ -40,27 +42,8 @@ export async function onShiftStarted(): Promise<void> {
   await setNativeSuppressEnterNotifications(true);
 }
 
-export async function onShiftEnded(): Promise<void> {
+export async function onShiftEnded(geofenceId?: string | null): Promise<void> {
+  await markEnterHandledForInsideVisits(geofenceId);
   await setSuppressGeofenceWhileOnShift(false);
   await setNativeSuppressEnterNotifications(false);
-}
-
-export async function applyKeepReminding(): Promise<void> {
-  await setGeofenceRemindersStopped(false);
-  await setSuppressGeofenceWhileOnShift(false);
-  await setNativeSuppressEnterNotifications(false);
-}
-
-export async function applyStopReminders(): Promise<void> {
-  await setGeofenceRemindersStopped(true);
-  await setSuppressGeofenceWhileOnShift(false);
-  await setNativeSuppressEnterNotifications(false);
-}
-
-export async function handleGeofenceReminderAction(actionId: string): Promise<void> {
-  if (actionId === 'keep_reminding') {
-    await applyKeepReminding();
-  } else if (actionId === 'stop_reminders') {
-    await applyStopReminders();
-  }
 }

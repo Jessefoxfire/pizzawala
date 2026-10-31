@@ -3,9 +3,7 @@ package com.djtranscendence.pizzawala.geofence
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
-import androidx.core.content.ContextCompat
 import com.facebook.react.HeadlessJsTaskService
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
@@ -44,11 +42,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 putExtra("timestamp", loc.time)
             }
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    ContextCompat.startForegroundService(context, serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
-                }
+                GeofenceHeadlessFg.startEventService(context, serviceIntent)
             } catch (_: Exception) {}
         }
         return
@@ -77,10 +71,27 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
       // 1. IMMEDIATE NATIVE HANDLING
       if (transition == "enter") {
         GeofenceExitWorker.cancel(context, geofenceId)
-        if (!GeofencePrefs.isSuppressEnterWhileOnShift(context)) {
+        val stillRegistered = GeofencePrefs.loadGeofences(context).any { it.id == geofenceId }
+        val skipEnterNotify =
+          !stillRegistered ||
+            GeofencePrefs.isSuppressEnterWhileOnShift(context) ||
+            GeofencePrefs.isEnterHandledForVisit(context, geofenceId)
+        if (!skipEnterNotify) {
           GeofenceNotifier.notifyTransition(context, geofenceId, transition)
+          GeofencePrefs.setEnterHandledForVisit(context, geofenceId, true)
+          GeofencePrefs.setExitNotifiedForVisit(context, geofenceId, false)
         }
       } else if (transition == "exit") {
+        GeofencePrefs.setEnterHandledForVisit(context, geofenceId, false)
+        val onShift = GeofencePrefs.isSuppressEnterWhileOnShift(context)
+        val autoShift = GeofencePrefs.isAutoShiftEnabled(context)
+        if (
+          !GeofencePrefs.isExitNotifiedForVisit(context, geofenceId) &&
+            (onShift || autoShift)
+        ) {
+          GeofenceNotifier.notifyTransition(context, geofenceId, transition)
+          GeofencePrefs.setExitNotifiedForVisit(context, geofenceId, true)
+        }
         GeofenceExitWorker.schedule(context, geofenceId, ts)
       }
       
@@ -101,11 +112,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
       }
 
       try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-          ContextCompat.startForegroundService(context, serviceIntent)
-        } else {
-          context.startService(serviceIntent)
-        }
+        GeofenceHeadlessFg.startEventService(context, serviceIntent)
         HeadlessJsTaskService.acquireWakeLockNow(context)
       } catch (e: Exception) {
         Log.e(TAG, "Failed to start Headless task", e)

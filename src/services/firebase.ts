@@ -5,12 +5,14 @@ import { getFirestore as getWebFirestore } from "firebase/firestore";
 import { getApp as getNativeApp } from '@react-native-firebase/app';
 import nativeAuth from '@react-native-firebase/auth';
 import {
+  deleteField,
   getFirestore as getRNFirestore,
   collection,
   doc,
   setDoc,
   serverTimestamp as nativeServerTimestamp,
 } from '@react-native-firebase/firestore';
+import messaging from '@react-native-firebase/messaging';
 import { getStorage } from '@react-native-firebase/storage';
 
 const firebaseConfig = {
@@ -55,7 +57,24 @@ const createAccountWithEmail = async (name: string, email: string, password: str
     return userCredential;
 }
 
-const signOutUser = () => {
+const signOutUser = async () => {
+    const user = nativeAuth().currentUser;
+    if (user?.uid) {
+      try {
+        await setDoc(
+          doc(getRNFirestore(), 'users', user.uid),
+          { fcmToken: deleteField(), fcmTokenUpdatedAt: deleteField() },
+          { merge: true }
+        );
+      } catch (error) {
+        console.warn('[Push] failed removing signed-out user token:', error);
+      }
+    }
+    try {
+      await messaging().deleteToken();
+    } catch (error) {
+      console.warn('[Push] failed invalidating local token on sign out:', error);
+    }
     return nativeAuth().signOut();
 }
 

@@ -27,18 +27,9 @@ export async function displayForegroundRemoteMessage(
   const type = data?.type ?? 'personal_notification';
 
   const channelId =
-    type === 'chat_message' || type === 'broadcast'
-      ? 'chat_messages'
-      : type === 'award_received'
-        ? 'awards'
-        : 'personal_alerts';
+    type === 'chat_message' || type === 'broadcast' ? 'chat_messages' : 'personal_alerts';
 
-  const channelName =
-    channelId === 'chat_messages'
-      ? 'Team Chat Messages'
-      : channelId === 'awards'
-        ? 'Awards & Medals'
-        : 'Personal Alerts';
+  const channelName = channelId === 'chat_messages' ? 'Team Chat Messages' : 'Personal Alerts';
 
   await ensureChannel(channelId, channelName);
 

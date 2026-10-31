@@ -3,11 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "react-native run-android",
-    "ios": "react-native run-ios",
+    "android": "react-native run-android --port 8082",
+    "ios": "react-native run-ios --port 8082",
     "lint": "eslint .",
     "postinstall": "patch-package",
-    "start": "react-native start",
+    "start": "react-native start --port 8082",
     "test": "jest"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "@react-native-firebase/firestore": "^24.0.0",
     "@react-native-firebase/messaging": "^24.0.0",
     "@react-native-firebase/storage": "^24.0.0",
+    "@react-native-ml-kit/text-recognition": "^2.0.0",
     "@react-native/new-app-screen": "0.83.1",
     "@react-navigation/native": "^7.3.7",
     "@react-navigation/native-stack": "^7.12.0",

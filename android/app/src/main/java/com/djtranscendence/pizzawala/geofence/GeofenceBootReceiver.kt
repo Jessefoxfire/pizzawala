@@ -18,6 +18,8 @@ class GeofenceBootReceiver : BroadcastReceiver() {
       intent.action != "com.htc.intent.action.QUICKBOOT_POWERON"
     ) return
 
+    ShiftOngoingService.restoreIfActive(context)
+
     val pendingResult = goAsync()
     GeofenceRegistrar.registerStoredGeofences(context, intent.action ?: "boot") { _, _ ->
       pendingResult.finish()

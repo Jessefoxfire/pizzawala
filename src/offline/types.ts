@@ -28,21 +28,32 @@ export type OutboxShiftStart = {
     teamId: string;
     geofenceId?: string | null;
     geofenceName?: string | null;
+    workCategory?: 'driving' | null;
     startedBy: string;
     recordedAtIso: string;
   };
+};
+
+export type ShiftEndPayload = {
+  shiftId: string;
+  endedBy: string;
+  recordedAtIso: string;
+  timesChanged?: boolean;
+  actualStartIso?: string;
+  actualEndIso?: string;
+  originalStartIso?: string;
+  originalEndIso?: string;
+  editedBy?: string;
 };
 
 export type OutboxShiftEnd = {
   id: string;
   type: 'shift_end';
   createdAt: string;
-  payload: {
-    shiftId: string;
-    endedBy: string;
-    recordedAtIso: string;
-  };
+  payload: ShiftEndPayload;
 };
+
+export type PendingShiftEnd = ShiftEndPayload;
 
 export type OutboxShiftPause = {
   id: string;
@@ -77,6 +88,7 @@ export type OfflineOpenShift = {
   teamId: string;
   geofenceId?: string | null;
   geofenceName?: string | null;
+  workCategory?: 'driving' | null;
   startedBy: string;
   recordedAtIso: string;
   workPeriods: ShiftPeriod[];
@@ -89,4 +101,5 @@ export type OfflineOpenShift = {
 export type WriteResult = {
   queued: boolean;
   clientShiftId?: string;
+  notice?: string;
 };

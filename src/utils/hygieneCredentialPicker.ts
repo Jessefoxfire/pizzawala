@@ -31,6 +31,7 @@ export type HygieneEmployeeOverride = Partial<HygieneActor> & {
 export type HygieneUploadOptions = {
   requiredDocumentType?: string | null;
   documentCategory?: string | null;
+  folder?: string | null;
 };
 
 export type HygieneCredentialDraft = {
@@ -146,8 +147,11 @@ async function pickDocumentDraft() {
 }
 
 /** Pick a file only; name confirmation happens before upload. */
-export async function pickHygieneCredentialDraft(_uploadOptions?: HygieneUploadOptions) {
-  const source = await promptHygieneUploadSource();
+export async function pickHygieneCredentialDraft(
+  _uploadOptions?: HygieneUploadOptions,
+  selectedSource?: DocumentNameSource | null
+) {
+  const source = selectedSource ?? (await promptHygieneUploadSource());
   if (!source) return null;
 
   try {

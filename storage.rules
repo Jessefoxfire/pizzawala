@@ -22,6 +22,12 @@ service firebase.storage {
       allow read, write: if signedIn();
     }
 
+    // Member-submitted business receipts. The owner can access their files;
+    // admins retain access for a future expense review workflow.
+    match /receipts/{teamId}/{userId}/{fileName} {
+      allow read, write: if signedIn() && (request.auth.uid == userId || isAdmin());
+    }
+
     // Monthly hygiene CSV exports
     match /hygiene/exports/{month}/{fileName} {
       allow read: if signedIn();

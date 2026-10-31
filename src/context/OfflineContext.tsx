@@ -198,6 +198,8 @@ export async function getPendingTemperatureLogs() {
       temperatureUnit: item.payload.temperatureUnit,
       notes: item.payload.notes,
       loggedAtIso: item.payload.loggedAtIso,
+      dateKey: item.payload.dateKey,
+      monthKey: item.payload.monthKey,
       userName: item.payload.actor.userName,
     }));
 }

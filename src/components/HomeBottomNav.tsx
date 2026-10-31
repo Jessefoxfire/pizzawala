@@ -96,9 +96,9 @@ const styles = StyleSheet.create({
   },
   barSurface: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: PIZZA_FIRE.charcoal,
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 159, 28, 0.18)',
+    borderTopColor: PIZZA_FIRE.qlBorder,
   },
   barContent: {
     flex: 1,
@@ -138,11 +138,11 @@ const styles = StyleSheet.create({
     width: CENTER_BUTTON_SIZE,
     height: CENTER_BUTTON_SIZE,
     borderRadius: CENTER_BUTTON_SIZE / 2,
-    backgroundColor: PIZZA_FIRE.ember,
+    backgroundColor: PIZZA_FIRE.accent,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 6,
-    borderColor: '#120A06',
+    borderColor: PIZZA_FIRE.bgMid,
   },
   centerCaption: {
     fontSize: 10,

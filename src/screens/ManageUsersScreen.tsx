@@ -11,17 +11,21 @@ import {
   ActivityIndicator,
   Switch,
   Image,
+  Keyboard,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   ScrollView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
   getFirestore,
   onSnapshot,
   query,
+  serverTimestamp,
   setDoc,
   updateDoc,
 } from '@react-native-firebase/firestore';
@@ -29,10 +33,23 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { resetPassword } from '../services/firebase';
 import { deleteHygieneCredential, formatDateTime } from '../services/hygiene';
 import { RootStackParamList } from '../navigation/AppNavigator';
+import { openUserProfile } from '../navigation/openUserProfile';
 import { Icons } from '../components/Icons';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
 import { getRequiredDocumentTypesForUser } from '../constants/germanEmployeeCompliance';
 import type { HygieneEmployeeOverride } from '../utils/hygieneCredentialPicker';
+import PizzaFireButton from '../components/PizzaFireButton';
+import PizzaFireScreen from '../components/PizzaFireScreen';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
+import { isPersonnelDocument } from '../utils/personnelDocuments';
+import {
+  GERMAN_COMPLIANCE_FIELDS,
+  SALUTATION_OPTIONS,
+  readGermanCompliance,
+  type GermanComplianceProfile,
+  type Salutation,
+} from '../constants/germanEmployeeCompliance';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ManageUsers'>;
 
@@ -47,6 +64,7 @@ type UserRecord = {
   lastLocation?: { lat: number; lng: number } | null;
   lastLocationUpdate?: any;
   requiredDocuments?: string[];
+  germanCompliance?: GermanComplianceProfile;
 };
 
 const DOC_REQUIREMENTS_CONFIG_ID = 'userRequiredDocuments';
@@ -60,12 +78,14 @@ export default function ManageUsersScreen({ navigation }: Props) {
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState('');
   const [editAdmin, setEditAdmin] = useState(false);
+  const [editCompliance, setEditCompliance] = useState<GermanComplianceProfile>({});
   const [saving, setSaving] = useState(false);
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [availableDocTypes, setAvailableDocTypes] = useState<string[]>([]);
   const [selectedRequiredDocs, setSelectedRequiredDocs] = useState<string[]>([]);
   const [newDocType, setNewDocType] = useState('');
+  const [newDocTypeMemberOnly, setNewDocTypeMemberOnly] = useState(false);
   const [addingDocType, setAddingDocType] = useState(false);
   const [credentials, setCredentials] = useState<any[]>([]);
   const [documentsModalUser, setDocumentsModalUser] = useState<UserRecord | null>(null);
@@ -73,8 +93,9 @@ export default function ManageUsersScreen({ navigation }: Props) {
   const [deletingDocType, setDeletingDocType] = useState<string | null>(null);
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
   const [uploadTargetUserId, setUploadTargetUserId] = useState<string | null>(null);
+  const [expandedUserIds, setExpandedUserIds] = useState<string[]>([]);
 
-  const { pickAndUpload, nameConfirmModal, isUploading: isUploadingDoc } = useHygieneCredentialUpload();
+  const { pickAndUpload, nameConfirmModal, sourcePickerModal, isUploading: isUploadingDoc } = useHygieneCredentialUpload();
 
   useEffect(() => {
     const fs = getFirestore();
@@ -134,14 +155,16 @@ export default function ManageUsersScreen({ navigation }: Props) {
 
   const documentsForModalUser = useMemo(() => {
     if (!documentsModalUser) return [];
-    return credentials.filter(item => String(item.employeeUid || '') === documentsModalUser.id);
+    return credentials.filter(
+      item => String(item.employeeUid || '') === documentsModalUser.id && isPersonnelDocument(item)
+    );
   }, [credentials, documentsModalUser]);
 
   const uploadsByDocTypeForUser = useCallback(
     (userId: string) => {
       const map = new Map<string, any>();
       credentials
-        .filter(item => String(item.employeeUid || '') === userId)
+        .filter(item => String(item.employeeUid || '') === userId && isPersonnelDocument(item))
         .forEach(item => {
           const docType = String(item.requiredDocumentType || '').trim();
           if (!docType) return;
@@ -174,6 +197,17 @@ export default function ManageUsersScreen({ navigation }: Props) {
     return getRequiredDocumentTypesForUser(documentsModalUser.requiredDocuments);
   }, [documentsModalUser]);
 
+  const documentTypesForSelectedUser = useMemo(() => {
+    const memberOnly = selectedRequiredDocs.filter(docType =>
+      !availableDocTypes.some(sharedType => sharedType.toLowerCase() === docType.toLowerCase())
+    );
+    return Array.from(new Set([
+      ...getRequiredDocumentTypesForUser(selectedRequiredDocs),
+      ...availableDocTypes,
+      ...memberOnly,
+    ])).sort((a, b) => a.localeCompare(b));
+  }, [availableDocTypes, selectedRequiredDocs]);
+
   const sortedUsers = useMemo(() => {
     return [...users].sort((a, b) => {
       const aName = (a.name || a.emailLower || a.email || '').toLowerCase();
@@ -187,13 +221,20 @@ export default function ManageUsersScreen({ navigation }: Props) {
     setEditName(user.name || '');
     const roles = Array.isArray(user.roles) ? user.roles : [];
     setEditAdmin(roles.includes('admin'));
+    setEditCompliance(readGermanCompliance(user as Record<string, unknown>));
+    setEditVisible(true);
+  };
+
+  const openDocuments = (user: UserRecord) => {
+    setSelected(user);
     setSelectedRequiredDocs(
       Array.isArray(user.requiredDocuments)
         ? user.requiredDocuments.map(value => String(value || '').trim()).filter(Boolean)
         : []
     );
     setNewDocType('');
-    setEditVisible(true);
+    setNewDocTypeMemberOnly(false);
+    setDocumentsModalUser(user);
   };
 
   const handleSave = async () => {
@@ -214,7 +255,14 @@ export default function ManageUsersScreen({ navigation }: Props) {
         name: trimmed,
         roles: nextRoles,
         teamId: (selected as any).teamId || 'team-1',
-        requiredDocuments: selectedRequiredDocs,
+        germanCompliance: {
+          salutation: editCompliance.salutation || '',
+          address: String(editCompliance.address || '').trim(),
+          birthDate: String(editCompliance.birthDate || '').trim(),
+          birthPlace: String(editCompliance.birthPlace || '').trim(),
+          socialSecurityNumber: String(editCompliance.socialSecurityNumber || '').trim(),
+          taxIdNumber: String(editCompliance.taxIdNumber || '').trim(),
+        },
       });
 
       console.log('handleSave: success');
@@ -222,7 +270,8 @@ export default function ManageUsersScreen({ navigation }: Props) {
       setSelected(null);
       setEditName('');
       setEditAdmin(false);
-      Alert.alert('Success', 'User updated successfully');
+      setEditCompliance({});
+      Alert.alert('Success', 'Member updated successfully');
     } catch (err: any) {
       console.error('handleSave: error', err);
       const msg = err?.message ? String(err.message) : 'Unable to update user.';
@@ -248,6 +297,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
     const exists = availableDocTypes.some(value => value.toLowerCase() === normalized.toLowerCase());
     if (exists) {
       setNewDocType('');
+      setNewDocTypeMemberOnly(false);
       if (!selectedRequiredDocs.includes(normalized)) {
         toggleRequiredDoc(
           availableDocTypes.find(value => value.toLowerCase() === normalized.toLowerCase()) || normalized
@@ -258,6 +308,12 @@ export default function ManageUsersScreen({ navigation }: Props) {
 
     setAddingDocType(true);
     try {
+      if (newDocTypeMemberOnly) {
+        setSelectedRequiredDocs(current => [...current, normalized].sort((a, b) => a.localeCompare(b)));
+        setNewDocType('');
+        setNewDocTypeMemberOnly(false);
+        return;
+      }
       const fs = getFirestore();
       const nextOptions = [...availableDocTypes, normalized].sort((a, b) => a.localeCompare(b));
       await setDoc(
@@ -269,6 +325,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
       );
       setSelectedRequiredDocs(current => [...current, normalized].sort((a, b) => a.localeCompare(b)));
       setNewDocType('');
+      setNewDocTypeMemberOnly(false);
     } catch (err: any) {
       const msg = err?.message ? String(err.message) : 'Unable to add document type.';
       Alert.alert('Notice', msg);
@@ -426,6 +483,39 @@ export default function ManageUsersScreen({ navigation }: Props) {
     }
   };
 
+  const updateEditCompliance = (key: keyof GermanComplianceProfile, value: string) => {
+    setEditCompliance(current => ({ ...current, [key]: value }));
+  };
+
+  const handleSaveDocumentRequirements = async () => {
+    if (!documentsModalUser || saving) return;
+    const existing = Array.isArray(documentsModalUser.requiredDocuments)
+      ? documentsModalUser.requiredDocuments.map(value => String(value || '').trim().toLowerCase()).filter(Boolean)
+      : [];
+    const newlyRequested = selectedRequiredDocs.filter(docType => !existing.includes(docType.toLowerCase()));
+    setSaving(true);
+    try {
+      await updateDoc(doc(getFirestore(), 'users', documentsModalUser.id), {
+        requiredDocuments: selectedRequiredDocs,
+      });
+      if (newlyRequested.length > 0) {
+        await addDoc(collection(getFirestore(), 'users', documentsModalUser.id, 'notifications'), {
+          title: 'New document requested',
+          body: `Please provide: ${newlyRequested.join(', ')}.`,
+          nav: { screen: 'RequiredDocuments' },
+          createdAt: serverTimestamp(),
+        });
+      }
+      setDocumentsModalUser(current => current ? { ...current, requiredDocuments: selectedRequiredDocs } : current);
+      setSelected(current => current ? { ...current, requiredDocuments: selectedRequiredDocs } : current);
+      Alert.alert('Saved', 'Document requirements updated.');
+    } catch (err: any) {
+      Alert.alert('Could not save', err?.message || 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const isUploadBusyFor = (userId: string, docType: string) =>
     uploadingDocType === docType && uploadTargetUserId === userId && (isUploadingDoc || !!uploadingDocType);
 
@@ -434,85 +524,86 @@ export default function ManageUsersScreen({ navigation }: Props) {
     const requiredDocs = Array.isArray(item.requiredDocuments)
       ? item.requiredDocuments.map(value => String(value || '').trim()).filter(Boolean)
       : [];
-    const label = item.name || item.email || 'Unnamed user';
+    const label = item.name || item.email || 'Unnamed member';
+    const expanded = expandedUserIds.includes(item.id);
 
     return (
       <View style={styles.userCard}>
         <View style={styles.userHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.userName}>{label}</Text>
-            {!!item.email && <Text style={styles.userEmail}>{item.email}</Text>}
-            <Text style={styles.userMeta}>
-              {roles.includes('admin') ? 'Admin' : 'Member'}
-              {item.disabled ? ' • Disabled' : ''}
-            </Text>
-            <Text style={styles.userDocsMeta}>
-              Documents required: {requiredDocs.length ? requiredDocs.join(', ') : 'None set'}
-            </Text>
-          </View>
-          <TouchableOpacity style={styles.editBtn} onPress={() => openEdit(item)}>
-            <Text style={styles.editBtnText}>Edit</Text>
+          <TouchableOpacity
+            style={styles.userSummaryTap}
+            onPress={() => setExpandedUserIds(current =>
+              current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id]
+            )}
+            activeOpacity={0.85}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.userName}>{label}</Text>
+              <Text style={styles.userMeta}>
+                {roles.includes('admin') ? 'Admin' : 'Member'}
+                {item.disabled ? ' • Disabled' : ''}
+              </Text>
+            </View>
+            <Text style={styles.expandIndicator}>{expanded ? '⌃' : '⌄'}</Text>
           </TouchableOpacity>
         </View>
 
+        {expanded ? <>
+        {!!item.email && <Text style={styles.userEmail}>{item.email}</Text>}
+        <Text style={styles.userDocsMeta}>
+          Documents required: {requiredDocs.length ? requiredDocs.join(', ') : 'None set'}
+        </Text>
+        <TouchableOpacity onPress={() => openUserProfile(navigation, { userId: item.id, userName: label })}>
+          <Text style={styles.profileLink}>View profile</Text>
+        </TouchableOpacity>
+
         <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={styles.actionBtn}
+          <PizzaFireButton label="Edit" variant="primary" onPress={() => openEdit(item)} style={styles.actionBtn} />
+          {!SHOW_DEBUG_ONLY_OPERATIONS ? <PizzaFireButton
+            label="Send Reset"
+            variant="primary"
             onPress={() => handleResetPassword(item)}
             disabled={resettingId === item.id}
-          >
-            {resettingId === item.id ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.actionText}>Send Reset</Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: '#6D4C41' }]}
+            loading={resettingId === item.id}
+            style={styles.actionBtn}
+          /> : null}
+          <PizzaFireButton
+            label={item.disabled ? 'Activate' : 'Disable'}
+            variant="muted"
             onPress={() => handleToggleDisabled(item)}
-          >
-            <Text style={styles.actionText}>
-              {item.disabled ? 'Activate' : 'Disable'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: '#B71C1C' }]}
+            style={styles.actionBtn}
+          />
+          <PizzaFireButton
+            label="Delete Profile"
+            variant="danger"
             onPress={() => handleDeleteProfile(item)}
-          >
-            <Text style={styles.actionText}>Delete Profile</Text>
-          </TouchableOpacity>
+            style={styles.actionBtn}
+          />
         </View>
 
         <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: '#2E6B5A' }]}
-            onPress={() => setDocumentsModalUser(item)}
-          >
-            <Text style={styles.actionText}>View Uploaded Documents</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionBtn, { backgroundColor: '#5B4B3A' }]}
-            onPress={() => navigation.navigate('Chat', { prefillText: `@${label} ` })}
-          >
-            <Text style={styles.actionText}>Message</Text>
-          </TouchableOpacity>
+          <PizzaFireButton
+            label="Documents"
+            variant="muted"
+            onPress={() => openDocuments(item)}
+            style={styles.actionBtn}
+          />
         </View>
+        </> : null}
       </View>
     );
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
+    <View style={styles.safe}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Icons.arrowLeft color="#F6EDE2" width={24} height={24} />
+          <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
         </TouchableOpacity>
         <View>
-          <Text style={styles.title}>Manage Users</Text>
-          <Text style={styles.subtitle}>{users.length} Total Users</Text>
+          <Text style={styles.title}>Manage Members</Text>
+          <Text style={styles.subtitle}>{users.length} Total Members</Text>
         </View>
         <View style={{ width: 60 }} />
       </View>
@@ -529,22 +620,23 @@ export default function ManageUsersScreen({ navigation }: Props) {
           keyExtractor={item => item.id}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
-            <Text style={styles.empty}>No users found.</Text>
+            <Text style={styles.empty}>No members found.</Text>
           }
         />
       )}
 
       <Modal visible={editVisible} transparent animationType="fade">
-        <View style={styles.modalBg}>
+        <KeyboardAvoidingView style={styles.modalBg} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={[styles.modalCard, styles.editModalCard]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Edit User</Text>
+              <Text style={styles.modalTitle}>Edit Member</Text>
               <TouchableOpacity
                 onPress={() => {
                   setEditVisible(false);
                   setSelected(null);
                   setEditName('');
                   setEditAdmin(false);
+                  setEditCompliance({});
                   setSaving(false);
                   setDeletingDocType(null);
                 }}
@@ -553,7 +645,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
                 <Text style={styles.closeText}>✕</Text>
               </TouchableOpacity>
             </View>
-            <ScrollView contentContainerStyle={styles.editModalScroll} keyboardShouldPersistTaps="handled">
+            <ScrollView contentContainerStyle={styles.editModalScroll} keyboardShouldPersistTaps="always" showsVerticalScrollIndicator={false}>
             <TextInput
               style={styles.input}
               value={editName}
@@ -565,101 +657,36 @@ export default function ManageUsersScreen({ navigation }: Props) {
               <Switch value={editAdmin} onValueChange={setEditAdmin} />
             </View>
 
-            <View style={styles.docsSection}>
-              <Text style={styles.docsTitle}>Documents Required</Text>
-              <Text style={styles.docsSub}>Choose required files for this user, or create a new document type.</Text>
-
-              <View style={styles.addDocRow}>
-                <TextInput
-                  style={[styles.input, styles.docInput]}
-                  value={newDocType}
-                  onChangeText={setNewDocType}
-                  placeholder="e.g. Food Hygiene Certificate"
-                  placeholderTextColor="#8F7E6D"
-                />
-                <TouchableOpacity
-                  style={[styles.addDocBtn, (!newDocType.trim() || addingDocType) && styles.addDocBtnDisabled]}
-                  onPress={handleAddDocType}
-                  disabled={!newDocType.trim() || addingDocType}
-                >
-                  {addingDocType ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : (
-                    <Text style={styles.addDocBtnText}>Add</Text>
-                  )}
-                </TouchableOpacity>
+            <View style={styles.profileDetailsSection}>
+              <Text style={styles.docsTitle}>Member details</Text>
+              <Text style={styles.docsSub}>Enter the employment-record details on the member’s behalf.</Text>
+              <Text style={styles.profileFieldLabel}>Title</Text>
+              <View style={styles.salutationRow}>
+                {SALUTATION_OPTIONS.map(option => (
+                  <TouchableOpacity
+                    key={option}
+                    style={[styles.salutationPill, editCompliance.salutation === option && styles.salutationPillActive]}
+                    onPress={() => updateEditCompliance('salutation', option as Salutation)}
+                  >
+                    <Text style={[styles.salutationPillText, editCompliance.salutation === option && styles.salutationPillTextActive]}>{option}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
-
-              <View style={styles.docOptionsWrap}>
-                {availableDocTypes.length === 0 ? (
-                  <Text style={styles.docsEmpty}>No document types yet. Add one above.</Text>
-                ) : (
-                  availableDocTypes.map(docType => {
-                    const selectedDoc = selectedRequiredDocs.includes(docType);
-                    const upload = uploadsByDocTypeForSelectedUser.get(docType);
-                    const busyDelete = deletingDocType === docType;
-                    return (
-                      <View
-                        key={docType}
-                        style={[styles.docOption, selectedDoc && styles.docOptionSelected]}
-                      >
-                        <TouchableOpacity
-                          style={styles.docOptionMain}
-                          onPress={() => toggleRequiredDoc(docType)}
-                          activeOpacity={0.75}
-                        >
-                          <View style={[styles.docCheckbox, selectedDoc && styles.docCheckboxSelected]}>
-                            <Text style={styles.docCheckboxText}>{selectedDoc ? '✓' : ''}</Text>
-                          </View>
-                          <View style={styles.docOptionBody}>
-                            <Text style={[styles.docOptionText, selectedDoc && styles.docOptionTextSelected]}>
-                              {docType}
-                            </Text>
-                            <Text
-                              style={[
-                                styles.docUploadStatus,
-                                upload ? styles.docUploadStatusDone : styles.docUploadStatusMissing,
-                              ]}
-                            >
-                              {upload ? 'Uploaded' : 'Not uploaded'}
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
-                        {upload?.downloadUrl ? (
-                          <TouchableOpacity
-                            style={styles.docUploadLinkBtn}
-                            onPress={() => void Linking.openURL(String(upload.downloadUrl))}
-                          >
-                            <Text style={styles.docUploadLink}>View</Text>
-                          </TouchableOpacity>
-                        ) : null}
-                        <TouchableOpacity
-                          style={styles.docUploadBtn}
-                          onPress={() => selected && void handleAdminUploadDocument(selected, docType)}
-                          disabled={!selected || isUploadBusyFor(selected.id, docType)}
-                        >
-                          {selected && isUploadBusyFor(selected.id, docType) ? (
-                            <ActivityIndicator color="#D9A441" size="small" />
-                          ) : (
-                            <Text style={styles.docUploadBtnText}>{upload ? 'Replace' : 'Upload'}</Text>
-                          )}
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.docTypeDeleteBtn}
-                          onPress={() => handleDeleteDocType(docType)}
-                          disabled={busyDelete}
-                        >
-                          {busyDelete ? (
-                            <ActivityIndicator color="#D89A79" />
-                          ) : (
-                            <Text style={styles.docTypeDeleteText}>Delete</Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })
-                )}
-              </View>
+              {GERMAN_COMPLIANCE_FIELDS.map(field => (
+                <View key={field.key} style={styles.profileFieldGroup}>
+                  <Text style={styles.profileFieldLabel}>{field.label}</Text>
+                  <TextInput
+                    style={[styles.input, field.multiline && styles.profileMultilineInput]}
+                    value={String(editCompliance[field.key] || '')}
+                    onChangeText={value => updateEditCompliance(field.key, value)}
+                    placeholder={field.key === 'birthDate' ? 'YYYY-MM-DD' : field.placeholder}
+                    placeholderTextColor="#8F7E6D"
+                    multiline={field.multiline}
+                    autoCapitalize={field.autoCapitalize || 'sentences'}
+                    keyboardType={field.keyboardType || 'default'}
+                  />
+                </View>
+              ))}
             </View>
             </ScrollView>
 
@@ -671,6 +698,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
                   setSelected(null);
                   setEditName('');
                   setEditAdmin(false);
+                  setEditCompliance({});
                   setSaving(false);
                 }}
               >
@@ -678,6 +706,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.modalButton}
+                onPressIn={() => Keyboard.dismiss()}
                 onPress={handleSave}
                 disabled={saving}
               >
@@ -689,17 +718,17 @@ export default function ManageUsersScreen({ navigation }: Props) {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={!!documentsModalUser} transparent animationType="fade">
-        <View style={styles.modalBg}>
+        <KeyboardAvoidingView style={styles.modalBg} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={[styles.modalCard, styles.documentsModalCard]}>
             <View style={styles.modalHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.modalTitle}>Uploaded Documents</Text>
+                <Text style={styles.modalTitle}>Documents</Text>
                 <Text style={styles.documentsModalSubtitle}>
-                  {documentsModalUser?.name || documentsModalUser?.email || 'User'}
+                  {documentsModalUser?.name || documentsModalUser?.email || 'Member'}
                 </Text>
               </View>
               <TouchableOpacity
@@ -713,45 +742,74 @@ export default function ManageUsersScreen({ navigation }: Props) {
               </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.documentsScroll}>
+            <ScrollView contentContainerStyle={styles.documentsScroll} keyboardShouldPersistTaps="always" showsVerticalScrollIndicator={false}>
               {documentsModalUser ? (
-                <View style={styles.adminUploadSection}>
-                  <Text style={styles.adminUploadTitle}>Upload for this user</Text>
-                  <Text style={styles.adminUploadSub}>
-                    Upload required documents on behalf of {documentsModalUser.name || documentsModalUser.email || 'this user'}.
-                  </Text>
-                  {requiredDocTypesForModalUser.map(docType => {
-                    const upload = uploadsByDocTypeForModalUser.get(docType);
-                    const busy = isUploadBusyFor(documentsModalUser.id, docType);
-                    return (
-                      <View key={docType} style={styles.adminUploadRow}>
-                        <View style={styles.adminUploadRowText}>
-                          <Text style={styles.adminUploadDocType} numberOfLines={2}>
-                            {docType}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.docUploadStatus,
-                              upload ? styles.docUploadStatusDone : styles.docUploadStatusMissing,
-                            ]}
+                <View style={styles.docsSection}>
+                  <Text style={styles.docsTitle}>Required documents</Text>
+                  <Text style={styles.docsSub}>Add or manage the documents required from this member.</Text>
+                  <View style={styles.addDocRow}>
+                    <TextInput
+                      style={[styles.input, styles.docInput]}
+                      value={newDocType}
+                      onChangeText={setNewDocType}
+                      placeholder="e.g. Food Hygiene Certificate"
+                      placeholderTextColor="#8F7E6D"
+                    />
+                    <TouchableOpacity
+                      style={[styles.addDocBtn, (!newDocType.trim() || addingDocType) && styles.addDocBtnDisabled]}
+                      onPress={handleAddDocType}
+                      disabled={!newDocType.trim() || addingDocType}
+                    >
+                      {addingDocType ? <ActivityIndicator color="#FFF" /> : <Text style={styles.addDocBtnText}>Add</Text>}
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity style={styles.memberOnlyToggle} onPress={() => setNewDocTypeMemberOnly(current => !current)}>
+                    <View style={[styles.docCheckbox, newDocTypeMemberOnly && styles.docCheckboxSelected]}>
+                      <Text style={styles.docCheckboxText}>{newDocTypeMemberOnly ? '✓' : ''}</Text>
+                    </View>
+                    <Text style={styles.memberOnlyText}>This member only</Text>
+                  </TouchableOpacity>
+                  <View style={styles.docOptionsWrap}>
+                    {documentTypesForSelectedUser.map(docType => {
+                      const required = selectedRequiredDocs.includes(docType);
+                      const upload = uploadsByDocTypeForModalUser.get(docType);
+                      const memberOnly = !availableDocTypes.some(type => type.toLowerCase() === docType.toLowerCase());
+                      return (
+                        <View key={docType} style={[styles.docOption, required && styles.docOptionSelected]}>
+                          <TouchableOpacity style={styles.docOptionMain} onPress={() => toggleRequiredDoc(docType)}>
+                            <View style={[styles.docCheckbox, required && styles.docCheckboxSelected]}>
+                              <Text style={styles.docCheckboxText}>{required ? '✓' : ''}</Text>
+                            </View>
+                            <View style={styles.docOptionBody}>
+                              <Text style={[styles.docOptionText, required && styles.docOptionTextSelected]}>{docType}</Text>
+                              {memberOnly ? <Text style={styles.memberOnlyTag}>This member only</Text> : null}
+                              <Text style={[styles.docUploadStatus, upload ? styles.docUploadStatusDone : styles.docUploadStatusMissing]}>{upload ? 'Uploaded' : 'Not uploaded'}</Text>
+                            </View>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.docUploadBtn}
+                            onPress={() => void handleAdminUploadDocument(documentsModalUser, docType)}
+                            disabled={isUploadBusyFor(documentsModalUser.id, docType)}
                           >
-                            {upload ? 'Uploaded' : 'Missing'}
-                          </Text>
+                            {isUploadBusyFor(documentsModalUser.id, docType) ? <ActivityIndicator color={PIZZA_FIRE.gold} size="small" /> : <Text style={styles.docUploadBtnText}>{upload ? 'Replace' : 'Upload'}</Text>}
+                          </TouchableOpacity>
+                          {!memberOnly ? (
+                            <TouchableOpacity style={styles.docTypeDeleteBtn} onPress={() => handleDeleteDocType(docType)} disabled={deletingDocType === docType}>
+                              {deletingDocType === docType ? <ActivityIndicator color="#D89A79" /> : <Text style={styles.docTypeDeleteText}>Delete</Text>}
+                            </TouchableOpacity>
+                          ) : null}
                         </View>
-                        <TouchableOpacity
-                          style={[styles.adminUploadBtn, busy && styles.adminUploadBtnDisabled]}
-                          onPress={() => void handleAdminUploadDocument(documentsModalUser, docType)}
-                          disabled={busy}
-                        >
-                          {busy ? (
-                            <ActivityIndicator color="#1E1813" size="small" />
-                          ) : (
-                            <Text style={styles.adminUploadBtnText}>{upload ? 'Replace' : 'Upload'}</Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  })}
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : null}
+
+              {documentsModalUser ? (
+                <View style={styles.documentRequirementsSaveSection}>
+                  <TouchableOpacity style={styles.modalButton} onPressIn={() => Keyboard.dismiss()} onPress={() => void handleSaveDocumentRequirements()} disabled={saving}>
+                    {saving ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Save document requirements</Text>}
+                  </TouchableOpacity>
                 </View>
               ) : null}
 
@@ -820,80 +878,73 @@ export default function ManageUsersScreen({ navigation }: Props) {
               )}
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
       {nameConfirmModal}
-    </SafeAreaView>
+      {sourcePickerModal}
+    </View>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    backgroundColor: '#2A211B',
+    backgroundColor: 'transparent',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     padding: 16,
-    backgroundColor: '#1E1813',
+    backgroundColor: 'transparent',
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
   },
   backBtn: { padding: 4, marginRight: 4 },
-  back: { fontSize: 18, fontWeight: 'bold', color: '#EBDCCB' },
+  back: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textSecondary },
   errorBanner: {
     marginHorizontal: 16,
     marginTop: 12,
     padding: 12,
     borderRadius: 10,
     backgroundColor: 'rgba(158, 60, 46, 0.2)',
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 13,
   },
-  title: { fontSize: 20, fontWeight: 'bold', color: '#F6EDE2' },
-  subtitle: { fontSize: 12, color: '#A88E73', marginTop: 2 },
+  title: { fontSize: 20, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
+  subtitle: { fontSize: 12, color: PIZZA_FIRE.textMuted, marginTop: 2 },
   list: { padding: 16 },
-  empty: { textAlign: 'center', marginTop: 40, color: '#A88E73' },
+  empty: { textAlign: 'center', marginTop: 40, color: PIZZA_FIRE.textMuted },
   userCard: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surface,
     padding: 16,
     borderRadius: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   userHeader: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  userName: { fontSize: 16, fontWeight: 'bold', color: '#F6EDE2' },
-  userEmail: { fontSize: 13, color: '#A88E73', marginTop: 2 },
-  userMeta: { fontSize: 12, color: '#7C6854', marginTop: 6 },
-  userDocsMeta: { fontSize: 12, color: '#C8B29A', marginTop: 6, lineHeight: 17 },
-  editBtn: {
-    backgroundColor: '#D9A441',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  editBtnText: { color: '#FFF', fontWeight: '600', fontSize: 12 },
+  userSummaryTap: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingRight: 12 },
+  userName: { fontSize: 16, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
+  userEmail: { fontSize: 13, color: PIZZA_FIRE.textMuted, marginTop: 2 },
+  userMeta: { fontSize: 12, color: PIZZA_FIRE.textMuted, marginTop: 6 },
+  userDocsMeta: { fontSize: 12, color: PIZZA_FIRE.textSecondary, marginTop: 6, lineHeight: 17 },
+  profileLink: { color: PIZZA_FIRE.gold, fontSize: 12, fontWeight: '700', marginTop: 10 },
+  expandIndicator: { color: PIZZA_FIRE.gold, fontSize: 20, fontWeight: '800', marginLeft: 10, lineHeight: 18 },
   actionsRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
     marginTop: 12,
   },
   actionBtn: {
-    flex: 1,
-    backgroundColor: '#C9782B',
-    paddingVertical: 10,
-    borderRadius: 8,
-    alignItems: 'center',
+    flexGrow: 1,
+    flexBasis: '30%',
+    minWidth: 96,
   },
-  actionBtnDisabled: {
-    opacity: 0.5,
-  },
-  actionText: { color: '#FFF', fontWeight: '600', fontSize: 12 },
   modalBg: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.8)',
@@ -901,11 +952,11 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     margin: 20,
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 20,
     padding: 20,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   editModalCard: {
     maxHeight: '88%',
@@ -919,24 +970,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', flex: 1, color: '#F6EDE2' },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', flex: 1, color: PIZZA_FIRE.textPrimary },
   closeBtn: {
     padding: 4,
     marginLeft: 8,
   },
   closeText: {
     fontSize: 24,
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontWeight: '300',
   },
   input: {
-    backgroundColor: '#3A2D24',
+    backgroundColor: PIZZA_FIRE.inputBg,
     padding: 12,
     borderRadius: 8,
     marginTop: 16,
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     borderWidth: 1,
-    borderColor: '#5A4739',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   toggleRow: {
     flexDirection: 'row',
@@ -944,15 +995,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 16,
   },
-  toggleLabel: { fontSize: 14, color: '#C8B29A' },
+  toggleLabel: { fontSize: 14, color: PIZZA_FIRE.textSecondary },
   docsSection: {
     marginTop: 18,
     paddingTop: 14,
     borderTopWidth: 1,
-    borderTopColor: '#3A2D24',
+    borderTopColor: PIZZA_FIRE.divider,
   },
-  docsTitle: { fontSize: 16, fontWeight: '700', color: '#F6EDE2' },
-  docsSub: { fontSize: 12, color: '#A88E73', marginTop: 4, lineHeight: 17 },
+  docsTitle: { fontSize: 16, fontWeight: '700', color: PIZZA_FIRE.textPrimary },
+  docsSub: { fontSize: 12, color: PIZZA_FIRE.textMuted, marginTop: 4, lineHeight: 17 },
   addDocRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -982,8 +1033,25 @@ const styles = StyleSheet.create({
     marginTop: 14,
     gap: 8,
   },
+  profileDetailsSection: {
+    marginTop: 18,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: PIZZA_FIRE.divider,
+  },
+  profileFieldGroup: { marginTop: 14 },
+  profileFieldLabel: { color: PIZZA_FIRE.textSecondary, fontSize: 13, fontWeight: '700', marginBottom: 7 },
+  profileMultilineInput: { minHeight: 78, textAlignVertical: 'top' },
+  salutationRow: { flexDirection: 'row', gap: 8, marginTop: 2 },
+  salutationPill: { flex: 1, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, borderRadius: 9, paddingVertical: 10, backgroundColor: PIZZA_FIRE.surfaceInset },
+  salutationPillActive: { backgroundColor: PIZZA_FIRE.accentSoft, borderColor: PIZZA_FIRE.accent },
+  salutationPillText: { color: PIZZA_FIRE.textSecondary, fontSize: 13, fontWeight: '700' },
+  salutationPillTextActive: { color: PIZZA_FIRE.accent, fontWeight: '800' },
+  memberOnlyToggle: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', marginTop: 10 },
+  memberOnlyText: { color: PIZZA_FIRE.textSecondary, fontSize: 12, fontWeight: '700' },
+  memberOnlyTag: { color: PIZZA_FIRE.gold, fontSize: 10, fontWeight: '800', marginTop: 3 },
   docsEmpty: {
-    color: '#7C6854',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 13,
     fontStyle: 'italic',
   },
@@ -992,9 +1060,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 10,
     borderRadius: 10,
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
-    borderColor: '#4A3A30',
+    borderColor: PIZZA_FIRE.cardBorder,
     gap: 8,
   },
   docOptionMain: {
@@ -1019,7 +1087,7 @@ const styles = StyleSheet.create({
     color: '#E2A14A',
   },
   docUploadLink: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 11,
     fontWeight: '800',
   },
@@ -1030,8 +1098,8 @@ const styles = StyleSheet.create({
   },
   docUploadBtn: {
     borderWidth: 1,
-    borderColor: '#5A4739',
-    backgroundColor: '#171311',
+    borderColor: PIZZA_FIRE.cardBorder,
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderRadius: 6,
     paddingHorizontal: 8,
     paddingVertical: 8,
@@ -1040,14 +1108,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   docUploadBtnText: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontWeight: '800',
     fontSize: 11,
   },
   docTypeDeleteBtn: {
     borderWidth: 1,
     borderColor: '#67483B',
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 8,
@@ -1061,8 +1129,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   docOptionSelected: {
-    backgroundColor: '#3A2D24',
-    borderColor: '#D9A441',
+    backgroundColor: PIZZA_FIRE.inputBg,
+    borderColor: PIZZA_FIRE.gold,
   },
   docCheckbox: {
     width: 22,
@@ -1073,19 +1141,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
   },
   docCheckboxSelected: {
-    backgroundColor: '#D9A441',
-    borderColor: '#D9A441',
+    backgroundColor: PIZZA_FIRE.gold,
+    borderColor: PIZZA_FIRE.gold,
   },
   docCheckboxText: {
-    color: '#1E1813',
+    color: PIZZA_FIRE.charcoal,
     fontWeight: '900',
     fontSize: 12,
   },
   docOptionText: {
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 13,
     fontWeight: '600',
   },
@@ -1099,9 +1167,9 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   modalLink: { padding: 8 },
-  modalLinkText: { color: '#D9A441', fontWeight: '600' },
+  modalLinkText: { color: PIZZA_FIRE.gold, fontWeight: '600' },
   modalButton: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,
@@ -1111,27 +1179,34 @@ const styles = StyleSheet.create({
     maxHeight: '85%',
   },
   documentsModalSubtitle: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 13,
     marginTop: 4,
   },
   documentsScroll: {
     paddingBottom: 8,
   },
+  documentRequirementsSaveSection: {
+    marginTop: 18,
+    marginBottom: 22,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: PIZZA_FIRE.divider,
+  },
   adminUploadSection: {
     marginBottom: 16,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#3A2D24',
+    borderBottomColor: PIZZA_FIRE.divider,
     gap: 8,
   },
   adminUploadTitle: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 15,
     fontWeight: '700',
   },
   adminUploadSub: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 12,
     lineHeight: 17,
     marginBottom: 4,
@@ -1142,20 +1217,20 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: 10,
     borderRadius: 10,
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
-    borderColor: '#4A3A30',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   adminUploadRowText: {
     flex: 1,
   },
   adminUploadDocType: {
-    color: '#EBDCCB',
+    color: PIZZA_FIRE.textSecondary,
     fontSize: 13,
     fontWeight: '600',
   },
   adminUploadBtn: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -1171,7 +1246,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   uploadedFilesHeading: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 15,
     fontWeight: '700',
     marginBottom: 10,
@@ -1184,9 +1259,9 @@ const styles = StyleSheet.create({
   credentialTile: {
     width: '47%',
     minWidth: 140,
-    backgroundColor: '#2A211B',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
     borderRadius: 12,
     padding: 10,
   },
@@ -1194,9 +1269,9 @@ const styles = StyleSheet.create({
     height: 96,
     borderRadius: 8,
     overflow: 'hidden',
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderWidth: 1,
-    borderColor: '#4A3A30',
+    borderColor: PIZZA_FIRE.cardBorder,
     marginBottom: 8,
   },
   credentialImage: {
@@ -1210,18 +1285,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#211915',
   },
   credentialDocLabel: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 22,
     fontWeight: '800',
   },
   credentialName: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 13,
     fontWeight: '800',
     marginBottom: 4,
   },
   credentialMeta: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontSize: 11,
     lineHeight: 15,
     marginBottom: 2,
@@ -1237,14 +1312,14 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   tileLinkText: {
-    color: '#D9A441',
+    color: PIZZA_FIRE.gold,
     fontSize: 12,
     fontWeight: '700',
   },
   deleteDocButton: {
     borderWidth: 1,
     borderColor: '#67483B',
-    backgroundColor: '#171311',
+    backgroundColor: PIZZA_FIRE.crustDark,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,

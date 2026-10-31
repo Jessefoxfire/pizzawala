@@ -13,8 +13,6 @@ import com.google.android.gms.common.GoogleApiAvailability
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.Priority
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -83,6 +81,21 @@ object GeofenceRegistrar {
       return
     }
 
+    val signature = specs
+      .sortedBy { it.id }
+      .joinToString("|") { spec ->
+        "${spec.id}:${spec.latitude}:${spec.longitude}:${spec.radius}"
+      }
+    val skipIfUnchanged = reason == "react-native" || reason == "js_init"
+    if (
+      skipIfUnchanged &&
+      GeofencePrefs.getLastRegistrationError(context) == null &&
+      GeofencePrefs.getRegisteredSignature(context) == signature
+    ) {
+      callback?.invoke(true, null)
+      return
+    }
+
     if (!hasPlayServices(context)) {
       val message = "Google Play Services unavailable"
       GeofencePrefs.setLastRegistrationError(context, message)
@@ -113,9 +126,6 @@ object GeofenceRegistrar {
     }
 
     val request = GeofencingRequest.Builder()
-      .setInitialTrigger(
-        GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_EXIT
-      )
       .addGeofences(geofences)
       .build()
 
@@ -128,6 +138,7 @@ object GeofenceRegistrar {
             context,
             "ok|$reason|${specs.size}|${System.currentTimeMillis()}"
           )
+          GeofencePrefs.setRegisteredSignature(context, signature)
           ActivityTransitionRegistrar.register(context, reason)
           scheduleWatchdog(context)
           
@@ -153,6 +164,7 @@ object GeofenceRegistrar {
           context,
           "removed|code_request|${System.currentTimeMillis()}"
         )
+        GeofencePrefs.setRegisteredSignature(context, "")
         ActivityTransitionRegistrar.unregister(context)
         cancelWatchdog(context)
         

@@ -32,11 +32,6 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         putDouble("timestamp", timestamp.toDouble())
       }
       GeofenceModule.emitSignificantLocationChange(payload)
-
-      // Background Kick: Refresh geofences when activity changes (especially when starting movement)
-      if (activity != "still") {
-          GeofenceRegistrar.registerStoredGeofences(context, "activity:$activity")
-      }
     }
   }
 

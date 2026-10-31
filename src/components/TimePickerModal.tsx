@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { dateToTimeString, timeStringToDate } from '../utils/eventDays';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = {
   visible: boolean;
@@ -66,14 +67,14 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   card: {
-    backgroundColor: '#1E1813',
+    backgroundColor: PIZZA_FIRE.bgMid,
     borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#3A2D24',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   title: {
-    color: '#F6EDE2',
+    color: PIZZA_FIRE.textPrimary,
     fontSize: 16,
     fontWeight: '800',
     textAlign: 'center',
@@ -90,17 +91,17 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   cancelText: {
-    color: '#A88E73',
+    color: PIZZA_FIRE.textMuted,
     fontWeight: '700',
   },
   confirmBtn: {
-    backgroundColor: '#C9782B',
+    backgroundColor: PIZZA_FIRE.accent,
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   confirmText: {
-    color: '#1E1813',
+    color: PIZZA_FIRE.charcoal,
     fontWeight: '900',
   },
 });

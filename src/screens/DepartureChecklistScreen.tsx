@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import PizzaFireScreen from '../components/PizzaFireScreen';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
   doc,
@@ -20,6 +20,7 @@ import {
 } from '@react-native-firebase/firestore';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { auth } from '../services/firebase';
+import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DepartureChecklist'>;
 
@@ -393,7 +394,7 @@ export default function DepartureChecklistScreen({ navigation }: Props) {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <PizzaFireScreen>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Text style={styles.back}>‹ Admin</Text>
@@ -545,12 +546,12 @@ export default function DepartureChecklistScreen({ navigation }: Props) {
           )}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </PizzaFireScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#16110E' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -559,20 +560,20 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#332720',
-    backgroundColor: '#1D1612',
+    borderBottomColor: PIZZA_FIRE.divider,
+    backgroundColor: 'transparent',
   },
-  back: { color: '#E2A14A', fontSize: 16, fontWeight: '700' },
-  title: { color: '#F8F1E8', fontSize: 24, fontWeight: '800' },
+  back: { color: PIZZA_FIRE.gold, fontSize: 16, fontWeight: '700' },
+  title: { color: PIZZA_FIRE.textPrimary, fontSize: 24, fontWeight: '800' },
   content: { padding: 18, paddingBottom: 40, gap: 16 },
   teamRow: { gap: 12, paddingRight: 12 },
   teamChip: {
     width: 210,
-    backgroundColor: '#201813',
+    backgroundColor: PIZZA_FIRE.surface,
     borderRadius: 16,
     padding: 14,
     borderWidth: 1,
-    borderColor: '#3B2C22',
+    borderColor: PIZZA_FIRE.qlBorder,
   },
   teamChipActive: {
     backgroundColor: '#3A2619',
@@ -612,7 +613,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 18,
     borderWidth: 1,
-    borderColor: '#4B382B',
+    borderColor: PIZZA_FIRE.cardBorder,
   },
   heroEyebrow: {
     color: '#D8B07A',
@@ -622,7 +623,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   heroTitle: { color: '#FFF6EC', fontSize: 28, fontWeight: '900', lineHeight: 32, marginBottom: 8 },
-  heroText: { color: '#D6C0AC', fontSize: 14, lineHeight: 20 },
+  heroText: { color: PIZZA_FIRE.textSecondary, fontSize: 14, lineHeight: 20 },
   progressCard: {
     backgroundColor: '#221A15',
     borderRadius: 18,
@@ -771,7 +772,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
-    backgroundColor: '#241B16',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     marginTop: 4,
   },
   checkboxDone: {
@@ -793,7 +794,7 @@ const styles = StyleSheet.create({
     color: '#E2A14A',
     fontSize: 11,
     fontWeight: '800',
-    backgroundColor: '#241A14',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 999,

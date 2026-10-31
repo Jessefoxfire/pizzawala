@@ -2,6 +2,10 @@ export type EventDay = {
   date: string;
   startTime: string;
   endTime: string;
+  /** Official closing is on the following calendar day (e.g. 10:00–02:00). */
+  endsNextDay?: boolean;
+  /** Optional note for this opening-time entry only. */
+  note?: string;
 };
 
 export const DEFAULT_EVENT_DAY_TIMES = {
@@ -49,11 +53,24 @@ function expandDateRange(startKey: string, endKey: string, startTime: string, en
   return days;
 }
 
+export function trimOpeningNote(value?: string | null) {
+  const trimmed = String(value || '').trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function normalizeEventDay(day: EventDay): EventDay {
+  const startTime = day.startTime?.trim() || DEFAULT_EVENT_DAY_TIMES.startTime;
+  const endTime = day.endTime?.trim() || DEFAULT_EVENT_DAY_TIMES.endTime;
+  const start = timeToMinutes(startTime);
+  const end = timeToMinutes(endTime);
+  const inferredOvernight = start != null && end != null && end < start;
+  const note = trimOpeningNote(day.note);
   return {
     date: day.date,
-    startTime: day.startTime?.trim() || DEFAULT_EVENT_DAY_TIMES.startTime,
-    endTime: day.endTime?.trim() || DEFAULT_EVENT_DAY_TIMES.endTime,
+    startTime,
+    endTime,
+    endsNextDay: inferredOvernight,
+    ...(note ? { note } : {}),
   };
 }
 
@@ -65,9 +82,13 @@ export function timesForNewEventDay(existingDays: EventDay[], dateKey: string) {
   const previous = sorted.filter(day => day.date < dateKey).pop();
   if (previous) {
     const normalized = normalizeEventDay(previous);
-    return { startTime: normalized.startTime, endTime: normalized.endTime };
+    return {
+      startTime: normalized.startTime,
+      endTime: normalized.endTime,
+      endsNextDay: eventDayEndsNextDay(normalized),
+    };
   }
-  return { ...DEFAULT_EVENT_DAY_TIMES };
+  return { ...DEFAULT_EVENT_DAY_TIMES, endsNextDay: false };
 }
 
 export function timeToMinutes(value: string) {
@@ -81,6 +102,21 @@ export function isValidTimeRange(startTime: string, endTime: string) {
   const end = timeToMinutes(endTime);
   if (start == null || end == null) return false;
   return end > start;
+}
+
+/** Official event hours: same-day end after start, or overnight (end earlier than start). Identical times are invalid. */
+export function isValidEventOpeningRange(startTime: string, endTime: string) {
+  const start = timeToMinutes(startTime);
+  const end = timeToMinutes(endTime);
+  if (start == null || end == null) return false;
+  return start !== end;
+}
+
+export function eventDayEndsNextDay(day: Pick<EventDay, 'startTime' | 'endTime' | 'endsNextDay'>) {
+  const start = timeToMinutes(day.startTime);
+  const end = timeToMinutes(day.endTime);
+  if (start == null || end == null) return day.endsNextDay === true;
+  return end < start;
 }
 
 /** Normalize legacy single-date fields into editable event days. */
@@ -166,6 +202,22 @@ export function formatTimeRange(startTime: string, endTime: string) {
   return `${formatTimeLabel(startTime)} – ${formatTimeLabel(endTime)}`;
 }
 
+export function formatTimeLabel24(value: string) {
+  if (!value?.trim()) return '—';
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return value;
+  return `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`;
+}
+
+export function formatOfficialOpeningRange(startTime: string, endTime: string, endsNextDay?: boolean) {
+  const start = formatTimeLabel24(startTime);
+  const end = formatTimeLabel24(endTime);
+  const s = timeToMinutes(startTime);
+  const e = timeToMinutes(endTime);
+  const overnight = s != null && e != null ? e < s : endsNextDay === true;
+  return overnight ? `${start} – ${end} (+1 day)` : `${start} – ${end}`;
+}
+
 export function formatDayHeading(dateKey: string) {
   try {
     const [year, month, day] = dateKey.split('-').map(Number);
@@ -191,6 +243,15 @@ export function dateToTimeString(value: Date) {
   const hours = String(value.getHours()).padStart(2, '0');
   const minutes = String(value.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
+}
+
+export function adjustTimeString(time: string, deltaMinutes: number) {
+  const current = timeToMinutes(time) ?? 9 * 60;
+  const dayMinutes = 24 * 60;
+  const next = ((current + deltaMinutes) % dayMinutes + dayMinutes) % dayMinutes;
+  const hours = Math.floor(next / 60);
+  const minutes = next % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 }
 
 export function pickLinkedScheduleDate(event: EventLike) {
