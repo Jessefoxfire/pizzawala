@@ -1,4 +1,6 @@
 import {
+  calcBreakMs,
+  calcWorkedMs,
   formatShiftDuration,
   getTimestampMs,
   normalizeShiftPeriods,
@@ -38,6 +40,10 @@ export type DayTimeEntry = {
   originalDurationMs?: number;
   periodStartIso: string;
   periodEndIso: string | null;
+  hasPendingApproval: boolean;
+  pendingDelete: boolean;
+  pendingStartIso?: string;
+  pendingEndIso?: string;
 };
 
 export const MIN_ACCOUNTABLE_SHIFT_MS = 60 * 1000;
@@ -124,6 +130,20 @@ const shiftDurationMs = (shift: LiveShift, nowMs: number) => {
 const belongsToStartDate = (shift: LiveShift, dateKey: string, nowMs: number) =>
   shiftStartDateKey(shift) === dateKey && shiftDurationMs(shift, nowMs) >= MIN_ACCOUNTABLE_SHIFT_MS;
 
+export function currentOpenLiveShiftId(shifts: LiveShift[]): string | null {
+  const opens = shifts.filter(shift => shift.status === 'open' && !shift.isScheduled);
+  if (!opens.length) return null;
+  opens.sort((a, b) => {
+    const aMs = getTimestampMs(a.startAt, a.workPeriods?.[0]?.startIso);
+    const bMs = getTimestampMs(b.startAt, b.workPeriods?.[0]?.startIso);
+    return bMs - aMs || b.id.localeCompare(a.id);
+  });
+  return opens[0].id;
+}
+
+const isStaleOpenLiveShift = (shift: LiveShift, currentOpenId: string | null) =>
+  shift.status === 'open' && !shift.isScheduled && !!currentOpenId && shift.id !== currentOpenId;
+
 export function parseDayTimeEntryId(id: string) {
   const match = /-(work|break)-(\d+)$/.exec(id);
   if (!match) return null;
@@ -183,25 +203,23 @@ export const scheduledMsForDate = (rows: ScheduledShiftRow[], dateKey: string) =
     }, 0);
 
 export const totalWorkedMsForDay = (shifts: LiveShift[], dateKey: string, nowMs: number) => {
+  const currentOpenId = currentOpenLiveShiftId(shifts);
   let total = 0;
   shifts.forEach(shift => {
+    if (isStaleOpenLiveShift(shift, currentOpenId)) return;
     if (!belongsToStartDate(shift, dateKey, nowMs)) return;
-    const { workPeriods } = normalizeShiftPeriods(shift, nowMs);
-    workPeriods.forEach(period => {
-      total += periodMs(period, nowMs);
-    });
+    total += calcWorkedMs(shift, nowMs);
   });
   return total;
 };
 
 export const totalBreakMsForDay = (shifts: LiveShift[], dateKey: string, nowMs: number) => {
+  const currentOpenId = currentOpenLiveShiftId(shifts);
   let total = 0;
   shifts.forEach(shift => {
+    if (isStaleOpenLiveShift(shift, currentOpenId)) return;
     if (!belongsToStartDate(shift, dateKey, nowMs)) return;
-    const { breakPeriods } = normalizeShiftPeriods(shift, nowMs);
-    breakPeriods.forEach(period => {
-      total += periodMs(period, nowMs);
-    });
+    total += calcBreakMs(shift, nowMs);
   });
   return total;
 };
@@ -212,16 +230,20 @@ export const buildDayTimeEntries = (
   nowMs: number
 ): DayTimeEntry[] => {
   const entries: DayTimeEntry[] = [];
+  const currentOpenId = currentOpenLiveShiftId(shifts);
 
   shifts.forEach(shift => {
+    if (isStaleOpenLiveShift(shift, currentOpenId)) return;
     if (!belongsToStartDate(shift, dateKey, nowMs)) return;
     const locationName = shift.geofenceName || shift.worksiteName || undefined;
     const { workPeriods, breakPeriods } = normalizeShiftPeriods(shift, nowMs);
+    const pendingEdit = shift.pendingEdit || null;
+    const pendingDelete = !!shift.pendingDelete;
 
     workPeriods.forEach((period, index) => {
       const periodStart = new Date(period.startIso).getTime();
       const periodEnd = period.endIso ? new Date(period.endIso).getTime() : nowMs;
-      const isActive = !period.endIso && shift.status === 'open';
+      const isActive = !period.endIso && shift.status === 'open' && shift.id === currentOpenId;
       const isAdded = hoursChangeKind(shift) === 'added';
       const isEdited = isAdded ? false : !!(period.manuallyEdited || shift.manuallyEdited);
       const originalStartMs = isEdited ? new Date(period.originalStartIso || period.startIso).getTime() : undefined;
@@ -249,13 +271,25 @@ export const buildDayTimeEntries = (
         originalDurationMs: isEdited ? periodMs({ ...period, startIso: period.originalStartIso || period.startIso, endIso: period.originalEndIso ?? period.endIso }, nowMs) : undefined,
         periodStartIso: period.startIso,
         periodEndIso: period.endIso ?? null,
+        hasPendingApproval:
+          pendingDelete ||
+          (!!pendingEdit && pendingEdit.kind === 'work' && pendingEdit.periodIndex === index),
+        pendingDelete,
+        pendingStartIso:
+          pendingEdit && pendingEdit.kind === 'work' && pendingEdit.periodIndex === index
+            ? pendingEdit.startIso
+            : undefined,
+        pendingEndIso:
+          pendingEdit && pendingEdit.kind === 'work' && pendingEdit.periodIndex === index
+            ? pendingEdit.endIso
+            : undefined,
       });
     });
 
     breakPeriods.forEach((period, index) => {
       const periodStart = new Date(period.startIso).getTime();
       const periodEnd = period.endIso ? new Date(period.endIso).getTime() : nowMs;
-      const isActive = !period.endIso && shift.status === 'open';
+      const isActive = !period.endIso && shift.status === 'open' && shift.id === currentOpenId;
       const isAdded = hoursChangeKind(shift) === 'added';
       const isEdited = isAdded ? false : !!(period.manuallyEdited || shift.manuallyEdited);
       const originalStartMs = isEdited ? new Date(period.originalStartIso || period.startIso).getTime() : undefined;
@@ -281,6 +315,18 @@ export const buildDayTimeEntries = (
         originalDurationMs: isEdited ? periodMs({ ...period, startIso: period.originalStartIso || period.startIso, endIso: period.originalEndIso ?? period.endIso }, nowMs) : undefined,
         periodStartIso: period.startIso,
         periodEndIso: period.endIso ?? null,
+        hasPendingApproval:
+          pendingDelete ||
+          (!!pendingEdit && pendingEdit.kind === 'break' && pendingEdit.periodIndex === index),
+        pendingDelete,
+        pendingStartIso:
+          pendingEdit && pendingEdit.kind === 'break' && pendingEdit.periodIndex === index
+            ? pendingEdit.startIso
+            : undefined,
+        pendingEndIso:
+          pendingEdit && pendingEdit.kind === 'break' && pendingEdit.periodIndex === index
+            ? pendingEdit.endIso
+            : undefined,
       });
     });
   });

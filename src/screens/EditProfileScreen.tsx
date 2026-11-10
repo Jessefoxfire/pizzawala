@@ -11,16 +11,19 @@ import {
   Alert,
   Modal,
   Linking,
+  Switch,
 } from 'react-native';
 import {
+  addDoc,
   collection,
+  deleteDoc,
   doc,
-  getDoc,
   getFirestore,
   onSnapshot,
   query,
   serverTimestamp,
   setDoc,
+  updateDoc,
   where,
 } from '@react-native-firebase/firestore';
 import { auth, uploadStorageRef, uploadStorageRefFallback } from '../services/firebase';
@@ -37,21 +40,24 @@ import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useAuth } from '../auth/useAuth';
 import type { RootStackParamList } from '../navigation/AppNavigator';
-import { formatDateTime } from '../services/hygiene';
+import { deleteHygieneCredential, formatDateTime } from '../services/hygiene';
+import type { HygieneEmployeeOverride } from '../utils/hygieneCredentialPicker';
+import { LAST_ADMIN_NOTICE, hasAdminRole, withAdminRole, wouldLeaveNoActiveAdmin, type RoleHolder } from '../utils/teamRoles';
+import { isOrgActive, orgActiveManualWrite, orgStatusLabel } from '../utils/orgStatus';
+import { isPersonnelDocument } from '../utils/personnelDocuments';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
 import PizzaFireButton from '../components/PizzaFireButton';
+import SalutationDropdown from '../components/SalutationDropdown';
 import {
   CHECKLIST_HELP,
   GERMAN_COMPLIANCE_DOCUMENTS,
   GERMAN_COMPLIANCE_FIELDS,
   GERMAN_COMPLIANCE_INTRO,
-  SALUTATION_OPTIONS,
   getMissingComplianceFields,
   getMissingRequiredDocuments,
   getRequiredDocumentTypesForUser,
   readGermanCompliance,
   type GermanComplianceProfile,
-  type Salutation,
 } from '../constants/germanEmployeeCompliance';
 
 const avatarOptions: { id: AvatarKey }[] = Object.keys(Avatars).map(key => ({
@@ -104,6 +110,12 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
   const [email, setEmail] = useState('');
   const [roles, setRoles] = useState<string[]>([]);
   const [accountDisabled, setAccountDisabled] = useState(false);
+  const [orgActive, setOrgActive] = useState(true);
+  const [teamId, setTeamId] = useState('team-1');
+  const [teamMembers, setTeamMembers] = useState<RoleHolder[]>([]);
+  const [adminSection, setAdminSection] = useState<'details' | 'documents' | 'permissions' | 'account' | null>(
+    route.params?.openSection === 'details' ? 'details' : null
+  );
   const [selectedAvatar, setSelectedAvatar] = useState<AvatarKey | null>(null);
   const [customAvatarUrl, setCustomAvatarUrl] = useState<string | null>(null);
   const [compliance, setCompliance] = useState<GermanComplianceProfile>(emptyCompliance);
@@ -118,6 +130,9 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
   const [birthPickerView, setBirthPickerView] = useState<'day' | 'month'>('day');
   const [birthCalendarMonth, setBirthCalendarMonth] = useState(() => defaultBirthCalendarMonth(''));
   const [birthPickerYear, setBirthPickerYear] = useState(() => new Date().getFullYear() - 25);
+  const [documentsOpen, setDocumentsOpen] = useState(false);
+  const [deletingCredentialId, setDeletingCredentialId] = useState<string | null>(null);
+  const [accountBusy, setAccountBusy] = useState(false);
 
   const birthDateMax = localDateKey(new Date());
   const birthDateMin = '1920-01-01';
@@ -201,13 +216,13 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
   }, [canViewDocuments, profileUserId]);
 
   useEffect(() => {
-    const fetchProfile = async () => {
-      if (!profileUserId) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const snap = await getDoc(doc(getFirestore(), 'users', profileUserId));
+    if (!profileUserId) {
+      setLoading(false);
+      return undefined;
+    }
+    const unsub = onSnapshot(
+      doc(getFirestore(), 'users', profileUserId),
+      snap => {
         if (snap.exists()) {
           const data = snap.data();
           setName(data?.name || route.params?.userName || '');
@@ -216,18 +231,17 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
           setCustomAvatarUrl(data?.customAvatarUrl || null);
           setRoles(Array.isArray(data?.roles) ? data.roles.map((value: unknown) => String(value)) : []);
           setAccountDisabled(Boolean(data?.disabled));
+          setOrgActive(isOrgActive(data));
+          setTeamId(typeof data?.teamId === 'string' && data.teamId ? data.teamId : 'team-1');
           if (isSelf || isAdmin) {
             setExtraRequiredDocuments(
               Array.isArray(data?.requiredDocuments)
                 ? data.requiredDocuments.map((value: unknown) => String(value || '').trim()).filter(Boolean)
                 : []
             );
-          } else {
-            setExtraRequiredDocuments([]);
-          }
-          if (isSelf || isAdmin) {
             setCompliance(readGermanCompliance(data));
           } else {
+            setExtraRequiredDocuments([]);
             setCompliance(emptyCompliance());
           }
         } else {
@@ -237,16 +251,32 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
           setCustomAvatarUrl(null);
           setCompliance(emptyCompliance());
           setExtraRequiredDocuments([]);
+          setOrgActive(true);
         }
-      } catch (err: any) {
-        const msg = err?.message || err?.code || 'Failed to load profile';
-        Alert.alert('Error', String(msg));
-      } finally {
+        setLoading(false);
+      },
+      err => {
+        Alert.alert('Error', String(err?.message || err?.code || 'Failed to load profile'));
         setLoading(false);
       }
-    };
-    void fetchProfile();
+    );
+    return () => unsub();
   }, [profileUserId, isSelf, isAdmin, user?.displayName, user?.email, route.params?.userName]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setTeamMembers([]);
+      return undefined;
+    }
+    return onSnapshot(collection(getFirestore(), 'users'), snap => {
+      setTeamMembers(
+        (snap?.docs || []).map(docSnap => ({
+          id: docSnap.id,
+          ...(docSnap.data() as Omit<RoleHolder, 'id'>),
+        }))
+      );
+    });
+  }, [isAdmin]);
 
   const updateCompliance = (key: keyof GermanComplianceProfile, value: string) => {
     setCompliance(current => ({ ...current, [key]: value }));
@@ -312,10 +342,18 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
   };
 
   const handleUploadDocument = async (docType: string) => {
-    if (!user?.uid || uploadingDocType || isUploadingDoc) return;
+    if (uploadingDocType || isUploadingDoc || !profileUserId) return;
     setUploadingDocType(docType);
     try {
-      const uploaded = await pickAndUpload(undefined, {
+      const override: HygieneEmployeeOverride | undefined = isSelf
+        ? undefined
+        : {
+            userId: profileUserId,
+            userName: name || email || 'User',
+            userEmail: email || '',
+            avatarUrl: selectedAvatar,
+          };
+      const uploaded = await pickAndUpload(override, {
         requiredDocumentType: docType,
         documentCategory: 'required_user_document',
       });
@@ -326,6 +364,163 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
     } finally {
       setUploadingDocType(null);
     }
+  };
+
+  const handleDeleteUploadedDocument = (item: any) => {
+    Alert.alert('Delete upload', `Remove ${item.fileName || 'this document'}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setDeletingCredentialId(item.id);
+            try {
+              await deleteHygieneCredential(item.id, item.storagePath);
+            } catch (err: any) {
+              Alert.alert('Could not delete', err?.message || 'Delete failed.');
+            } finally {
+              setDeletingCredentialId(null);
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
+  const requestMissingDocuments = async () => {
+    if (!isAdmin || !profileUserId) return;
+    const missing = getMissingRequiredDocuments(requiredDocumentTypes, credentials);
+    if (missing.length === 0) {
+      Alert.alert('Documents', 'No missing required documents.');
+      return;
+    }
+    try {
+      await addDoc(collection(getFirestore(), 'users', profileUserId, 'notifications'), {
+        title: 'New document requested',
+        body: `Please provide: ${missing.join(', ')}.`,
+        nav: { screen: 'RequiredDocuments' },
+        createdAt: serverTimestamp(),
+      });
+      Alert.alert('Requested', `Asked ${name || 'this employee'} to provide missing documents.`);
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Unable to request documents.');
+    }
+  };
+
+  const handleToggleOrgActive = async (next: boolean) => {
+    if (!isAdmin || !profileUserId) return;
+    try {
+      await updateDoc(doc(getFirestore(), 'users', profileUserId), orgActiveManualWrite(next));
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Unable to update status.');
+    }
+  };
+
+  const handleSaveAdminDetails = async () => {
+    if (!isAdmin || !profileUserId || saving) return;
+    setSaving(true);
+    try {
+      await updateDoc(doc(getFirestore(), 'users', profileUserId), {
+        name: name.trim(),
+        teamId,
+        germanCompliance: {
+          salutation: compliance.salutation || '',
+          address: String(compliance.address || '').trim(),
+          birthDate: String(compliance.birthDate || '').trim(),
+          birthPlace: String(compliance.birthPlace || '').trim(),
+          socialSecurityNumber: String(compliance.socialSecurityNumber || '').trim(),
+          taxIdNumber: String(compliance.taxIdNumber || '').trim(),
+        },
+      });
+      Alert.alert('Updated', 'Employee details updated.');
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Unable to update employee details.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleAdminRole = async (grantAdmin: boolean) => {
+    if (!isAdmin || !profileUserId) return;
+    if (wouldLeaveNoActiveAdmin(teamMembers, profileUserId, { grantAdmin })) {
+      Alert.alert('Last admin', LAST_ADMIN_NOTICE);
+      return;
+    }
+    try {
+      await updateDoc(doc(getFirestore(), 'users', profileUserId), {
+        roles: withAdminRole(roles, grantAdmin),
+        teamId,
+      });
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Unable to update roles.');
+    }
+  };
+
+  const handleToggleDisabled = async () => {
+    if (!isAdmin || !profileUserId || accountBusy) return;
+    const next = !accountDisabled;
+    if (next && wouldLeaveNoActiveAdmin(teamMembers, profileUserId, { disabled: true })) {
+      Alert.alert('Last admin', LAST_ADMIN_NOTICE);
+      return;
+    }
+    Alert.alert(
+      next ? 'Disable account' : 'Re-enable account',
+      next
+        ? `Disable ${name || 'this employee'}? They will not be able to sign in. Working hours and other records stay in place.`
+        : `Restore app access for ${name || 'this employee'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: next ? 'Disable' : 'Re-enable',
+          style: next ? 'destructive' : 'default',
+          onPress: () => {
+            void (async () => {
+              setAccountBusy(true);
+              try {
+                await updateDoc(doc(getFirestore(), 'users', profileUserId), { disabled: next });
+              } catch (err: any) {
+                Alert.alert('Notice', err?.message || 'Unable to update access.');
+              } finally {
+                setAccountBusy(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDeleteProfile = () => {
+    if (!isAdmin || !profileUserId) return;
+    if (wouldLeaveNoActiveAdmin(teamMembers, profileUserId, { grantAdmin: false, disabled: true })) {
+      Alert.alert('Last admin', LAST_ADMIN_NOTICE);
+      return;
+    }
+    Alert.alert(
+      'Delete profile data',
+      `Remove profile data for ${email || name || 'this user'}? Working hours and other records are not deleted.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setAccountBusy(true);
+              try {
+                await deleteDoc(doc(getFirestore(), 'users', profileUserId));
+                navigation.goBack();
+              } catch (err: any) {
+                Alert.alert('Notice', err?.message || 'Unable to delete.');
+              } finally {
+                setAccountBusy(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
   };
 
   const handleSave = async () => {
@@ -348,24 +543,33 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
           email: trimmedEmail,
           avatarUrl: selectedAvatar,
           customAvatarUrl: customAvatarUrl,
-          germanCompliance: {
-            salutation: compliance.salutation || '',
-            address: String(compliance.address || '').trim(),
-            birthDate: String(compliance.birthDate || '').trim(),
-            birthPlace: String(compliance.birthPlace || '').trim(),
-            socialSecurityNumber: String(compliance.socialSecurityNumber || '').trim(),
-            taxIdNumber: String(compliance.taxIdNumber || '').trim(),
-          },
+          ...(isAdmin
+            ? {
+                germanCompliance: {
+                  salutation: compliance.salutation || '',
+                  address: String(compliance.address || '').trim(),
+                  birthDate: String(compliance.birthDate || '').trim(),
+                  birthPlace: String(compliance.birthPlace || '').trim(),
+                  socialSecurityNumber: String(compliance.socialSecurityNumber || '').trim(),
+                  taxIdNumber: String(compliance.taxIdNumber || '').trim(),
+                },
+              }
+            : {}),
           updatedAt: serverTimestamp(),
         },
         { merge: true }
       );
       setAvatarModalVisible(false);
 
-      if (missingFields.length > 0 || missingDocuments.length > 0) {
+      if (isAdmin && (missingFields.length > 0 || missingDocuments.length > 0)) {
         Alert.alert(
           'Profile saved',
           `Still missing: ${missingFields.length} detail${missingFields.length === 1 ? '' : 's'} and ${missingDocuments.length} document${missingDocuments.length === 1 ? '' : 's'}.`
+        );
+      } else if (!isAdmin && missingDocuments.length > 0) {
+        Alert.alert(
+          'Profile saved',
+          `Still missing: ${missingDocuments.length} document${missingDocuments.length === 1 ? '' : 's'}.`
         );
       } else {
         navigation.goBack();
@@ -413,10 +617,10 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{isSelf ? 'Edit Profile' : name || 'Profile'}</Text>
+          <Text style={styles.headerTitle}>{isSelf ? 'Edit Profile' : isAdmin ? 'Details' : name || 'Profile'}</Text>
           {isSelf ? (
           <TouchableOpacity onPress={handleSave} disabled={saving}>
-            {saving ? <ActivityIndicator color={PIZZA_FIRE.accent} /> : <Text style={styles.saveText}>Save</Text>}
+            {saving ? <ActivityIndicator color={PIZZA_FIRE.accent} /> : <Text style={styles.saveText}>Update</Text>}
           </TouchableOpacity>
           ) : (
             <View style={{ width: 48 }} />
@@ -424,21 +628,19 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
         </View>
 
         <ScrollView contentContainerStyle={[styles.scrollContent, formColumnFrame(layout)]}>
+          {isSelf ? (
           <View style={styles.avatarSection}>
             <TouchableOpacity
               style={styles.mainAvatarContainer}
-              onPress={() => isSelf && setAvatarModalVisible(true)}
-              disabled={!isSelf}
-              activeOpacity={isSelf ? 0.8 : 1}
+              onPress={() => setAvatarModalVisible(true)}
+              activeOpacity={0.8}
             >
               <Image source={resolveAvatarSource(selectedAvatar, customAvatarUrl)} style={styles.mainAvatar} />
-              {isSelf ? (
               <View style={styles.editOverlay}>
                 <Icons.camera color={PIZZA_FIRE.textPrimary} width={20} height={20} />
               </View>
-              ) : null}
             </TouchableOpacity>
-            <Text style={styles.avatarLabel}>{isSelf ? 'Tap to change identity' : name || 'Team member'}</Text>
+            <Text style={styles.avatarLabel}>Tap to change identity</Text>
             {canViewHours ? (
               <PizzaFireButton
                 label="Hours"
@@ -449,84 +651,183 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
               />
             ) : null}
           </View>
+          ) : null}
 
-          {!isSelf ? (
-            <View style={styles.form}>
-              <View style={styles.complianceIntroCard}>
-                <Text style={styles.label}>Full name</Text>
-                <Text style={styles.metaValue}>{name || '—'}</Text>
-                <Text style={[styles.label, { marginTop: 14 }]}>Email</Text>
-                <Text style={styles.metaValue}>{email || 'Not available'}</Text>
-                <Text style={[styles.label, { marginTop: 14 }]}>Role</Text>
-                <Text style={styles.metaValue}>
-                  {roles.includes('admin') ? 'Admin' : 'Member'}
-                  {accountDisabled ? ' • Disabled' : ''}
-                </Text>
-                <Text style={[styles.label, { marginTop: 14 }]}>Title</Text>
-                <Text style={styles.metaValue}>{compliance.salutation || '—'}</Text>
-                {GERMAN_COMPLIANCE_FIELDS.map(field => (
-                  <React.Fragment key={field.key}>
-                    <Text style={[styles.label, { marginTop: 14 }]}>{field.label}</Text>
-                    <Text style={styles.metaValue}>
-                      {field.key === 'birthDate' ? formatBirthDate(String(compliance.birthDate || '')) || '—' : String(compliance[field.key] || '').trim() || '—'}
-                    </Text>
-                  </React.Fragment>
-                ))}
+          {!isSelf && isAdmin ? (
+            <View style={styles.adminOverview}>
+              <Text style={styles.overviewName}>{name || 'Unnamed member'}</Text>
+              {orgStatusLabel({ orgActive }) ? <Text style={styles.overviewInactive}>Inactive</Text> : null}
+              <View style={styles.activeToggleRow}>
+                <Text style={[styles.activeToggleLabel, orgActive && styles.activeToggleLabelOn]}>Active</Text>
+                <Switch
+                  value={orgActive}
+                  onValueChange={value => void handleToggleOrgActive(value)}
+                  trackColor={{ false: PIZZA_FIRE.inputBg, true: PIZZA_FIRE.success }}
+                  thumbColor={orgActive ? '#E8FBE4' : '#A88E73'}
+                />
               </View>
-              {canViewDocuments ? (
-                <>
-                  <Text style={styles.sectionHeading}>Documents</Text>
-                  <Text style={styles.complianceIntroText}>
-                    {requiredDocumentTypes.length
-                      ? `${missingDocuments.length} missing of ${requiredDocumentTypes.length} required.`
-                      : 'No extra document types assigned.'}
-                  </Text>
-                  {GERMAN_COMPLIANCE_DOCUMENTS.map(doc => {
-                    const upload = uploadsByDocType.get(doc.type);
+
+              <TouchableOpacity
+                style={[styles.foldRow, adminSection === 'details' ? styles.foldRowOpen : null]}
+                onPress={() => setAdminSection(current => (current === 'details' ? null : 'details'))}
+              >
+                <Text style={[styles.foldLabel, adminSection === 'details' ? styles.foldLabelOpen : null]}>Employee details</Text>
+                <Text style={styles.foldMeta}>{email || 'Contact'}</Text>
+                <Text style={[styles.foldChevron, adminSection === 'details' ? styles.foldChevronOpen : null]}>›</Text>
+              </TouchableOpacity>
+              {adminSection === 'details' ? (
+                <View style={styles.sectionBody}>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Full name</Text>
+                    <TextInput style={styles.input} value={name} onChangeText={setName} />
+                  </View>
+                  <Text style={styles.metaValue}>{email || 'No email'}</Text>
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.label}>Title</Text>
+                    <SalutationDropdown
+                      value={compliance.salutation}
+                      onChange={option => updateCompliance('salutation', option)}
+                    />
+                  </View>
+                  {GERMAN_COMPLIANCE_FIELDS.map(field => (
+                    <View key={field.key} style={styles.inputGroup}>
+                      <Text style={styles.label}>{field.label}</Text>
+                      {field.key === 'birthDate' ? (
+                        <TouchableOpacity style={styles.dateButton} onPress={openBirthDatePicker}>
+                          <Text style={styles.dateButtonText}>{formatBirthDate(compliance.birthDate || '') || field.placeholder}</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TextInput
+                          style={[styles.input, field.multiline && styles.inputMultiline]}
+                          value={String(compliance[field.key] || '')}
+                          onChangeText={value => updateCompliance(field.key, value)}
+                          placeholder={field.placeholder}
+                          placeholderTextColor="#8F6A48"
+                          multiline={field.multiline}
+                        />
+                      )}
+                    </View>
+                  ))}
+                  <PizzaFireButton
+                    label="Update"
+                    variant="accent"
+                    loading={saving}
+                    disabled={saving}
+                    onPress={() => void handleSaveAdminDetails()}
+                    style={styles.updateBtn}
+                  />
+                </View>
+              ) : null}
+
+              <TouchableOpacity
+                style={[styles.foldRow, adminSection === 'documents' ? styles.foldRowOpen : null]}
+                onPress={() => setAdminSection(current => (current === 'documents' ? null : 'documents'))}
+              >
+                <Text style={[styles.foldLabel, adminSection === 'documents' ? styles.foldLabelOpen : null]}>Documents</Text>
+                <Text style={styles.foldMeta}>
+                  {requiredDocumentTypes.length ? `${missingDocuments.length} missing` : 'none'}
+                </Text>
+                <Text style={[styles.foldChevron, adminSection === 'documents' ? styles.foldChevronOpen : null]}>›</Text>
+              </TouchableOpacity>
+              {adminSection === 'documents' ? (
+                <View style={styles.sectionBody}>
+                  <TouchableOpacity onPress={() => void requestMissingDocuments()}>
+                    <Text style={styles.linkText}>Request missing documents</Text>
+                  </TouchableOpacity>
+                  {[...GERMAN_COMPLIANCE_DOCUMENTS.map(doc => doc.type), ...extraRequiredDocuments.filter(docType => !GERMAN_COMPLIANCE_DOCUMENTS.some(doc => doc.type === docType))].map(docType => {
+                    const upload = uploadsByDocType.get(docType);
                     const complete = !!upload;
-                    const required = doc.required;
+                    const busy = uploadingDocType === docType;
                     return (
-                      <View key={doc.type} style={[styles.docCard, complete ? styles.docCardComplete : required ? styles.docCardMissing : null]}>
-                        <Text style={styles.docTitle}>{doc.type}</Text>
-                        <Text style={[styles.docStatus, complete ? styles.docStatusComplete : required ? styles.docStatusMissing : styles.docStatusOptional]}>
-                          {complete ? 'Uploaded' : required ? 'Missing' : 'Optional'}
+                      <View key={docType} style={[styles.docCard, complete ? styles.docCardComplete : styles.docCardMissing]}>
+                        <Text style={styles.docTitle}>{docType}</Text>
+                        <Text style={[styles.docStatus, complete ? styles.docStatusComplete : styles.docStatusMissing]}>
+                          {complete ? 'Uploaded' : 'Not uploaded'}
                         </Text>
                         {upload ? (
                           <View style={styles.uploadMetaCard}>
                             <Text style={styles.uploadMetaText}>{upload.fileName || 'Document'}</Text>
                             {upload.downloadUrl ? (
                               <TouchableOpacity onPress={() => void Linking.openURL(String(upload.downloadUrl))}>
-                                <Text style={styles.linkText}>Open uploaded file</Text>
+                                <Text style={styles.linkText}>Download</Text>
                               </TouchableOpacity>
                             ) : null}
+                            <TouchableOpacity
+                              onPress={() => handleDeleteUploadedDocument(upload)}
+                              disabled={deletingCredentialId === upload.id}
+                            >
+                              <Text style={styles.dangerLink}>Remove</Text>
+                            </TouchableOpacity>
                           </View>
                         ) : null}
+                        <TouchableOpacity
+                          style={[styles.uploadButton, busy && styles.uploadButtonDisabled]}
+                          onPress={() => void handleUploadDocument(docType)}
+                          disabled={busy || isUploadingDoc}
+                        >
+                          {busy ? <ActivityIndicator color={PIZZA_FIRE.charcoal} /> : (
+                            <Text style={styles.uploadButtonText}>{complete ? 'Replace' : 'Upload'}</Text>
+                          )}
+                        </TouchableOpacity>
                       </View>
                     );
                   })}
-                  {extraRequiredDocuments
-                    .filter(docType => !GERMAN_COMPLIANCE_DOCUMENTS.some(doc => doc.type === docType))
-                    .map(docType => {
-                      const upload = uploadsByDocType.get(docType);
-                      const complete = !!upload;
-                      return (
-                        <View key={docType} style={[styles.docCard, complete ? styles.docCardComplete : styles.docCardMissing]}>
-                          <Text style={styles.docTitle}>{docType}</Text>
-                          <Text style={[styles.docStatus, complete ? styles.docStatusComplete : styles.docStatusMissing]}>
-                            {complete ? 'Uploaded' : 'Missing'}
-                          </Text>
-                          {upload?.downloadUrl ? (
-                            <TouchableOpacity onPress={() => void Linking.openURL(String(upload.downloadUrl))}>
-                              <Text style={styles.linkText}>Open uploaded file</Text>
-                            </TouchableOpacity>
-                          ) : null}
-                        </View>
-                      );
-                    })}
-                </>
-              ) : (
-                <Text style={styles.avatarLabel}>Employment documents are only visible to admins and the account owner.</Text>
-              )}
+                  {credentials.filter(isPersonnelDocument).length === 0 && requiredDocumentTypes.length === 0 ? (
+                    <Text style={styles.avatarLabel}>No documents on file.</Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              <TouchableOpacity
+                style={[styles.foldRow, adminSection === 'permissions' ? styles.foldRowOpen : null]}
+                onPress={() => setAdminSection(current => (current === 'permissions' ? null : 'permissions'))}
+              >
+                <Text style={[styles.foldLabel, adminSection === 'permissions' ? styles.foldLabelOpen : null]}>Permissions</Text>
+                <Text style={styles.foldMeta}>{hasAdminRole(roles) ? 'Admin' : 'Member'}</Text>
+                <Text style={[styles.foldChevron, adminSection === 'permissions' ? styles.foldChevronOpen : null]}>›</Text>
+              </TouchableOpacity>
+              {adminSection === 'permissions' ? (
+                <View style={styles.sectionBody}>
+                  <View style={styles.activeToggleRow}>
+                    <Text style={styles.activeToggleLabel}>Admin access</Text>
+                    <Switch value={hasAdminRole(roles)} onValueChange={value => void handleToggleAdminRole(value)} />
+                  </View>
+                  <Text style={styles.avatarLabel}>
+                    {accountDisabled ? 'Account is disabled. This does not change Active status.' : 'Account can sign in with the current role.'}
+                  </Text>
+                </View>
+              ) : null}
+
+              <TouchableOpacity
+                style={[styles.foldRow, adminSection === 'account' ? styles.foldRowOpen : null]}
+                onPress={() => setAdminSection(current => (current === 'account' ? null : 'account'))}
+              >
+                <Text style={[styles.foldLabel, adminSection === 'account' ? styles.foldLabelOpen : null]}>Account management</Text>
+                <Text style={styles.foldMeta}>{accountDisabled ? 'Disabled' : 'Enabled'}</Text>
+                <Text style={[styles.foldChevron, adminSection === 'account' ? styles.foldChevronOpen : null]}>›</Text>
+              </TouchableOpacity>
+              {adminSection === 'account' ? (
+                <View style={styles.sectionBody}>
+                  <Text style={styles.avatarLabel}>
+                    Disable blocks sign-in. Active/Inactive is organisational only and does not change login.
+                  </Text>
+                  <TouchableOpacity style={styles.dangerBtn} onPress={handleToggleDisabled} disabled={accountBusy}>
+                    <Text style={styles.dangerBtnText}>{accountDisabled ? 'Re-enable account' : 'Disable account'}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.dangerBtn} onPress={handleDeleteProfile} disabled={accountBusy}>
+                    <Text style={styles.dangerBtnText}>Delete profile data</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {!isSelf && !isAdmin ? (
+            <View style={styles.form}>
+              <View style={styles.complianceIntroCard}>
+                <Text style={styles.label}>Full name</Text>
+                <Text style={styles.metaValue}>{name || '—'}</Text>
+              </View>
             </View>
           ) : null}
 
@@ -558,64 +859,71 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
             </View>
           </View>
 
-          {!complianceComplete ? (
-            <View style={styles.complianceIntroCard}>
-              <Text style={styles.complianceIntroTitle}>Employment records (Germany)</Text>
-              <Text style={styles.complianceIntroText}>{GERMAN_COMPLIANCE_INTRO}</Text>
-              <Text style={[styles.complianceStatus, styles.complianceStatusPending]}>
-                {missingFields.length} detail{missingFields.length === 1 ? '' : 's'} and {missingDocuments.length} document{missingDocuments.length === 1 ? '' : 's'} still needed.
-              </Text>
-            </View>
-          ) : null}
-
-          <Text style={styles.sectionHeading}>Personal details</Text>
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Title</Text>
-            <View style={styles.salutationRow}>
-              {SALUTATION_OPTIONS.map(option => {
-                const active = compliance.salutation === option;
-                return (
-                  <TouchableOpacity
-                    key={option}
-                    style={[styles.salutationPill, active && styles.salutationPillActive]}
-                    onPress={() => updateCompliance('salutation', option as Salutation)}
-                  >
-                    <Text style={[styles.salutationText, active && styles.salutationTextActive]}>{option}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          {GERMAN_COMPLIANCE_FIELDS.map(field => {
-            if (field.key === 'birthDate') {
-              return (
-                <View key={field.key} style={styles.inputGroup}>
-                  <Text style={styles.label}>{field.label}</Text>
-                  <TouchableOpacity style={styles.dateButton} onPress={openBirthDatePicker}>
-                    <Text style={styles.dateButtonText}>{formatBirthDate(compliance.birthDate || '') || field.placeholder}</Text>
-                  </TouchableOpacity>
+          {isAdmin ? (
+            <>
+              {!complianceComplete ? (
+                <View style={styles.complianceIntroCard}>
+                  <Text style={styles.complianceIntroTitle}>Employment records (Germany)</Text>
+                  <Text style={styles.complianceIntroText}>{GERMAN_COMPLIANCE_INTRO}</Text>
+                  <Text style={[styles.complianceStatus, styles.complianceStatusPending]}>
+                    {missingFields.length} detail{missingFields.length === 1 ? '' : 's'} and {missingDocuments.length} document{missingDocuments.length === 1 ? '' : 's'} still needed.
+                  </Text>
                 </View>
-              );
-            }
-            return (
-              <View key={field.key} style={styles.inputGroup}>
-                <Text style={styles.label}>{field.label}</Text>
-                <TextInput
-                  style={[styles.input, field.multiline && styles.inputMultiline]}
-                  value={String(compliance[field.key] || '')}
-                  onChangeText={value => updateCompliance(field.key, value)}
-                  placeholder={field.placeholder}
-                  placeholderTextColor="#8F6A48"
-                  multiline={field.multiline}
-                  autoCapitalize={field.autoCapitalize || 'sentences'}
-                  keyboardType={field.keyboardType || 'default'}
+              ) : null}
+
+              <Text style={styles.sectionHeading}>Personal details</Text>
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Title</Text>
+                <SalutationDropdown
+                  value={compliance.salutation}
+                  onChange={option => updateCompliance('salutation', option)}
                 />
               </View>
-            );
-          })}
 
-          <Text style={styles.sectionHeading}>Required uploads</Text>
+              {GERMAN_COMPLIANCE_FIELDS.map(field => {
+                if (field.key === 'birthDate') {
+                  return (
+                    <View key={field.key} style={styles.inputGroup}>
+                      <Text style={styles.label}>{field.label}</Text>
+                      <TouchableOpacity style={styles.dateButton} onPress={openBirthDatePicker}>
+                        <Text style={styles.dateButtonText}>{formatBirthDate(compliance.birthDate || '') || field.placeholder}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                }
+                return (
+                  <View key={field.key} style={styles.inputGroup}>
+                    <Text style={styles.label}>{field.label}</Text>
+                    <TextInput
+                      style={[styles.input, field.multiline && styles.inputMultiline]}
+                      value={String(compliance[field.key] || '')}
+                      onChangeText={value => updateCompliance(field.key, value)}
+                      placeholder={field.placeholder}
+                      placeholderTextColor="#8F6A48"
+                      multiline={field.multiline}
+                      autoCapitalize={field.autoCapitalize || 'sentences'}
+                      keyboardType={field.keyboardType || 'default'}
+                    />
+                  </View>
+                );
+              })}
+            </>
+          ) : null}
+
+          <TouchableOpacity
+            style={[styles.foldRow, documentsOpen ? styles.foldRowOpen : null]}
+            onPress={() => setDocumentsOpen(open => !open)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: documentsOpen }}
+          >
+            <Text style={[styles.foldLabel, documentsOpen ? styles.foldLabelOpen : null]}>Documents</Text>
+            <Text style={styles.foldMeta}>
+              {requiredDocumentTypes.length ? `${missingDocuments.length} missing` : 'none'}
+            </Text>
+            <Text style={[styles.foldChevron, documentsOpen ? styles.foldChevronOpen : null]}>›</Text>
+          </TouchableOpacity>
+          {documentsOpen ? (
+          <>
           {GERMAN_COMPLIANCE_DOCUMENTS.map(doc => {
             const upload = uploadsByDocType.get(doc.type);
             const complete = !!upload;
@@ -708,6 +1016,8 @@ export default function EditProfileScreen({ navigation, route }: NativeStackScre
                 </View>
               );
             })}
+          </>
+          ) : null}
           </>
           ) : null}
         </ScrollView>
@@ -919,13 +1229,39 @@ const styles = StyleSheet.create({
   avatarLabel: { color: PIZZA_FIRE.textMuted, fontSize: 13, marginTop: 12, fontWeight: '600' },
   hoursBtn: {
     marginTop: 16,
-    minWidth: 160,
-    paddingHorizontal: 28,
   },
   hoursBtnText: {
     fontSize: 16,
     letterSpacing: 0.4,
   },
+  adminOverview: { marginBottom: 16 },
+  overviewName: { color: PIZZA_FIRE.textPrimary, fontSize: 22, fontWeight: '800' },
+  overviewInactive: { color: PIZZA_FIRE.textMuted, fontSize: 13, fontWeight: '700', marginTop: 4 },
+  activeToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 44,
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  activeToggleLabel: { color: PIZZA_FIRE.textSecondary, fontSize: 15, fontWeight: '600' },
+  activeToggleLabelOn: { color: PIZZA_FIRE.success },
+  updateBtn: { alignSelf: 'flex-start', marginTop: 8 },
+  sectionBody: { paddingBottom: 12, gap: 8 },
+  inlineSave: { minHeight: 40, justifyContent: 'center' },
+  dangerLink: { color: '#D89A79', fontSize: 13, fontWeight: '800', marginTop: 8 },
+  dangerBtn: {
+    borderWidth: 1,
+    borderColor: '#8A4A3A',
+    backgroundColor: 'rgba(158, 60, 46, 0.16)',
+    borderRadius: 8,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  dangerBtnText: { color: '#E7B4A4', fontSize: 14, fontWeight: '800' },
   metaValue: {
     color: PIZZA_FIRE.textPrimary,
     fontSize: 16,
@@ -935,12 +1271,33 @@ const styles = StyleSheet.create({
   form: { gap: 20, marginBottom: 24 },
   inputGroup: { gap: 8, marginBottom: 14 },
   label: { color: PIZZA_FIRE.textMuted, fontSize: 12, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' },
-  input: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 12, padding: 16, color: PIZZA_FIRE.textPrimary, fontSize: 16 },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 8, padding: 16, color: PIZZA_FIRE.textPrimary, fontSize: 16 },
   inputMultiline: { minHeight: 88, textAlignVertical: 'top' },
   sectionHeading: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900', marginTop: 8, marginBottom: 12 },
+  foldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    marginBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: PIZZA_FIRE.divider,
+    gap: 10,
+  },
+  foldRowOpen: {
+    backgroundColor: PIZZA_FIRE.accentSoft,
+    marginHorizontal: -16,
+    paddingHorizontal: 16,
+    borderLeftWidth: 3,
+    borderLeftColor: PIZZA_FIRE.accent,
+  },
+  foldLabel: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
+  foldLabelOpen: { color: PIZZA_FIRE.accent },
+  foldMeta: { flex: 1, color: PIZZA_FIRE.textMuted, fontSize: 13, textAlign: 'right' },
+  foldChevron: { color: PIZZA_FIRE.gold, fontSize: 20, fontWeight: '300', marginTop: -1 },
+  foldChevronOpen: { color: PIZZA_FIRE.accent, transform: [{ rotate: '90deg' }], marginTop: 0 },
   complianceIntroCard: {
     backgroundColor: PIZZA_FIRE.card,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -953,7 +1310,7 @@ const styles = StyleSheet.create({
   salutationRow: { flexDirection: 'row', gap: 10 },
   salutationPill: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.inputBg,
@@ -965,7 +1322,7 @@ const styles = StyleSheet.create({
   salutationTextActive: { color: PIZZA_FIRE.charcoal },
   dateButton: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -973,7 +1330,7 @@ const styles = StyleSheet.create({
   dateButtonText: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '600' },
   docCard: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 14,
     borderWidth: 1,
     marginBottom: 12,
@@ -990,7 +1347,7 @@ const styles = StyleSheet.create({
   helpButton: {
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: 7,
     backgroundColor: PIZZA_FIRE.inputBg,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1000,7 +1357,7 @@ const styles = StyleSheet.create({
   helpButtonText: { color: PIZZA_FIRE.accent, fontWeight: '900' },
   uploadMetaCard: {
     backgroundColor: PIZZA_FIRE.crustDark,
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 12,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1011,7 +1368,7 @@ const styles = StyleSheet.create({
   missingHelp: { color: PIZZA_FIRE.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 10 },
   uploadButton: {
     backgroundColor: PIZZA_FIRE.hotAccent,
-    borderRadius: 16,
+    borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
     borderWidth: 1,
@@ -1036,13 +1393,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.inputBg,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 8,
     marginBottom: 24,
   },
   uploadIconCircle: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 8,
     backgroundColor: PIZZA_FIRE.surfaceInset,
     justifyContent: 'center',
     alignItems: 'center',
@@ -1066,7 +1423,7 @@ const styles = StyleSheet.create({
   choiceImage: { width: 44, height: 44 },
   calendarCard: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1098,7 +1455,7 @@ const styles = StyleSheet.create({
   monthPickerArrow: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: PIZZA_FIRE.surfaceInset,
@@ -1124,7 +1481,7 @@ const styles = StyleSheet.create({
     width: '30%',
     minWidth: 72,
     paddingVertical: 12,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1.5,

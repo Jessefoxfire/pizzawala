@@ -6,19 +6,20 @@ import {
   loadCachedGeofences, 
   cacheGeofences, 
   shouldNotifyForEvent,
-  setPromptActionStatus,
-  getPromptActionStatus,
-  getLastUserName
+  getLastUserName,
+  getLocationFeaturesEnabled,
+  syncNativeWorksiteNotificationPref,
 } from './storage';
-import { processGeofenceEvent, storePendingPrompt, startShift, endShift, isShiftInProgress } from './processor';
+import { processGeofenceEvent, storePendingPrompt, applyNativeShiftAction } from './processor';
 import { decideGeofenceNotification } from './notificationPolicy';
 import { showGeofenceNotification } from '../notifications/geofenceNotifications';
 import { resolveGeofenceForNativeEvent, startNativeMonitoring } from './native';
 import { normalizeGeofenceTransition } from './transition';
 import { getDistanceMeters } from '../utils/geo';
+import { isActiveWorksite } from '../utils/locationPrompt';
 
 type HeadlessEvent = {
-  type?: 'geofence' | 'location';
+  type?: 'geofence' | 'location' | 'shift_action';
   geofenceId?: string;
   transition?: unknown;
   latitude?: number;
@@ -26,6 +27,11 @@ type HeadlessEvent = {
   timestamp?: number;
   accuracy?: number;
   delayed?: boolean;
+  action?: string;
+  shiftId?: string;
+  geofenceName?: string;
+  recordedAtMs?: number;
+  breakSource?: string;
 };
 
 const mergeGeofenceIntoCache = async (resolved: Geofence) => {
@@ -45,6 +51,31 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
   const userId = user?.uid ?? (await getLastUserId());
   if (!userId) return;
 
+  if (data.type === 'shift_action') {
+    const action = data.action;
+    if (
+      action !== 'pause' &&
+      action !== 'resume' &&
+      action !== 'start' &&
+      action !== 'end' &&
+      action !== 'cutoff'
+    ) {
+      return;
+    }
+    await applyNativeShiftAction(
+      action,
+      data.shiftId,
+      userId,
+      {
+        id: data.geofenceId,
+        name: data.geofenceName,
+      },
+      data.breakSource === 'auto' ? 'auto' : 'manual',
+      typeof data.recordedAtMs === 'number' ? data.recordedAtMs : null
+    );
+    return;
+  }
+
   if (data.type === 'location') {
     // Handle NATIVE-PUSHED high-accuracy location update
     if (data.latitude == null || data.longitude == null) return;
@@ -53,6 +84,7 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
     // Check if we just crossed into a building zone of any cached geofence
     const geofences = await loadCachedGeofences();
     for (const g of geofences) {
+      if (!isActiveWorksite(g)) continue;
       const dist = getDistanceMeters(current, g.center);
       // If we are VERY close (e.g. 30m) it might trigger an auto-shift if one isn't already running
       if (dist < 30) {
@@ -112,63 +144,26 @@ export const handleGeofenceEventHeadless = async (data: HeadlessEvent) => {
         }
       }
 
-      if (result.promptPayload && transition === 'enter') {
-        const eventId = result.eventId;
-        const gName = geofence?.name;
-        const gId = geofence?.id;
-
-        setTimeout(async () => {
-          const { getAutoShiftEnabled } = require('./storage');
-          if (!(await getAutoShiftEnabled())) return;
-
-          const status = await getPromptActionStatus(eventId);
-          if (status === 'confirmed' || status === 'vetoed') return;
-
-          console.log(`[Headless] Enforcing automatic enter for ${gName}`);
-          await setPromptActionStatus(eventId, 'automatic');
-
-          if (gId && gName) {
-            await startShift(userId, gId, gName);
-          }
-        }, 60000);
-      }
     } catch (error) {
       console.error('[Headless] Error:', error);
     }
   };
 
+  if (!isActiveWorksite(geofence)) return;
+
   if (nativeTransition === 'enter') {
-    if (geofence.active === false) return;
     await executeEvent('enter');
     return;
   }
 
   if (nativeTransition === 'exit' && !data.delayed) {
-    const inProgress = await isShiftInProgress(userId);
-    const { getSuppressGeofenceWhileOnShift } = require('./storage');
-    const suppressed = await getSuppressGeofenceWhileOnShift();
-    if (inProgress || suppressed) {
-      await executeEvent('exit');
-      return;
-    }
-    return;
-  }
-
-  if (nativeTransition === 'exit' && data.delayed) {
-    try {
-      const { getAutoShiftEnabled } = require('./storage');
-      if (await getAutoShiftEnabled()) {
-        const endTime = data.timestamp ? new Date(data.timestamp) : new Date();
-        await endShift(userId, endTime);
-        console.log('[Headless] Delayed auto-stop executed at', endTime.toISOString());
-      }
-    } catch (error) {
-      console.error('[Headless] Delayed exit handling failed:', error);
-    }
+    await executeEvent('exit');
   }
 };
 
 export const handleGeofenceBootHeadless = async () => {
+  if (!(await getLocationFeaturesEnabled())) return;
+  await syncNativeWorksiteNotificationPref();
   const cached = await loadCachedGeofences();
   if (cached.length > 0) {
     await startNativeMonitoring(cached);

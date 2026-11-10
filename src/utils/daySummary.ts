@@ -1,3 +1,4 @@
+import { applyActualShiftRange, calcBreakMs, calcWorkedMs, type LiveShift } from '../services/shifts';
 import { formatTimeLabel24 } from './eventDays';
 
 export type ScheduledShiftRow = {
@@ -182,11 +183,43 @@ export function validateActualRange(startIso: string, endIso: string): string | 
   return null;
 }
 
+export function shiftsOverlap(aStartIso: string, aEndIso: string, bStartIso: string, bEndIso: string): boolean {
+  const aStart = new Date(aStartIso).getTime();
+  const aEnd = new Date(aEndIso).getTime();
+  const bStart = new Date(bStartIso).getTime();
+  const bEnd = new Date(bEndIso).getTime();
+  if ([aStart, aEnd, bStart, bEnd].some(Number.isNaN)) return false;
+  return aStart < bEnd && aEnd > bStart;
+}
+
+export function findOverlappingDaySummaryRow(
+  rows: DaySummaryRow[],
+  candidate: Pick<DaySummaryRow, 'startIso' | 'endIso' | 'draftId'>,
+  ignoreDraftId?: string
+): DaySummaryRow | null {
+  return (
+    rows.find(
+      row =>
+        row.draftId !== ignoreDraftId &&
+        row.draftId !== candidate.draftId &&
+        shiftsOverlap(candidate.startIso, candidate.endIso, row.startIso, row.endIso)
+    ) || null
+  );
+}
+
 export function validateDaySummaryRows(rows: DaySummaryRow[]): string | null {
   if (rows.length === 0) return 'Add at least one shift before confirming the day.';
   for (const row of rows) {
     const error = validateActualRange(row.startIso, row.endIso);
     if (error) return error;
+  }
+  const sorted = [...rows].sort(
+    (a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime()
+  );
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    if (shiftsOverlap(sorted[i].startIso, sorted[i].endIso, sorted[i + 1].startIso, sorted[i + 1].endIso)) {
+      return 'This shift overlaps another shift.';
+    }
   }
   return null;
 }
@@ -200,15 +233,25 @@ export function totalActualMs(rows: DaySummaryRow[]) {
   }, 0);
 }
 
-function totalPeriodMs(
-  periods: Array<{ startIso: string; endIso?: string | null }> | undefined,
-  nowMs: number
+export function totalWorkedMsFromSummaryRows(
+  rows: DaySummaryRow[],
+  shifts: DaySummaryShiftLike[] = [],
+  nowMs = Date.now()
 ) {
-  return (periods || []).reduce((total, period) => {
-    const startMs = new Date(period.startIso).getTime();
-    const endMs = period.endIso ? new Date(period.endIso).getTime() : nowMs;
+  return rows.reduce((total, row) => {
+    const startMs = new Date(row.startIso).getTime();
+    const endMs = new Date(row.endIso).getTime();
     if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) return total;
-    return total + (endMs - startMs);
+    const shift = shifts.find(item => item.id === row.shiftId);
+    if (!shift) return total + (endMs - startMs);
+    const periods = applyActualShiftRange(
+      shift as LiveShift,
+      row.startIso,
+      row.endIso,
+      row.originalStartIso,
+      row.originalEndIso
+    );
+    return total + calcWorkedMs({ ...shift, ...periods, status: 'closed' }, endMs);
   }, 0);
 }
 
@@ -217,8 +260,8 @@ export function dailyShiftBreakdown(shifts: DaySummaryShiftLike[], dateKey: stri
   return shifts.reduce(
     (total, shift) => {
       if (shift.isScheduled || !shiftOverlapsDate(shift, dateKey, nowMs)) return total;
-      const workedMs = totalPeriodMs(workPeriodsFromShift(shift, nowMs), nowMs);
-      const breakMs = totalPeriodMs(shift.breakPeriods, nowMs);
+      const workedMs = calcWorkedMs(shift, nowMs);
+      const breakMs = calcBreakMs(shift, nowMs);
       if (workedMs + breakMs < MIN_ACCOUNTABLE_SHIFT_MS) return total;
       if (shift.workCategory === 'driving') {
         total.drivingMs += workedMs;

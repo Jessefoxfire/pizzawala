@@ -12,13 +12,30 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.djtranscendence.pizzawala.MainActivity
 import com.djtranscendence.pizzawala.R
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 object GeofenceNotifier {
   private const val CHANNEL_ID = "geofence-updates"
   private const val CHANNEL_NAME = "Worksite updates"
+  const val TRANSITION_RETURN = "return"
+
+  fun notificationId(geofenceId: String, transition: String): Int =
+    (geofenceId + ":" + transition).hashCode()
+
+  fun cancel(context: Context, geofenceId: String, transition: String) {
+    NotificationManagerCompat.from(context).cancel(notificationId(geofenceId, transition))
+  }
+
+  fun cancelWorksitePrompts(context: Context, geofenceId: String) {
+    cancel(context, geofenceId, "enter")
+    cancel(context, geofenceId, "exit")
+    cancel(context, geofenceId, TRANSITION_RETURN)
+  }
+
+  fun cancelAllWorksitePrompts(context: Context) {
+    GeofencePrefs.loadGeofences(context).forEach { cancelWorksitePrompts(context, it.id) }
+    val current = GeofencePrefs.getShiftGeofenceId(context)
+    if (!current.isNullOrBlank()) cancelWorksitePrompts(context, current)
+  }
 
   private fun ensureChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -33,7 +50,30 @@ object GeofenceNotifier {
     manager.createNotificationChannel(channel)
   }
 
-  fun notifyTransition(context: Context, geofenceId: String, transition: String, originalTs: Long? = null) {
+  private fun homeIntent(context: Context, action: String? = null, geofenceId: String? = null, geofenceName: String? = null): Intent {
+    return Intent(context, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      putExtra("screen", "Home")
+      if (!action.isNullOrBlank()) putExtra("action", action)
+      if (!geofenceId.isNullOrBlank()) putExtra("geofenceId", geofenceId)
+      if (!geofenceName.isNullOrBlank()) putExtra("geofenceName", geofenceName)
+    }
+  }
+
+  private fun pendingFlags(): Int {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+      PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    else
+      PendingIntent.FLAG_UPDATE_CURRENT
+  }
+
+  fun notifyTransition(
+    context: Context,
+    geofenceId: String,
+    transition: String,
+    originalTs: Long? = null,
+    kind: EnterNotifyKind = EnterNotifyKind.START_SHIFT,
+  ) {
     if (!GeofencePrefs.isNotificationsEnabled(context)) {
       android.util.Log.d("GeofenceNotifier", "Notifications disabled by user preference. Skipping.")
       return
@@ -49,77 +89,59 @@ object GeofenceNotifier {
     val name = GeofencePrefs.getGeofenceName(context, geofenceId) ?: geofenceId
     val userName = GeofencePrefs.getUserName(context)
     val firstName = userName?.split(" ")?.get(0) ?: "Team member"
-    
-    val isDelayedExit = transition == "exit" && originalTs != null
-    
-    val body = if (isDelayedExit) {
-      "Hi $firstName, you left the worksite $name 30 minutes ago? Stop shift?"
-    } else {
-      val action = when (transition) {
-        "enter" -> "entered"
-        "exit" -> "left"
-        "dwell" -> "arrived at"
-        else -> transition
-      }
-      val isAuto = GeofencePrefs.isAutoShiftEnabled(context)
-      if (isAuto) {
-        if (transition == "exit") {
-          "You have left the $name worksite, but your shift will continue until you have been away for 30 minutes. At that point, your shift will be recorded as ending 30 minutes ago."
-        } else {
-          "Hi $firstName, you have $action the worksite $name."
-        }
-      } else {
-        val prompt = if (transition == "enter") "start" else "end"
-        "You have $action the worksite $name. Would you like to $prompt your shift? If so, click here."
-      }
+    val isAuto = GeofencePrefs.isAutoShiftEnabled(context)
+    val isReturn = kind == EnterNotifyKind.BREAK_RETURN || transition == TRANSITION_RETURN
+    val isDelayedExit = false
+
+    val body = when {
+      isReturn -> "You are back at $name."
+      transition == "exit" -> "You have left the $name worksite."
+      isAuto -> "Hi $firstName, you have entered the worksite $name."
+      else -> "You have entered the worksite $name. Would you like to start your shift?"
     }
 
-    val intent = Intent(context, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-      putExtra("screen", "Shift")
-      if (isDelayedExit) {
-        putExtra("action", "stop_shift_at")
-        putExtra("endTime", originalTs)
-      }
-    }
-    
+    val contentIntent = homeIntent(context)
     val pendingIntent = PendingIntent.getActivity(
-      context, 
-      geofenceId.hashCode(), 
-      intent, 
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_UPDATE_CURRENT
+      context,
+      geofenceId.hashCode(),
+      contentIntent,
+      pendingFlags()
     )
 
     val builder = NotificationCompat.Builder(context, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle("Hi $firstName")
       .setContentText(body)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(body))
       .setPriority(NotificationCompat.PRIORITY_MAX)
       .setCategory(NotificationCompat.CATEGORY_ALARM)
       .setVibrate(longArrayOf(0, 500, 200, 500))
       .setContentIntent(pendingIntent)
       .setAutoCancel(true)
 
-    if (isDelayedExit) {
-      // Add a direct action button for "Stop shift"
-      val stopIntent = Intent(context, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        putExtra("screen", "Shift")
-        putExtra("action", "stop_shift_at")
-        putExtra("endTime", originalTs)
+    if (transition == "enter" && !isAuto && !isReturn && !isDelayedExit) {
+      val ignoreIntent = Intent(context, GeofenceNotificationActionReceiver::class.java).apply {
+        action = GeofenceNotificationActionReceiver.ACTION_IGNORE
+        putExtra(GeofenceNotificationActionReceiver.EXTRA_GEOFENCE_ID, geofenceId)
+        putExtra(GeofenceNotificationActionReceiver.EXTRA_TRANSITION, "enter")
       }
-      val stopPendingIntent = PendingIntent.getActivity(
-        context,
-        geofenceId.hashCode() + 1,
-        stopIntent,
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT else PendingIntent.FLAG_UPDATE_CURRENT
+      val startIntent = homeIntent(context, "start_shift", geofenceId, name)
+      builder.addAction(
+        0,
+        "Ignore",
+        PendingIntent.getBroadcast(context, geofenceId.hashCode() + 21, ignoreIntent, pendingFlags())
       )
-      builder.addAction(0, "STOP SHIFT", stopPendingIntent)
+      builder.addAction(
+        0,
+        "Start",
+        PendingIntent.getActivity(context, geofenceId.hashCode() + 22, startIntent, pendingFlags())
+      )
     }
 
-    val notification = builder.build()
-
-    val notificationId = (geofenceId + ":" + transition).hashCode()
-    NotificationManagerCompat.from(context).notify(notificationId, notification)
+    val notifyTransition = if (isReturn) TRANSITION_RETURN else transition
+    NotificationManagerCompat.from(context).notify(
+      notificationId(geofenceId, notifyTransition),
+      builder.build()
+    )
   }
 }

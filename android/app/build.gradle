@@ -94,9 +94,23 @@ android {
         applicationId "com.djtranscendence.pizzawala"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 17
+        versionCode 18
         versionName "2.6"
         resValue "string", "google_maps_key", pizzaWalaMapsApiKey
+        externalNativeBuild {
+            cmake {
+                // 128 is too small: object dirs under C:/pw-cxx are already ~100 chars,
+                // so CMake cannot hash and ninja mkdir exceeds Windows 260.
+                arguments "-DCMAKE_OBJECT_PATH_MAX=180",
+                        "-C${rootDir}\\cmake-object-path.cmake"
+            }
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            // Keep ninja/object paths off android/app/.cxx (too long on Windows).
+            buildStagingDirectory "C:/pw-cxx"
+        }
     }
     signingConfigs {
         debug {

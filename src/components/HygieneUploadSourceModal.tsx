@@ -1,5 +1,6 @@
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import PizzaFireButton from './PizzaFireButton';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import type { DocumentNameSource } from '../utils/suggestDocumentName';
 
@@ -28,9 +29,7 @@ export default function HygieneUploadSourceModal({ visible, onSelect, onCancel }
               <Text style={styles.optionText}>{choice.label}</Text>
             </TouchableOpacity>
           ))}
-          <TouchableOpacity style={styles.cancel} onPress={onCancel}>
-            <Text style={styles.cancelText}>Cancel</Text>
-          </TouchableOpacity>
+          <PizzaFireButton label="Cancel" variant="muted" onPress={onCancel} style={styles.cancel} />
         </Pressable>
       </Pressable>
     </Modal>
@@ -39,11 +38,10 @@ export default function HygieneUploadSourceModal({ visible, onSelect, onCancel }
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, justifyContent: 'center', paddingHorizontal: 24, backgroundColor: 'rgba(0,0,0,0.55)' },
-  card: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, padding: 18 },
+  card: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, padding: 18 },
   title: { color: PIZZA_FIRE.textPrimary, fontSize: 19, fontWeight: '800' },
   subtitle: { color: PIZZA_FIRE.textMuted, fontSize: 13, lineHeight: 18, marginTop: 6, marginBottom: 14 },
-  option: { backgroundColor: PIZZA_FIRE.surfaceInset, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, paddingHorizontal: 14, paddingVertical: 13, marginBottom: 8 },
+  option: { backgroundColor: PIZZA_FIRE.surfaceInset, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, paddingHorizontal: 14, paddingVertical: 13, marginBottom: 8 },
   optionText: { color: PIZZA_FIRE.textPrimary, fontSize: 15, fontWeight: '700' },
-  cancel: { alignItems: 'center', paddingVertical: 10, marginTop: 2 },
-  cancelText: { color: PIZZA_FIRE.textMuted, fontSize: 14, fontWeight: '700' },
+  cancel: { marginTop: 2 },
 });

@@ -35,13 +35,16 @@ import { formatTimeRange } from '../utils/eventDays';
 import { auth } from '../services/firebase';
 import { useAuth } from '../auth/useAuth';
 import { useOffline } from '../context/OfflineContext';
-import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
 import {
   cleanupStoredSubMinuteShiftsForUser,
-  offlineOpenShiftToLiveShift,
+  coalesceExtraOpenLiveShifts,
   applyPendingShiftEnds,
-  updateShiftPeriodTimes,
+  loadLocalOfflineShifts,
+  saveShiftPeriodEdit,
+  saveShiftDeleteRequest,
+  approvePendingShiftEdit,
+  rejectPendingShiftEdit,
   isShiftPaused,
   pauseLiveShift,
   resumeLiveShift,
@@ -55,7 +58,9 @@ import {
   buildDayTimeEntries,
   buildHoursRolodexDateKeys,
   buildRecentDateKeys,
+  currentOpenLiveShiftId,
   hoursRolodexWindowStart,
+  formatClockTime,
   formatEntryDuration,
   formatEntryRange,
   formatOriginalEntryRange,
@@ -128,7 +133,7 @@ const VISIBLE_DATE_COUNT = 5;
 export default function WorkingHoursScreen({ navigation, route }: Props) {
   const layout = useAppLayout();
   const insets = useSafeAreaInsets();
-  const { syncBannerVisible } = useOffline();
+  const { isOnline } = useOffline();
   const currentUserId = auth.currentUser?.uid || null;
   const authState = useAuth();
   const isAdmin = authState.status === 'admin';
@@ -162,7 +167,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   const [scheduledShifts, setScheduledShifts] = useState<ScheduledShiftRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [nowMs, setNowMs] = useState(Date.now());
-  const [offlineShift, setOfflineShift] = useState<LiveShift | null>(null);
+  const [offlineShifts, setOfflineShifts] = useState<LiveShift[]>([]);
   const [editingEntry, setEditingEntry] = useState<DayTimeEntry | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [shiftActionBusy, setShiftActionBusy] = useState(false);
@@ -240,20 +245,15 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
 
   const refreshOfflineShift = async () => {
     if (viewingOtherUser) {
-      setOfflineShift(null);
+      setOfflineShifts([]);
       return;
     }
-    const offline = await getOfflineOpenShift();
-    if (offline && offline.userId === currentUserId) {
-      setOfflineShift(offlineOpenShiftToLiveShift(offline));
-      return;
-    }
-    setOfflineShift(null);
+    setOfflineShifts(await loadLocalOfflineShifts(currentUserId));
   };
 
   useEffect(() => {
     if (!userId || viewingOtherUser) {
-      setOfflineShift(null);
+      setOfflineShifts([]);
       if (viewingOtherUser) return undefined;
       if (!userId) return undefined;
     }
@@ -269,6 +269,9 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     cleanedUserIdRef.current = userId;
     void cleanupStoredSubMinuteShiftsForUser(userId).catch(error => {
       console.warn('Could not clean up short shift records:', error);
+    });
+    void coalesceExtraOpenLiveShifts(userId).catch(error => {
+      console.warn('Could not coalesce extra open shifts:', error);
     });
   }, [userId, viewingOtherUser]);
 
@@ -351,9 +354,10 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   const mergedShifts = useMemo(() => {
     const extras = historicalShifts.filter(s => !liveShifts.some(live => live.id === s.id));
     const base = extras.length ? [...liveShifts, ...extras] : liveShifts;
-    const withOffline = offlineShift ? [offlineShift, ...base.filter(s => s.id !== offlineShift.id)] : base;
+    const localOnly = offlineShifts.filter(shift => !base.some(item => item.id === shift.id));
+    const withOffline = localOnly.length ? [...localOnly, ...base] : base;
     return viewingOtherUser ? withOffline : applyPendingShiftEnds(withOffline, pendingShiftEnds);
-  }, [liveShifts, historicalShifts, offlineShift, pendingShiftEnds, viewingOtherUser]);
+  }, [liveShifts, historicalShifts, offlineShifts, pendingShiftEnds, viewingOtherUser]);
 
   const dayEntries = useMemo(
     () => buildDayTimeEntries(mergedShifts, selectedDateKey, nowMs),
@@ -406,11 +410,15 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     setShiftActionBusy(true);
     try {
       const paused = isShiftPaused(shift);
-      const result = paused ? await resumeLiveShift(shiftId) : await pauseLiveShift(shiftId);
-      await refreshOfflineShift();
-      if (result.queued) {
-        Alert.alert('Saved offline', 'Shift change will sync when you are back online.');
+      const { onManualBreak, onManualResume } = require('../geofencing/notificationPolicy');
+      if (paused) {
+        await onManualResume(shift.geofenceId);
+        await resumeLiveShift(shiftId);
+      } else {
+        await onManualBreak();
+        await pauseLiveShift(shiftId);
       }
+      await refreshOfflineShift();
     } catch (error) {
       Alert.alert('Notice', error instanceof Error ? error.message : 'Could not update shift.');
     } finally {
@@ -424,8 +432,10 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     setDaySummaryOpen(true);
   };
 
+  const actor = currentUserId ? { userId: currentUserId, isAdmin } : null;
+
   const openEntryEditor = (entry: DayTimeEntry) => {
-    if (viewingOtherUser) {
+    if (viewingOtherUser && !isAdmin) {
       Alert.alert('View only', 'Employee hours are read-only. Shifts cannot be edited from this view.');
       return;
     }
@@ -448,11 +458,9 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
       ]);
       return;
     }
-    if (entry.shiftLocked) {
-      Alert.alert('Locked shift', 'This shift is locked and cannot be edited.');
-      return;
-    }
-    if (entry.shiftId.startsWith('offline-')) {
+    const existsRemotely = liveShifts.some(shift => shift.id === entry.shiftId)
+      || historicalShifts.some(shift => shift.id === entry.shiftId);
+    if (!existsRemotely) {
       Alert.alert('Offline shift', 'Edit this slot after the shift syncs online.');
       return;
     }
@@ -464,22 +472,82 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
   };
 
   const saveEntryEdit = async (startTime: string, endTime: string) => {
-    if (viewingOtherUser) return;
-    if (!editingEntry?.periodEndIso) return;
+    if (viewingOtherUser && !isAdmin) return;
+    if (!editingEntry?.periodEndIso || !actor) return;
     setSavingEdit(true);
     try {
       const startIso = applyTimeToIso(editingEntry.periodStartIso, startTime);
       const endIso = applyTimeToIso(editingEntry.periodEndIso, endTime);
-      await updateShiftPeriodTimes(
-        editingEntry.shiftId,
-        editingEntry.kind,
-        editingEntry.periodIndex,
+      const result = await saveShiftPeriodEdit({
+        shiftId: editingEntry.shiftId,
+        kind: editingEntry.kind,
+        periodIndex: editingEntry.periodIndex,
         startIso,
-        endIso
-      );
+        endIso,
+        actor,
+      });
       setEditingEntry(null);
+      if (result.pending) {
+        Alert.alert('Waiting for approval', 'Your change is waiting for admin approval.');
+      }
     } catch (error) {
       Alert.alert('Could not save', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const confirmDeleteEditingShift = async () => {
+    if ((viewingOtherUser && !isAdmin) || !editingEntry || !actor) return;
+    setSavingEdit(true);
+    try {
+      const result = await saveShiftDeleteRequest({
+        shiftId: editingEntry.shiftId,
+        kind: editingEntry.kind,
+        periodIndex: editingEntry.periodIndex,
+        startIso: editingEntry.periodStartIso,
+        endIso: editingEntry.periodEndIso || editingEntry.periodStartIso,
+        actor,
+      });
+      setEditingEntry(null);
+      if (result.pending) {
+        Alert.alert('Waiting for approval', 'Your delete request is waiting for admin approval.');
+      }
+    } catch (error) {
+      Alert.alert('Could not delete', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const requestDeleteEditingShift = () => {
+    if ((viewingOtherUser && !isAdmin) || !editingEntry || savingEdit) return;
+    if (!isOnline) {
+      Alert.alert('Offline', 'Connect to the internet to delete a shift.');
+      return;
+    }
+    void confirmDeleteEditingShift();
+  };
+
+  const handleApprovePending = async (entry: DayTimeEntry) => {
+    if (!isAdmin || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await approvePendingShiftEdit(entry.shiftId);
+    } catch (error) {
+      Alert.alert('Could not approve', error instanceof Error ? error.message : 'Please try again.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleRejectPending = async (entry: DayTimeEntry) => {
+    if (!isAdmin || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      await rejectPendingShiftEdit(entry.shiftId);
+    } catch (error) {
+      Alert.alert('Could not reject', error instanceof Error ? error.message : 'Please try again.');
     } finally {
       setSavingEdit(false);
     }
@@ -521,7 +589,7 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
     }
   };
 
-  const headerTopInset = insets.top + (syncBannerVisible ? 18 : layout.isShort ? 6 : 12);
+  const headerTopInset = insets.top + (layout.isShort ? 6 : 12);
 
   return (
     <View style={styles.screen}>
@@ -704,17 +772,6 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
             )}
           </View>
 
-          {!viewingOtherUser ? (
-          <TouchableOpacity
-            style={styles.createButton}
-            onPress={() => navigation.navigate('ShiftSetup')}
-            activeOpacity={0.85}
-          >
-            <Icons.clock color={PIZZA_FIRE.cheese} width={18} height={18} />
-            <Text style={styles.createButtonText}>View Shift Status</Text>
-          </TouchableOpacity>
-          ) : null}
-
           {visibleEntries.length === 0 ? (
             <View style={styles.emptyCard}>
               <Text style={styles.emptyTitle}>
@@ -748,8 +805,12 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
                   <View style={styles.entryBody}>
                     <View style={styles.entryTitleRow}>
                       <Text style={styles.entryTitle}>{card.title}</Text>
-                      {entry.isAdded || entry.isEdited ? (
-                        <HoursChangeBadge added={entry.isAdded} edited={entry.isEdited} />
+                      {entry.isAdded || entry.isEdited || entry.hasPendingApproval ? (
+                        <HoursChangeBadge
+                          added={entry.isAdded}
+                          edited={entry.isEdited}
+                          pending={entry.hasPendingApproval}
+                        />
                       ) : null}
                     </View>
                     <Text style={styles.entryRange}>{formatEntryRange(entry)}</Text>
@@ -763,15 +824,48 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
                     ) : entry.isEdited && formatOriginalEntryRange(entry) ? (
                       <Text style={styles.entryOriginal}>{formatOriginalEntryRange(entry)}</Text>
                     ) : null}
+                    {entry.hasPendingApproval ? (
+                      <Text style={styles.entryPending}>
+                        {entry.pendingDelete
+                          ? 'Delete requested'
+                          : entry.pendingStartIso
+                            ? `Requested ${formatClockTime(new Date(entry.pendingStartIso).getTime())}${
+                                entry.pendingEndIso
+                                  ? ` - ${formatClockTime(new Date(entry.pendingEndIso).getTime())}`
+                                  : ''
+                              }`
+                            : 'Change waiting for admin'}
+                      </Text>
+                    ) : null}
                     {entry.locationName ? (
                       <Text style={styles.entryLocation}>{entry.locationName}</Text>
+                    ) : null}
+                    {isAdmin && entry.hasPendingApproval ? (
+                      <View style={styles.pendingActions}>
+                        <TouchableOpacity
+                          style={styles.pendingApprove}
+                          onPress={() => void handleApprovePending(entry)}
+                          disabled={savingEdit}
+                          activeOpacity={0.82}
+                        >
+                          <Text style={styles.pendingApproveText}>Approve</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.pendingReject}
+                          onPress={() => void handleRejectPending(entry)}
+                          disabled={savingEdit}
+                          activeOpacity={0.82}
+                        >
+                          <Text style={styles.pendingRejectText}>Reject</Text>
+                        </TouchableOpacity>
+                      </View>
                     ) : null}
                   </View>
                   <View style={styles.entryDurationWrap}>
                     <Text style={styles.entryDuration}>
                       {formatEntryDuration(entry.durationMs, entry.isActive)}
                     </Text>
-                    {!viewingOtherUser ? (
+                    {!viewingOtherUser || isAdmin ? (
                     <TouchableOpacity
                       onPress={() => openEntryEditor(entry)}
                       disabled={savingEdit}
@@ -798,18 +892,20 @@ export default function WorkingHoursScreen({ navigation, route }: Props) {
           if (!savingEdit) setEditingEntry(null);
         }}
         onConfirm={saveEntryEdit}
+        onDelete={requestDeleteEditingShift}
       />
       <DaySummaryModal
         visible={daySummaryOpen}
         userId={currentUserId}
-        activeShift={offlineShift || mergedShifts.find(s => s.status === 'open') || null}
+        activeShift={
+          offlineShifts.find(shift => shift.status === 'open') ||
+          mergedShifts.find(s => s.id === currentOpenLiveShiftId(mergedShifts)) ||
+          null
+        }
         onCancel={() => setDaySummaryOpen(false)}
-        onConfirmed={async result => {
+        onConfirmed={async () => {
           setDaySummaryOpen(false);
           await refreshOfflineShift();
-          if (result.queued) {
-            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
-          }
         }}
       />
       <Modal
@@ -963,7 +1059,7 @@ const styles = StyleSheet.create({
   },
   datePickerCard: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -978,7 +1074,7 @@ const styles = StyleSheet.create({
   datePickerCloseButton: {
     marginTop: 12,
     minHeight: 44,
-    borderRadius: 999,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: PIZZA_FIRE.hotAccent,
@@ -1035,7 +1131,7 @@ const styles = StyleSheet.create({
     marginTop: 0,
     marginBottom: 16,
     padding: 4,
-    borderRadius: 999,
+    borderRadius: 8,
     backgroundColor: 'rgba(18, 10, 6, 0.55)',
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1043,7 +1139,7 @@ const styles = StyleSheet.create({
   viewToggleBtn: {
     flex: 1,
     minHeight: 40,
-    borderRadius: 999,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 10,
@@ -1125,27 +1221,9 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     backgroundColor: 'rgba(255, 159, 28, 0.18)',
   },
-  createButton: {
-    marginTop: 18,
-    marginBottom: 22,
-    backgroundColor: PIZZA_FIRE.hotAccent,
-    borderRadius: 999,
-    minHeight: 48,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.hotAccentBorder,
-  },
-  createButtonText: {
-    color: PIZZA_FIRE.cheese,
-    fontSize: 16,
-    fontWeight: '800',
-  },
   emptyCard: {
     backgroundColor: PIZZA_FIRE.card,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 20,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1162,7 +1240,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   entryCard: {
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1197,7 +1275,7 @@ const styles = StyleSheet.create({
   },
   editedBadge: {
     backgroundColor: 'rgba(255, 159, 28, 0.18)',
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderWidth: 1,
@@ -1225,6 +1303,44 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     color: PIZZA_FIRE.gold,
+  },
+  entryPending: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '700',
+    color: PIZZA_FIRE.flame,
+  },
+  pendingActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  pendingApprove: {
+    backgroundColor: 'rgba(125, 219, 106, 0.16)',
+    borderColor: 'rgba(125, 219, 106, 0.42)',
+    borderWidth: 1,
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  pendingApproveText: {
+    color: PIZZA_FIRE.success,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  pendingReject: {
+    backgroundColor: 'rgba(255, 69, 58, 0.16)',
+    borderColor: 'rgba(255, 160, 150, 0.5)',
+    borderWidth: 1,
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  pendingRejectText: {
+    color: '#FFE4E0',
+    fontSize: 12,
+    fontWeight: '800',
   },
   entryDurationWrap: {
     alignItems: 'flex-end',

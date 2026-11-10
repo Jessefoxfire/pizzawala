@@ -1,5 +1,10 @@
-import notifee, { AndroidImportance } from '@notifee/react-native';
+import notifee, { AndroidImportance, AndroidStyle } from '@notifee/react-native';
 import type { GeofencePromptPayload } from '../geofencing/types';
+import { getWorksiteAlertsEnabled } from '../geofencing/storage';
+import {
+  GEOFENCE_ACTION_IGNORE,
+  GEOFENCE_ACTION_START,
+} from './geofenceNotificationActions';
 
 const CHANNEL_ID = 'geofence-updates';
 let channelReady = false;
@@ -15,32 +20,19 @@ const ensureChannel = async () => {
   return CHANNEL_ID;
 };
 
-export type GeofenceNotificationVariant = 'prompt' | 'auto_result';
+export type GeofenceNotificationVariant = 'prompt' | 'auto_result' | 'break_return';
 
 export const showGeofenceNotification = async (
   payload: GeofencePromptPayload,
   options?: { variant?: GeofenceNotificationVariant }
 ) => {
-  const variant = options?.variant ?? 'prompt';
+  if (!(await getWorksiteAlertsEnabled())) return;
+  const variant = options?.variant ?? payload.variant ?? 'prompt';
   const isEnter = payload.transition === 'enter';
-  const action = isEnter ? 'entered' : 'exited';
-  const shiftVerb = isEnter ? 'start' : 'end';
+  if (!isEnter || variant !== 'prompt') return;
 
-  const title =
-    variant === 'auto_result'
-      ? isEnter
-        ? 'Shift started'
-        : 'Shift ended'
-      : isEnter
-        ? 'Worksite Arrival'
-        : 'Worksite Departure';
-  const body =
-    variant === 'auto_result'
-      ? isEnter
-        ? `You're at ${payload.geofenceName}. Your shift started automatically.`
-        : `You left ${payload.geofenceName}. Your shift was ended automatically.`
-      : `You have ${action} the ${payload.geofenceName} Worksite. Would you like to ${shiftVerb} your shift? Tap to open the app.`;
-
+  const title = 'Worksite Arrival';
+  const body = `You have entered the ${payload.geofenceName} Worksite. Would you like to start your shift?`;
   const channelId = await ensureChannel();
 
   await notifee.displayNotification({
@@ -49,26 +41,30 @@ export const showGeofenceNotification = async (
     body,
     data: {
       type: 'geofence_event',
-      payload,
+      payload: JSON.stringify(payload),
+      geofenceId: payload.geofenceId,
+      transition: payload.transition,
+      variant,
     },
     android: {
       channelId,
       smallIcon: 'ic_launcher',
-      pressAction: { id: 'default' },
+      pressAction: { id: 'default', launchActivity: 'default' as const },
       importance: AndroidImportance.HIGH,
-      ...(variant === 'auto_result'
-        ? {}
-        : {
-            actions: [
-              {
-                title: isEnter ? 'START SHIFT' : 'END SHIFT',
-                pressAction: {
-                  id: 'view_shift',
-                  launchActivity: 'default' as const,
-                },
-              },
-            ],
-          }),
+      style: { type: AndroidStyle.BIGTEXT, text: body },
+      actions: [
+        {
+          title: 'Ignore',
+          pressAction: { id: GEOFENCE_ACTION_IGNORE },
+        },
+        {
+          title: 'Start',
+          pressAction: {
+            id: GEOFENCE_ACTION_START,
+            launchActivity: 'default' as const,
+          },
+        },
+      ],
     },
   });
 };

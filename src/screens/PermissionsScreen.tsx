@@ -112,7 +112,8 @@ export default function PermissionsScreen({ navigation }: Props) {
         );
       }
 
-      navigation.replace('Home');
+      if (navigation.canGoBack()) navigation.goBack();
+      else navigation.replace('Home');
     } catch (error) {
       console.warn('Permissions error:', error);
       Alert.alert(
@@ -137,7 +138,8 @@ export default function PermissionsScreen({ navigation }: Props) {
         // Better to use a "check-only" version if possible.
         
         if (hasLocation && hasActivity && hasGeofence) {
-          navigation.replace('Home');
+          if (navigation.canGoBack()) navigation.goBack();
+          else navigation.replace('Home');
         }
       } catch (err) {
         console.warn('Check permissions failed:', err);
@@ -175,7 +177,7 @@ export default function PermissionsScreen({ navigation }: Props) {
         {requesting && (
           <TouchableOpacity 
             style={{ marginTop: 20 }} 
-            onPress={() => navigation.replace('Home')}
+            onPress={() => (navigation.canGoBack() ? navigation.goBack() : navigation.replace('Home'))}
           >
             <Text style={{ color: PIZZA_FIRE.textMuted, textDecorationLine: 'underline', textAlign: 'center' }}>
               Enter Anyway
@@ -217,7 +219,7 @@ const styles = StyleSheet.create({
   },
   button: {
     backgroundColor: PIZZA_FIRE.hotAccent,
-    borderRadius: 16,
+    borderRadius: 8,
     paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,

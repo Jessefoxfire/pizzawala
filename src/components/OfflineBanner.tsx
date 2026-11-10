@@ -42,7 +42,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     gap: 8,
-    borderRadius: 999,
+    borderRadius: 8,
     backgroundColor: 'rgba(30, 14, 10, 0.76)',
     borderWidth: 1,
     borderColor: 'rgba(255, 209, 102, 0.18)',

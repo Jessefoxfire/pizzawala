@@ -12,19 +12,17 @@ import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { useAppLayout } from '../theme/responsiveLayout';
 
 type Props = {
-  hasOpenShift: boolean;
   busy: boolean;
   onOpenMenu: () => void;
   onOpenWorkingHours: () => void;
-  onEndShift: () => void;
+  onEndDay: () => void;
 };
 
 export default function HomeBottomNav({
-  hasOpenShift,
   busy,
   onOpenMenu,
   onOpenWorkingHours,
-  onEndShift,
+  onEndDay,
 }: Props) {
   const insets = useSafeAreaInsets();
   const layout = useAppLayout();
@@ -83,17 +81,17 @@ export default function HomeBottomNav({
             style={({ pressed }) => [
               styles.sideAction,
               { height: layout.navBar },
-              !hasOpenShift && styles.sideActionDisabled,
-              pressed && hasOpenShift && !busy && styles.sideActionPressed,
+              busy && styles.sideActionDisabled,
+              pressed && !busy && styles.sideActionPressed,
             ]}
-            onPress={onEndShift}
-            disabled={!hasOpenShift || busy}
+            onPress={onEndDay}
+            disabled={busy}
             hitSlop={10}
             accessibilityRole="button"
-            accessibilityLabel="End shift"
+            accessibilityLabel="End day"
           >
-            <View style={[styles.endDot, !hasOpenShift && styles.endDotDisabled]} />
-            <Text style={[styles.endLabel, !hasOpenShift && styles.endLabelDisabled]}>End</Text>
+            <View style={[styles.endDot, busy && styles.endDotDisabled]} />
+            <Text style={[styles.endLabel, busy && styles.endLabelDisabled]}>End day</Text>
           </Pressable>
         </View>
       </View>

@@ -1,3 +1,7 @@
+jest.mock('@react-native-firebase/firestore', () => ({}));
+jest.mock('../src/offline/connectivity', () => ({ isDeviceOnline: jest.fn() }));
+jest.mock('../src/offline/outbox', () => ({}));
+
 import {
   applyTimesToRow,
   buildDaySummaryRows,
@@ -6,10 +10,12 @@ import {
   formatHoursMinutesLabel,
   formatIsoTimeRange,
   formatScheduledLabel,
+  findOverlappingDaySummaryRow,
   matchScheduledShift,
   mergeDaySummaryRows,
   rowChangeKind,
   totalActualMs,
+  totalWorkedMsFromSummaryRows,
   validateActualRange,
   validateDaySummaryRows,
   type DaySummaryRow,
@@ -186,6 +192,14 @@ describe('day summary', () => {
     expect(rows[0].shiftId).toBe('open-1');
     expect(formatIsoTimeRange(rows[0].startIso, rows[0].endIso)).toBe('08:00 – 11:00');
     expect(formatHoursMinutesLabel(totalActualMs(rows))).toBe('3h 00m');
+    expect(formatHoursMinutesLabel(totalWorkedMsFromSummaryRows(rows, [
+      {
+        id: 'open-1',
+        status: 'open',
+        startAt: start.toISOString(),
+        workPeriods: [{ startIso: start.toISOString() }],
+      },
+    ], now.getTime()))).toBe('3h 00m');
   });
 
   it('keeps driving separate and omits worksites with no recorded work', () => {
@@ -225,6 +239,34 @@ describe('day summary', () => {
     expect(formatHoursMinutesLabel(breakdown.unassignedMs)).toBe('0h 00m');
     expect(formatHoursMinutesLabel(breakdown.breakMs)).toBe('0h 30m');
     expect(formatHoursMinutesLabel(breakdown.drivingMs)).toBe('1h 15m');
+  });
+
+  it('uses worked time rather than the start-end envelope when a break sits inside the row', () => {
+    const rows: DaySummaryRow[] = [
+      {
+        draftId: 'working',
+        shiftId: 'working',
+        added: false,
+        isOpen: false,
+        startIso: '2026-09-01T08:00:00.000Z',
+        endIso: '2026-09-01T10:30:00.000Z',
+        originalStartIso: '2026-09-01T08:00:00.000Z',
+        originalEndIso: '2026-09-01T10:30:00.000Z',
+      },
+    ];
+    const shifts = [
+      {
+        id: 'working',
+        status: 'closed',
+        geofenceName: 'Worksite A',
+        startAt: '2026-09-01T08:00:00.000Z',
+        endAt: '2026-09-01T10:30:00.000Z',
+        workPeriods: [{ startIso: '2026-09-01T08:00:00.000Z', endIso: '2026-09-01T10:30:00.000Z' }],
+        breakPeriods: [{ startIso: '2026-09-01T10:00:00.000Z', endIso: '2026-09-01T10:30:00.000Z' }],
+      },
+    ];
+    expect(formatHoursMinutesLabel(totalActualMs(rows))).toBe('2h 30m');
+    expect(formatHoursMinutesLabel(totalWorkedMsFromSummaryRows(rows, shifts, Date.parse('2026-09-01T10:30:00.000Z')))).toBe('2h 00m');
   });
 
   it('merges a late-arriving open shift without dropping existing rows', () => {
@@ -325,6 +367,33 @@ describe('day summary', () => {
       now.getTime()
     );
     expect(mergeDaySummaryRows(first, [])).toEqual(first);
+  });
+});
+
+describe('overlap prevention', () => {
+  it('rejects overlapping add/edit ranges', () => {
+    const rows = [
+      {
+        draftId: 'a',
+        added: false,
+        isOpen: false,
+        startIso: '2026-11-08T08:00:00.000Z',
+        endIso: '2026-11-08T12:00:00.000Z',
+        originalStartIso: '2026-11-08T08:00:00.000Z',
+        originalEndIso: '2026-11-08T12:00:00.000Z',
+      },
+      {
+        draftId: 'b',
+        added: true,
+        isOpen: false,
+        startIso: '2026-11-08T11:00:00.000Z',
+        endIso: '2026-11-08T13:00:00.000Z',
+        originalStartIso: '2026-11-08T11:00:00.000Z',
+        originalEndIso: '2026-11-08T13:00:00.000Z',
+      },
+    ];
+    expect(validateDaySummaryRows(rows)).toMatch(/overlap/);
+    expect(findOverlappingDaySummaryRow(rows, rows[1], 'b')?.draftId).toBe('a');
   });
 });
 

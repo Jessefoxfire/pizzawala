@@ -64,8 +64,8 @@ export default function ReceiptDocumentPreview({
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
-  preview: { height: 220, width: '100%', backgroundColor: '#17120F', borderRadius: 12 },
-  pdf: { height: 120, borderRadius: 12, backgroundColor: '#17120F', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  preview: { height: 220, width: '100%', backgroundColor: '#17120F', borderRadius: 8 },
+  pdf: { height: 120, borderRadius: 8, backgroundColor: '#17120F', alignItems: 'center', justifyContent: 'center', gap: 4 },
   pdfTitle: { color: PIZZA_FIRE.textPrimary, fontWeight: '900', fontSize: 16 },
   pdfSub: { color: PIZZA_FIRE.textSecondary, fontSize: 13 },
   pager: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -75,6 +75,6 @@ const styles = StyleSheet.create({
   fullBack: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', justifyContent: 'center' },
   fullScroll: { flexGrow: 1, justifyContent: 'center' },
   fullImage: { width: '100%', height: 640 },
-  close: { position: 'absolute', top: 48, right: 18, backgroundColor: PIZZA_FIRE.accent, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 8 },
+  close: { position: 'absolute', top: 48, right: 18, backgroundColor: PIZZA_FIRE.accent, borderRadius: 7, paddingHorizontal: 14, paddingVertical: 8 },
   closeText: { color: PIZZA_FIRE.charcoal, fontWeight: '900' },
 });

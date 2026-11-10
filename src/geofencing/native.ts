@@ -2,6 +2,20 @@ import { NativeEventEmitter, NativeModules } from 'react-native';
 import type { Geofence } from '../types';
 import type { GeofenceEventType } from './types';
 import { effectiveGeofenceRadiusMeters } from './effectiveRadius';
+import { activeWorksites } from '../utils/locationPrompt';
+
+export type NativeShiftSnapshot = {
+  active?: boolean;
+  paused?: boolean;
+  shiftId?: string | null;
+  userId?: string | null;
+  geofenceId?: string | null;
+  geofenceName?: string | null;
+  pendingAction?: string | null;
+  breakSource?: 'auto' | 'manual' | null;
+  autoBreakArmed?: boolean;
+  cutoffReached?: boolean;
+};
 
 const { GeofenceModule } = NativeModules as {
   GeofenceModule?: {
@@ -18,8 +32,19 @@ const { GeofenceModule } = NativeModules as {
     setAutoShiftEnabled?: (enabled: boolean) => void;
     setSuppressEnterWhileOnShift?: (suppressed: boolean) => void;
     setEnterHandledForVisit?: (geofenceId: string, handled: boolean) => void;
-    syncShiftOngoing?: (mode: string, periodStartMs: number, baseElapsedMs: number) => void;
+    cancelAutoTracking?: (geofenceId: string) => void;
+    syncShiftOngoing?: (mode: string, periodStartMs: number, baseElapsedMs: number, workElapsedMs: number) => void;
     stopShiftOngoing?: () => void;
+    syncShiftSnapshot?: (
+      active: boolean,
+      shiftId: string | null,
+      userId: string | null,
+      geofenceId: string | null,
+      geofenceName: string | null,
+      paused: boolean
+    ) => void;
+    getShiftSnapshot?: () => Promise<NativeShiftSnapshot>;
+    clearPendingShiftAction?: () => void;
   };
 };
 
@@ -94,14 +119,14 @@ export const initNativeGeofencing = async (): Promise<void> => {
 
 export const startNativeMonitoring = async (geofences: Geofence[]) => {
   if (!GeofenceModule) return;
-  const activeGeofences = geofences.filter(g => g.active);
+  const filtered = activeWorksites(geofences);
   
-  if (activeGeofences.length === 0) {
+  if (filtered.length === 0) {
     await GeofenceModule.stopMonitoring();
     return;
   }
 
-  const payload = activeGeofences.map(geofence => ({
+  const payload = filtered.map(geofence => ({
     id: geofence.id,
     name: geofence.name,
     latitude: geofence.center.lat,
@@ -158,17 +183,54 @@ export const setNativeEnterHandledForVisit = (geofenceId: string, handled: boole
   }
 };
 
+export const cancelNativeAutoTracking = (geofenceId?: string | null) => {
+  if (!geofenceId || !GeofenceModule?.cancelAutoTracking) return;
+  GeofenceModule.cancelAutoTracking(geofenceId);
+};
+
 export const syncNativeShiftOngoing = (
   mode: 'working' | 'break',
   periodStartMs: number,
-  baseElapsedMs: number
+  baseElapsedMs: number,
+  workElapsedMs = 0
 ) => {
   if (!GeofenceModule?.syncShiftOngoing) return;
-  GeofenceModule.syncShiftOngoing(mode, periodStartMs, baseElapsedMs);
+  GeofenceModule.syncShiftOngoing(mode, periodStartMs, baseElapsedMs, workElapsedMs);
 };
 
 export const stopNativeShiftOngoing = () => {
   GeofenceModule?.stopShiftOngoing?.();
+};
+
+export const syncNativeShiftSnapshot = (snapshot: {
+  active: boolean;
+  shiftId?: string | null;
+  userId?: string | null;
+  geofenceId?: string | null;
+  geofenceName?: string | null;
+  paused?: boolean;
+}) => {
+  GeofenceModule?.syncShiftSnapshot?.(
+    snapshot.active,
+    snapshot.shiftId ?? null,
+    snapshot.userId ?? null,
+    snapshot.geofenceId ?? null,
+    snapshot.geofenceName ?? null,
+    !!snapshot.paused
+  );
+};
+
+export const getNativeShiftSnapshot = async (): Promise<NativeShiftSnapshot | null> => {
+  if (!GeofenceModule?.getShiftSnapshot) return null;
+  try {
+    return await GeofenceModule.getShiftSnapshot();
+  } catch {
+    return null;
+  }
+};
+
+export const clearNativePendingShiftAction = () => {
+  GeofenceModule?.clearPendingShiftAction?.();
 };
 
 export const getNativeStoredGeofenceSpecs = async (): Promise<NativeStoredGeofenceSpec[]> => {

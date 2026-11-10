@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import PizzaFireButton from './PizzaFireButton';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import {
@@ -97,12 +98,8 @@ export default function EventOpeningHoursModal({
             ) : null}
 
             <View style={styles.actions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-                <Text style={styles.cancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.confirmBtn} onPress={confirm}>
-                <Text style={styles.confirmText}>Save hours</Text>
-              </TouchableOpacity>
+              <PizzaFireButton label="Cancel" variant="muted" onPress={onClose} />
+              <PizzaFireButton label="Save hours" onPress={confirm} />
             </View>
           </View>
         </View>
@@ -129,7 +126,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -149,7 +146,7 @@ const styles = StyleSheet.create({
   },
   previewRow: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 10,
+    borderRadius: 7,
     paddingVertical: 10,
     paddingHorizontal: 12,
     marginBottom: 12,
@@ -167,7 +164,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     paddingVertical: 14,
@@ -189,25 +186,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     gap: 12,
     marginTop: 8,
-  },
-  cancelBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  cancelText: {
-    color: PIZZA_FIRE.textMuted,
-    fontWeight: '700',
-  },
-  confirmBtn: {
-    backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  confirmText: {
-    color: PIZZA_FIRE.charcoal,
-    fontWeight: '900',
   },
 });

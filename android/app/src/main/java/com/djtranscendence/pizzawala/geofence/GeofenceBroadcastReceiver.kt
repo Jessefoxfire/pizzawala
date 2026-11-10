@@ -71,28 +71,48 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
       // 1. IMMEDIATE NATIVE HANDLING
       if (transition == "enter") {
         GeofenceExitWorker.cancel(context, geofenceId)
+        GeofenceVisitResetWorker.cancel(context, geofenceId)
+        GeofenceAutoExitWorker.cancel(context, geofenceId)
         val stillRegistered = GeofencePrefs.loadGeofences(context).any { it.id == geofenceId }
-        val skipEnterNotify =
-          !stillRegistered ||
-            GeofencePrefs.isSuppressEnterWhileOnShift(context) ||
-            GeofencePrefs.isEnterHandledForVisit(context, geofenceId)
-        if (!skipEnterNotify) {
-          GeofenceNotifier.notifyTransition(context, geofenceId, transition)
+        val kind = if (stillRegistered) {
+          GeofenceShiftEligibility.enterNotifyKind(context, geofenceId)
+        } else {
+          EnterNotifyKind.NONE
+        }
+        val autoAction = if (stillRegistered) {
+          GeofenceShiftEligibility.enterAutoAction(context, geofenceId)
+        } else {
+          null
+        }
+        if (
+          GeofencePrefs.isShiftActive(context) &&
+          !GeofencePrefs.isShiftPaused(context) &&
+          GeofencePrefs.isCurrentShiftWorksite(context, geofenceId)
+        ) {
+          GeofencePrefs.setAutoBreakArmed(context, true)
+        }
+        if (autoAction != null) {
+          GeofenceAutoEnterWorker.schedule(context, geofenceId, autoAction)
+        } else if (kind == EnterNotifyKind.START_SHIFT) {
+          GeofenceNotifier.notifyTransition(context, geofenceId, transition, kind = kind)
           GeofencePrefs.setEnterHandledForVisit(context, geofenceId, true)
           GeofencePrefs.setExitNotifiedForVisit(context, geofenceId, false)
+        } else if (kind == EnterNotifyKind.BREAK_RETURN) {
+          GeofenceNotifier.notifyTransition(
+            context,
+            geofenceId,
+            GeofenceNotifier.TRANSITION_RETURN,
+            kind = kind
+          )
+          GeofencePrefs.setBreakReturnHandledForVisit(context, geofenceId, true)
         }
       } else if (transition == "exit") {
-        GeofencePrefs.setEnterHandledForVisit(context, geofenceId, false)
-        val onShift = GeofencePrefs.isSuppressEnterWhileOnShift(context)
-        val autoShift = GeofencePrefs.isAutoShiftEnabled(context)
-        if (
-          !GeofencePrefs.isExitNotifiedForVisit(context, geofenceId) &&
-            (onShift || autoShift)
-        ) {
-          GeofenceNotifier.notifyTransition(context, geofenceId, transition)
-          GeofencePrefs.setExitNotifiedForVisit(context, geofenceId, true)
-        }
-        GeofenceExitWorker.schedule(context, geofenceId, ts)
+        GeofenceAutoEnterWorker.cancel(context, geofenceId)
+        GeofenceAutoExitWorker.schedule(context, geofenceId)
+        GeofenceVisitResetWorker.schedule(context, geofenceId)
+        GeofenceExitWorker.cancel(context, geofenceId)
+        GeofenceNotifier.cancel(context, geofenceId, "enter")
+        GeofenceNotifier.cancel(context, geofenceId, GeofenceNotifier.TRANSITION_RETURN)
       }
       
       GeofencePrefs.appendNativeHistory(context, "event|$transition|$geofenceId|$ts")

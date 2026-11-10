@@ -5,10 +5,11 @@ import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 type Props = {
   added?: boolean;
   edited?: boolean;
+  pending?: boolean;
 };
 
-export default function HoursChangeBadge({ added, edited }: Props) {
-  if (!added && !edited) return null;
+export default function HoursChangeBadge({ added, edited, pending }: Props) {
+  if (!added && !edited && !pending) return null;
   return (
     <View style={styles.wrap}>
       {added ? (
@@ -19,6 +20,11 @@ export default function HoursChangeBadge({ added, edited }: Props) {
       {edited ? (
         <View style={styles.badge}>
           <Text style={styles.text}>Edited</Text>
+        </View>
+      ) : null}
+      {pending ? (
+        <View style={[styles.badge, styles.pendingBadge]}>
+          <Text style={[styles.text, styles.pendingText]}>Pending</Text>
         </View>
       ) : null}
     </View>
@@ -33,7 +39,7 @@ const styles = StyleSheet.create({
   },
   badge: {
     backgroundColor: 'rgba(255, 159, 28, 0.18)',
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderWidth: 1,
@@ -45,5 +51,12 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.gold,
     letterSpacing: 0.4,
     textTransform: 'uppercase',
+  },
+  pendingBadge: {
+    backgroundColor: 'rgba(255, 159, 28, 0.22)',
+    borderColor: PIZZA_FIRE.qlBorder,
+  },
+  pendingText: {
+    color: PIZZA_FIRE.flame,
   },
 });

@@ -28,7 +28,7 @@ export function isValidDateKey(value: string) {
   return DATE_RE.test(value);
 }
 
-function addDaysToDateKey(dateKey: string, amount: number) {
+export function addDaysToDateKey(dateKey: string, amount: number) {
   const [year, month, day] = dateKey.split('-').map(Number);
   const date = new Date(year, month - 1, day);
   date.setDate(date.getDate() + amount);
@@ -38,19 +38,109 @@ function addDaysToDateKey(dateKey: string, amount: number) {
   return `${y}-${m}-${d}`;
 }
 
-function expandDateRange(startKey: string, endKey: string, startTime: string, endTime: string): EventDay[] {
+/** Inclusive calendar dates from start through end. Empty when the window is invalid. */
+export function expandDateKeys(startKey: string, endKey: string): string[] {
   if (!isValidDateKey(startKey)) return [];
   const end = isValidDateKey(endKey) ? endKey : startKey;
-  const days: EventDay[] = [];
+  if (end < startKey) return [];
+  const dates: string[] = [];
   let cursor = startKey;
   let guard = 0;
   while (cursor <= end && guard < 366) {
-    days.push({ date: cursor, startTime, endTime });
+    dates.push(cursor);
     if (cursor === end) break;
     cursor = addDaysToDateKey(cursor, 1);
     guard += 1;
   }
-  return days;
+  return dates;
+}
+
+function expandDateRange(startKey: string, endKey: string, startTime: string, endTime: string): EventDay[] {
+  return expandDateKeys(startKey, endKey).map(date => ({ date, startTime, endTime }));
+}
+
+/** Fill every date in the window. Matching dates keep their times/notes; new dates copy the first day. */
+export function reconcileEventDays(existing: EventDay[], startDate: string, endDate: string): EventDay[] {
+  const dates = expandDateKeys(startDate, endDate);
+  if (!dates.length) return [];
+  const validExisting = existing.filter(day => isValidDateKey(day.date));
+  const template = validExisting[0]
+    ? normalizeEventDay(validExisting[0])
+    : normalizeEventDay({ date: dates[0], ...DEFAULT_EVENT_DAY_TIMES });
+  return dates.map(date => {
+    const found = validExisting.find(day => day.date === date);
+    return found
+      ? normalizeEventDay(found)
+      : normalizeEventDay({
+          date,
+          startTime: template.startTime,
+          endTime: template.endTime,
+        });
+  });
+}
+
+export function nextEventDateKey(existing: EventDay[]): string | null {
+  const sorted = [...existing]
+    .filter(day => isValidDateKey(day.date))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (!sorted.length) return null;
+  const used = new Set(sorted.map(day => day.date));
+  let next = addDaysToDateKey(sorted[sorted.length - 1].date, 1);
+  let guard = 0;
+  while (used.has(next) && guard < 366) {
+    next = addDaysToDateKey(next, 1);
+    guard += 1;
+  }
+  return used.has(next) ? null : next;
+}
+
+/** Next calendar day after the last entry, copying that day's times (Büro Add Day). */
+export function addNextEventDay(existing: EventDay[]): { days: EventDay[]; added: EventDay } | null {
+  const dateKey = nextEventDateKey(existing);
+  if (!dateKey) return null;
+  const times = timesForNewEventDay(existing, dateKey);
+  const added = normalizeEventDay({ date: dateKey, ...times });
+  const days = [...existing, added].sort((a, b) => a.date.localeCompare(b.date));
+  return { days, added };
+}
+
+export function eventDateWindowFromDays(days: EventDay[]): { startDate: string; endDate: string } {
+  const sorted = [...days].filter(day => isValidDateKey(day.date)).sort((a, b) => a.date.localeCompare(b.date));
+  return {
+    startDate: sorted[0]?.date || '',
+    endDate: sorted.length > 1 ? sorted[sorted.length - 1].date : sorted[0]?.date || '',
+  };
+}
+
+export function eventDaysHaveGaps(days: EventDay[]): boolean {
+  const dates = [...days].map(day => day.date).filter(isValidDateKey).sort();
+  return dates.some((date, index) => index > 0 && date !== addDaysToDateKey(dates[index - 1], 1));
+}
+
+export function isCompleteEventDay(day: EventDay): boolean {
+  return isValidDateKey(day.date) && isValidEventOpeningRange(day.startTime, day.endTime);
+}
+
+export function eventDayIssue(day: EventDay): string | null {
+  if (!isValidDateKey(day.date)) return 'Choose a date.';
+  if (!isValidEventOpeningRange(day.startTime, day.endTime)) {
+    return 'Opening and closing times must be valid and different.';
+  }
+  return null;
+}
+
+export function removeEventDayByDate(days: EventDay[], dateKey: string): EventDay[] {
+  return days.filter(day => day.date !== dateKey);
+}
+
+/** Compact row when the day is valid and the user is not still editing it. */
+export function shouldShowEventDayExpanded(input: {
+  day: EventDay;
+  forceExpanded: boolean;
+  interacting: boolean;
+}): boolean {
+  if (input.forceExpanded || input.interacting) return true;
+  return !isCompleteEventDay(input.day);
 }
 
 export function trimOpeningNote(value?: string | null) {

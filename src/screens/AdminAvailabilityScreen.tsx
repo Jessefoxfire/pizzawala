@@ -17,6 +17,10 @@ import { resolveAvatarSource } from '../utils/avatar';
 import { openUserProfile } from '../navigation/openUserProfile';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import PizzaFireScreen from '../components/PizzaFireScreen';
+import { useAuth } from '../auth/useAuth';
+import { applyOrgActivation, applyOrgActivationForUsers } from '../services/orgStatus';
+import { eventAssignAutoKey, isCurrentOrUpcomingEvent, orgStatusLabel, sortEmployeesByOrgActive } from '../utils/orgStatus';
+import { canMutateEvents } from '../utils/eventEditorNav';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AdminAvailability'>;
 
@@ -25,6 +29,8 @@ type Event = {
   title: string;
   sortDate?: string;
   startDate?: string;
+  endDate?: string;
+  days?: { date: string; startTime: string; endTime: string }[];
   staffIds?: string[];
   adminConfirmedStaffIds?: string[];
 };
@@ -41,6 +47,7 @@ type Availability = {
 type UserProfile = {
   id: string;
   name?: string;
+  orgActive?: boolean;
   avatarUrl?: string;
   customAvatarUrl?: string;
 };
@@ -51,6 +58,7 @@ type OverviewPerson = Availability & {
 };
 
 export default function AdminAvailabilityScreen({ navigation, route }: Props) {
+  const isAdmin = useAuth().status === 'admin';
   const routeEvent = route.params?.event as Event | undefined;
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(routeEvent || null);
@@ -161,7 +169,7 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
   };
 
   const cycleMemberSelection = async (userId: string) => {
-    if (!selectedEvent) return;
+    if (!canMutateEvents(isAdmin) || !selectedEvent) return;
     const staffIds = selectedEvent.staffIds || [];
     const confirmed = new Set(selectedEvent.adminConfirmedStaffIds || []);
     const isSelected = staffIds.includes(userId);
@@ -177,14 +185,19 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
         staffIds: nextStaffIds,
         adminConfirmedStaffIds: Array.from(confirmed).filter(id => nextStaffIds.includes(id)),
       });
-      if (!isSelected) await notifyNewAssignments([userId]);
+      if (!isSelected) {
+        await notifyNewAssignments([userId]);
+        if (isCurrentOrUpcomingEvent(selectedEvent)) {
+          await applyOrgActivation(userId, eventAssignAutoKey(selectedEvent.id, userId, String(Date.now())));
+        }
+      }
     } catch {
       // The event listener will retain the current state if the update is rejected.
     }
   };
 
   const selectAllMembers = async () => {
-    if (!selectedEvent) return;
+    if (!canMutateEvents(isAdmin) || !selectedEvent) return;
     const existing = new Set(selectedEvent.staffIds || []);
     const newlySelected = Object.keys(userProfiles).filter(userId => !existing.has(userId));
     if (newlySelected.length === 0) return;
@@ -193,6 +206,10 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
         staffIds: [...existing, ...newlySelected],
       });
       await notifyNewAssignments(newlySelected);
+      if (isCurrentOrUpcomingEvent(selectedEvent)) {
+        const nonce = String(Date.now());
+        await applyOrgActivationForUsers(newlySelected, userId => eventAssignAutoKey(selectedEvent.id, userId, nonce));
+      }
     } catch {
       // Keep the picker open so the admin can retry.
     }
@@ -213,7 +230,7 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
           {item.selectedByAdmin ? (
             <TouchableOpacity
               style={[styles.statusBadge, isConfirmed && styles.statusBadgeConfirmed, isDeclined && styles.statusBadgeDeclined]}
-              onPress={() => void cycleMemberSelection(item.userId)}
+              onPress={() => { if (isAdmin) void cycleMemberSelection(item.userId); }}
             >
               <Text style={[styles.statusText, isConfirmed && styles.statusTextConfirmed, isDeclined && styles.statusTextDeclined]}>
                 {isConfirmed ? '✓' : '✓'} {statusLabel}
@@ -244,7 +261,7 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
             <View style={styles.statBox}><Text style={[styles.statVal, styles.confirmedValue]}>{counts.confirmed}</Text><Text style={styles.statLab}>Confirmed</Text></View>
             <View style={styles.statBox}><Text style={styles.statVal}>{counts.pending}</Text><Text style={styles.statLab}>Pending</Text></View>
           </View>
-          {loadingAvail ? <ActivityIndicator size="small" color={PIZZA_FIRE.accent} style={{ marginTop: 20 }} /> : <FlatList data={overviewPeople} keyExtractor={item => item.userId} renderItem={({ item, index }) => <View>{renderPerson({ item })}{item.selectedByAdmin && index === counts.selected - 1 ? <TouchableOpacity style={styles.addMemberBtn} onPress={() => setMemberPickerVisible(true)}><Text style={styles.addMemberBtnText}>+ Add Member</Text></TouchableOpacity> : null}</View>} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.emptyContainer}><Text style={styles.emptyText}>{selectedEvent ? 'No members have been selected for this event yet.' : 'Select an event to see availability.'}</Text>{selectedEvent ? <TouchableOpacity style={styles.addMemberBtn} onPress={() => setMemberPickerVisible(true)}><Text style={styles.addMemberBtnText}>+ Add Member</Text></TouchableOpacity> : null}</View>} />}
+          {loadingAvail ? <ActivityIndicator size="small" color={PIZZA_FIRE.accent} style={{ marginTop: 20 }} /> : <FlatList data={overviewPeople} keyExtractor={item => item.userId} renderItem={({ item, index }) => <View>{renderPerson({ item })}{isAdmin && item.selectedByAdmin && index === counts.selected - 1 ? <TouchableOpacity style={styles.addMemberBtn} onPress={() => setMemberPickerVisible(true)}><Text style={styles.addMemberBtnText}>+ Add Member</Text></TouchableOpacity> : null}</View>} contentContainerStyle={styles.list} ListEmptyComponent={<View style={styles.emptyContainer}><Text style={styles.emptyText}>{selectedEvent ? 'No members have been selected for this event yet.' : 'Select an event to see availability.'}</Text>{isAdmin && selectedEvent ? <TouchableOpacity style={styles.addMemberBtn} onPress={() => setMemberPickerVisible(true)}><Text style={styles.addMemberBtnText}>+ Add Member</Text></TouchableOpacity> : null}</View>} />}
         </>}
         <Modal visible={memberPickerVisible} transparent animationType="fade" onRequestClose={() => setMemberPickerVisible(false)}>
           <View style={styles.modalBg}>
@@ -252,7 +269,7 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
               <Text style={styles.modalTitle}>Add or confirm members</Text>
               <TouchableOpacity style={styles.selectAllBtn} onPress={() => void selectAllMembers()}><Text style={styles.selectAllText}>Select all members</Text></TouchableOpacity>
               <FlatList
-                data={Object.values(userProfiles).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))}
+                data={sortEmployeesByOrgActive(Object.values(userProfiles))}
                 keyExtractor={item => item.id}
                 style={styles.memberPickerList}
                 renderItem={({ item }) => {
@@ -260,7 +277,9 @@ export default function AdminAvailabilityScreen({ navigation, route }: Props) {
                   const isConfirmed = (selectedEvent?.adminConfirmedStaffIds || []).includes(item.id);
                   return <TouchableOpacity style={[styles.memberPickerItem, isSelected && styles.memberPickerItemSelected, isConfirmed && styles.memberPickerItemConfirmed]} onPress={() => void cycleMemberSelection(item.id)}>
                     <Image source={resolveAvatarSource(item.avatarUrl, item.customAvatarUrl)} style={styles.avatar} />
-                    <Text style={[styles.memberPickerName, isSelected && styles.memberPickerNameSelected, isConfirmed && styles.memberPickerNameConfirmed]}>{item.name || 'Team member'}</Text>
+                    <Text style={[styles.memberPickerName, isSelected && styles.memberPickerNameSelected, isConfirmed && styles.memberPickerNameConfirmed]}>
+                      {item.name || 'Team member'}{orgStatusLabel(item) ? ` · ${orgStatusLabel(item)}` : ''}
+                    </Text>
                     {isSelected ? <Text style={[styles.memberTick, isConfirmed && styles.memberTickConfirmed]}>✓</Text> : null}
                   </TouchableOpacity>;
                 }}
@@ -281,37 +300,37 @@ const styles = StyleSheet.create({
   title: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
   subtitle: { color: PIZZA_FIRE.accent, fontSize: 13, fontWeight: '600', marginTop: 2 },
   eventSelector: { backgroundColor: PIZZA_FIRE.surface, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
-  addMemberBtn: { alignSelf: 'center', marginTop: 2, marginBottom: 14, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder, backgroundColor: PIZZA_FIRE.qlFill },
+  addMemberBtn: { alignSelf: 'center', marginTop: 2, marginBottom: 14, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder, backgroundColor: PIZZA_FIRE.qlFill },
   addMemberBtnText: { color: PIZZA_FIRE.accent, fontSize: 12, fontWeight: '800' },
   eventList: { paddingHorizontal: 16, gap: 10 },
-  eventPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: PIZZA_FIRE.surfaceInset, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  eventPill: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8, backgroundColor: PIZZA_FIRE.surfaceInset, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   eventPillActive: { backgroundColor: PIZZA_FIRE.accentSoftStrong, borderColor: PIZZA_FIRE.accent },
   eventPillText: { color: PIZZA_FIRE.textMuted, fontSize: 13, fontWeight: '700' },
   eventPillTextActive: { color: PIZZA_FIRE.textPrimary },
   statsRow: { flexDirection: 'row', padding: 16, gap: 8, backgroundColor: PIZZA_FIRE.surface, marginBottom: 8 },
-  statBox: { flex: 1, backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  statBox: { flex: 1, backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 7, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   statVal: { color: PIZZA_FIRE.textPrimary, fontSize: 22, fontWeight: '900' },
   confirmedValue: { color: '#4CAF50' },
   statLab: { color: PIZZA_FIRE.textMuted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 4 },
   list: { padding: 16, paddingBottom: 40 },
-  card: { backgroundColor: PIZZA_FIRE.surface, padding: 16, borderRadius: 16, marginBottom: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  card: { backgroundColor: PIZZA_FIRE.surface, padding: 16, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   userRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   avatar: { width: 32, height: 32, borderRadius: 16, marginRight: 12 },
   userName: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '800' },
-  statusBadge: { backgroundColor: 'rgba(201, 120, 43, 0.12)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  statusBadge: { backgroundColor: 'rgba(201, 120, 43, 0.12)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
   statusBadgeConfirmed: { backgroundColor: 'rgba(76, 175, 80, 0.12)', borderColor: '#4CAF50' },
   statusBadgeDeclined: { backgroundColor: 'rgba(255, 69, 58, 0.20)', borderColor: 'rgba(255, 160, 150, 0.75)' },
   statusText: { color: PIZZA_FIRE.accent, fontSize: 11, fontWeight: '800' },
   statusTextConfirmed: { color: '#4CAF50' },
   statusTextDeclined: { color: '#FFB4AD' },
-  notesBox: { backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginTop: 6 },
+  notesBox: { backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 7, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginTop: 6 },
   notesLabel: { color: PIZZA_FIRE.textMuted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginBottom: 4 },
   notesText: { color: PIZZA_FIRE.textSecondary, fontSize: 14, lineHeight: 20 },
   emptyContainer: { alignItems: 'center', marginTop: 40 },
   emptyText: { color: PIZZA_FIRE.textMuted, fontStyle: 'italic', textAlign: 'center', maxWidth: '80%' },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.80)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 20, padding: 18, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, maxHeight: '80%' },
+  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 8, padding: 18, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, maxHeight: '80%' },
   modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 17, fontWeight: '900', marginBottom: 12 },
   selectAllBtn: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: PIZZA_FIRE.qlFill, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder, marginBottom: 8 },
   selectAllText: { color: PIZZA_FIRE.accent, fontSize: 12, fontWeight: '800' },
@@ -324,6 +343,6 @@ const styles = StyleSheet.create({
   memberPickerNameConfirmed: { color: '#4CAF50' },
   memberTick: { color: PIZZA_FIRE.accent, fontSize: 16, fontWeight: '900' },
   memberTickConfirmed: { color: '#4CAF50', borderWidth: 1, borderColor: '#4CAF50', borderRadius: 10, width: 20, height: 20, textAlign: 'center', lineHeight: 18 },
-  closePickerBtn: { alignSelf: 'flex-end', marginTop: 12, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 10, backgroundColor: PIZZA_FIRE.accent },
+  closePickerBtn: { alignSelf: 'flex-end', marginTop: 12, paddingHorizontal: 16, paddingVertical: 9, borderRadius: 7, backgroundColor: PIZZA_FIRE.accent },
   closePickerText: { color: PIZZA_FIRE.charcoal, fontWeight: '900' },
 });

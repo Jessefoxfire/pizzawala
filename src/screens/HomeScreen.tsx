@@ -7,6 +7,7 @@ import {
   Pressable,
   Alert,
   Image,
+  Linking,
   Modal,
   ScrollView,
 } from 'react-native';
@@ -14,27 +15,39 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   collection,
   doc,
+  getDocs,
   getFirestore,
   limit,
   onSnapshot,
+  orderBy,
   query,
   where,
 } from '@react-native-firebase/firestore';
 import { signOutUser, nativeAuth } from '../services/firebase';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { setLastUserName } from '../geofencing/storage';
+import {
+  getLastSelectedWorksiteId,
+  getWorksiteAlertsEnabled,
+  getWorksiteLocationEnabled,
+  setLastSelectedWorksiteId,
+  setLastUserName,
+  subscribeLocationFeatureSettings,
+} from '../geofencing/storage';
+import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { resolveAvatarSource } from '../utils/avatar';
 import { useAuth } from '../auth/useAuth';
 import Geolocation from 'react-native-geolocation-service';
 import {
   calcCurrentPauseMs,
   calcWorkedMs,
-  endLiveShift,
+  coalesceExtraOpenLiveShifts,
   isShiftPaused,
   offlineOpenShiftToLiveShift,
   pauseLiveShift,
+  resolveHomeActiveShift,
   resumeLiveShift,
   startLiveShift,
   type LiveShift,
@@ -42,16 +55,34 @@ import {
 import { getOfflineOpenShift } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
 import { usePendingShiftEnds } from '../offline/usePendingShiftEnds';
+import { useOffline } from '../context/OfflineContext';
 import CircularShiftTimer from '../components/CircularShiftTimer';
 import HomeBottomNav from '../components/HomeBottomNav';
 import DaySummaryModal from '../components/DaySummaryModal';
+import ShiftEditReviewModal from '../components/ShiftEditReviewModal';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { Icons } from '../components/Icons';
-import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { PIZZA_FIRE, PIZZA_FIRE_RADIUS } from '../theme/pizzaFireTheme';
 import { homeChrome, homeTimerSize, useAppLayout } from '../theme/responsiveLayout';
 import type { Geofence } from '../types';
 import { getDistanceMeters, normalizeLatLng } from '../utils/geo';
-import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
+import {
+  formatDistanceFromWorksite,
+  activeWorksites as filterActiveWorksites,
+  isActiveWorksite,
+  pickDefaultWorksiteId,
+  shouldShowOutsideSiteStartPrompt,
+  worksiteGoogleMapsUrl,
+} from '../utils/locationPrompt';
+import { USE_INLINE_WORKSITE_DROPDOWN } from '../config/homeWorksitePicker';
+import {
+  clearPendingShiftReview,
+  loadPersistedShiftReview,
+  parseShiftEditReviewFromData,
+  takePendingShiftReview,
+  wasShiftReviewDismissed,
+  type ShiftEditReviewPayload,
+} from '../notifications/shiftEditReview';
 import {
   getMissingComplianceFields,
   getMissingRequiredDocuments,
@@ -59,6 +90,19 @@ import {
   readGermanCompliance,
   type GermanComplianceProfile,
 } from '../constants/germanEmployeeCompliance';
+
+const WORKSITE_OPTION_ROW_HEIGHT = 40;
+const WORKSITE_LIST_VISIBLE_ROWS = 4;
+const WORKSITE_LIST_PADDING_TOP = 4;
+const WORKSITE_LIST_PADDING_BOTTOM = 8;
+const WORKSITE_LIST_MAX_HEIGHT =
+  WORKSITE_OPTION_ROW_HEIGHT * WORKSITE_LIST_VISIBLE_ROWS +
+  WORKSITE_LIST_PADDING_TOP +
+  WORKSITE_LIST_PADDING_BOTTOM;
+const WORKSITE_SHEET_CORNER_RADIUS = 17;
+const WORKSITE_OPTION_SELECTED_RADIUS = 12;
+
+type WorksiteGlyph = 'location' | 'truck' | 'clock' | null;
 
 type ShiftDoc = LiveShift & {
   worksiteName?: string;
@@ -71,20 +115,22 @@ type QuickLink = {
 };
 
 const QUICK_LINKS: QuickLink[] = [
-  { label: 'Shift', icon: require('../../assets/Icons/Shift.png'), route: 'ShiftSetup' },
   { label: 'Working Hours', icon: require('../../assets/Icons/Schedule.png'), route: 'WorkingHours' },
   { label: 'Schedule', icon: require('../../assets/Icons/Schedule.png'), route: 'MySchedule' },
   { label: 'Events', icon: require('../../assets/Icons/Events.png'), route: 'Events' },
   { label: 'Chat', icon: require('../../assets/Icons/Chat.png'), route: 'Chat' },
   { label: 'Documents', icon: require('../../assets/Icons/Profile.png'), route: 'RequiredDocuments' },
   { label: 'Profile', icon: require('../../assets/Icons/Profile.png'), route: 'EditProfile' },
+  { label: 'Settings', icon: require('../../assets/Icons/Admin.png'), route: 'Settings' },
 ];
 
 export default function HomeScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Home'>>();
+  const route = useRoute<RouteProp<RootStackParamList, 'Home'>>();
   const insets = useSafeAreaInsets();
   const layout = useAppLayout();
   const chrome = homeChrome(layout, insets.top);
+  const { offlineHint } = useOffline();
   const authState = useAuth();
   const [userName, setUserName] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -97,24 +143,124 @@ export default function HomeScreen() {
   const [selectedWorksite, setSelectedWorksite] = useState<Geofence | null>(null);
   const [selectedWorkCategory, setSelectedWorkCategory] = useState<'driving' | null>(null);
   const [worksitePickerOpen, setWorksitePickerOpen] = useState(false);
+  const [worksiteOptionClusterWidth, setWorksiteOptionClusterWidth] = useState<number | null>(null);
   const [insideWorksiteId, setInsideWorksiteId] = useState<string | null>(null);
+  const [worksiteLocationEnabled, setWorksiteLocationEnabled] = useState(false);
+  const [outsideStartPrompt, setOutsideStartPrompt] = useState<{
+    worksite: Geofence;
+    distanceMeters: number;
+  } | null>(null);
   const [shiftActionBusy, setShiftActionBusy] = useState(false);
+  const shiftActionBusyRef = useRef(false);
+  const userPickedWorksiteRef = useRef(false);
+  const defaultWorksiteAppliedRef = useRef(false);
   const [daySummaryOpen, setDaySummaryOpen] = useState(false);
   const [shiftNowMs, setShiftNowMs] = useState(() => Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
   const pendingShiftEnds = usePendingShiftEnds();
+  const [endedLiveShiftIds, setEndedLiveShiftIds] = useState<string[]>([]);
+  const [liveTickerStopped, setLiveTickerStopped] = useState(false);
+  const liveTickerStoppedRef = useRef(false);
   const [requiredDocuments, setRequiredDocuments] = useState<string[]>([]);
   const [userCredentials, setUserCredentials] = useState<any[]>([]);
   const [credentialsLoaded, setCredentialsLoaded] = useState(false);
   const [profileFields, setProfileFields] = useState<{ name: string; email: string; compliance: GermanComplianceProfile } | null>(null);
   const requiredDocsPromptedRef = useRef(false);
+  const inboxReviewCheckedRef = useRef(false);
+  const [shiftReview, setShiftReview] = useState<ShiftEditReviewPayload | null>(null);
+  const [timerBlockWidth, setTimerBlockWidth] = useState(0);
+  const [timerHintWidth, setTimerHintWidth] = useState(0);
 
   const isAdmin = authState.status === 'admin' || profileIsAdmin;
   const timerSize = homeTimerSize(layout, insets.top, insets.bottom, isAdmin);
+  const worksiteControlWidth = Math.round(timerHintWidth || timerBlockWidth || timerSize);
   const firstName = userName?.trim().split(/\s+/)[0] || '';
   const welcomeText = firstName ? `Hey, ${firstName}` : 'Hey there';
 
+  const openShiftReview = React.useCallback((payload: ShiftEditReviewPayload | null) => {
+    if (!payload?.shiftId || wasShiftReviewDismissed(payload.shiftId)) return;
+    setShiftReview(payload);
+  }, []);
+
+  const dismissShiftReview = React.useCallback(() => {
+    const shiftId = shiftReview?.shiftId;
+    setShiftReview(null);
+    void clearPendingShiftReview(shiftId);
+    if (route.params?.shiftReview) {
+      navigation.setParams({ shiftReview: undefined });
+    }
+  }, [navigation, route.params?.shiftReview, shiftReview?.shiftId]);
+
+  useEffect(() => {
+    const fromRoute = route.params?.shiftReview;
+    if (fromRoute?.shiftId) {
+      openShiftReview(fromRoute);
+    }
+  }, [openShiftReview, route.params?.shiftReview]);
+
+  useEffect(() => {
+    const refresh = () => {
+      void getWorksiteLocationEnabled().then(setWorksiteLocationEnabled);
+    };
+    refresh();
+    return subscribeLocationFeatureSettings(refresh);
+  }, []);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      if (!isAdmin) return undefined;
+      let cancelled = false;
+
+      const fromMemory = takePendingShiftReview();
+      if (fromMemory) {
+        openShiftReview(fromMemory);
+        return undefined;
+      }
+
+      void (async () => {
+        const persisted = await loadPersistedShiftReview();
+        if (cancelled) return;
+        if (persisted) {
+          openShiftReview(persisted);
+          return;
+        }
+        if (inboxReviewCheckedRef.current || !sessionUid) return;
+        inboxReviewCheckedRef.current = true;
+        try {
+          const fs = getFirestore();
+          const inboxSnap = await getDocs(
+            query(collection(fs, 'users', sessionUid, 'notifications'), orderBy('createdAt', 'desc'), limit(15))
+          );
+          const match = inboxSnap.docs
+            .map(item => {
+              const data = item.data() as Record<string, unknown>;
+              return parseShiftEditReviewFromData({
+                type: String(data.kind || data.type || 'personal_notification'),
+                screen: typeof data.nav === 'object' && data.nav ? String((data.nav as any).screen || 'Home') : 'Home',
+                shiftId: data.shiftId,
+                employeeUserId: data.employeeUserId,
+                employeeName: data.employeeName,
+                eventId: typeof data.nav === 'object' && data.nav ? (data.nav as any).eventId : undefined,
+              });
+            })
+            .find(item => item && !wasShiftReviewDismissed(item.shiftId));
+          if (!cancelled && match) openShiftReview(match);
+        } catch (error) {
+          console.warn('[ShiftEdit] failed reading admin inbox:', error);
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [isAdmin, openShiftReview, sessionUid])
+  );
+
   const refreshOfflineShift = React.useCallback(async () => {
+    if (liveTickerStoppedRef.current) {
+      setOfflineShift(null);
+      return;
+    }
     const offline = await getOfflineOpenShift();
     setOfflineShift(offline ? (offlineOpenShiftToLiveShift(offline) as ShiftDoc) : null);
   }, []);
@@ -274,6 +420,10 @@ export default function HomeScreen() {
       limit(5)
     );
     const unsubOpen = onSnapshot(openQuery, snap => {
+      if (liveTickerStoppedRef.current) {
+        setOpenShift(null);
+        return;
+      }
       if (!snap?.docs?.length) {
         setOpenShift(null);
         return;
@@ -286,6 +436,9 @@ export default function HomeScreen() {
           return toMs(b.startAt || b.workPeriods?.[0]?.startIso) - toMs(a.startAt || a.workPeriods?.[0]?.startIso);
         })[0];
       setOpenShift(best || null);
+      void coalesceExtraOpenLiveShifts(sessionUid).catch(error => {
+        console.warn('Could not coalesce extra open shifts:', error);
+      });
     });
     return () => unsubOpen();
   }, [sessionUid]);
@@ -295,13 +448,22 @@ export default function HomeScreen() {
     return () => clearInterval(t);
   }, []);
 
-  const activeShift = useMemo(() => {
-    const shift = offlineShift || openShift;
-    if (!shift) return null;
-    if (pendingShiftEnds.some(item => item.shiftId === shift.id)) return null;
-    return shift;
-  }, [offlineShift, openShift, pendingShiftEnds]);
-  const activeWorksites = useMemo(() => worksites.filter(worksite => worksite.active !== false), [worksites]);
+  const activeShift = useMemo(
+    () =>
+      resolveHomeActiveShift(
+        offlineShift,
+        openShift,
+        pendingShiftEnds,
+        endedLiveShiftIds,
+        liveTickerStopped
+      ),
+    [offlineShift, openShift, pendingShiftEnds, endedLiveShiftIds, liveTickerStopped]
+  );
+  const activeWorksites = useMemo(() => filterActiveWorksites(worksites), [worksites]);
+  const selectedActiveWorksite = useMemo(() => {
+    if (!selectedWorksite || !isActiveWorksite(selectedWorksite)) return null;
+    return activeWorksites.find(worksite => worksite.id === selectedWorksite.id) || null;
+  }, [activeWorksites, selectedWorksite]);
   const insideWorksite = useMemo(
     () => activeWorksites.find(worksite => worksite.id === insideWorksiteId) || null,
     [activeWorksites, insideWorksiteId]
@@ -310,10 +472,18 @@ export default function HomeScreen() {
     () => activeWorksites.filter(worksite => worksite.id !== insideWorksite?.id),
     [activeWorksites, insideWorksite]
   );
+  const pickerRowCount = otherActiveWorksites.length + (insideWorksite ? 1 : 0) + 2;
+  const pickerListScrolls = pickerRowCount > WORKSITE_LIST_VISIBLE_ROWS;
   const displayedWorksite = activeShift
     ? activeWorksites.find(worksite => worksite.id === activeShift.geofenceId) || null
-    : selectedWorksite;
+    : selectedActiveWorksite;
   const displayedWorkCategory = activeShift?.workCategory ?? selectedWorkCategory;
+  const displayedWorksiteLabel =
+    displayedWorkCategory === 'driving'
+      ? 'Driving'
+      : displayedWorksite?.name ||
+        (activeShift?.geofenceName && !activeShift.workCategory ? activeShift.geofenceName : null) ||
+        'No worksite';
   const shiftPaused = activeShift ? isShiftPaused(activeShift) : false;
   const timerElapsedMs = useMemo(() => {
     if (!activeShift) return 0;
@@ -339,66 +509,243 @@ export default function HomeScreen() {
 
   const statusText = activeShift && !shiftPaused ? 'You are working here:' : null;
 
-  const openWorksitePicker = () => {
-    setWorksitePickerOpen(true);
-    setInsideWorksiteId(null);
-    new Promise<Geolocation.GeoPosition | null>(resolve =>
-      Geolocation.getCurrentPosition(resolve, () => resolve(null), {
-        enableHighAccuracy: true,
-        timeout: 8000,
-        maximumAge: 0,
-      })
-    ).then(position => {
-      if (!position) return;
-      const location = { lat: position.coords.latitude, lng: position.coords.longitude };
-      const inside = activeWorksites
-        .map(worksite => ({
+  const readCurrentLocation = () =>
+    new Promise<{ lat: number; lng: number } | null>(resolve =>
+      Geolocation.getCurrentPosition(
+        position => resolve({ lat: position.coords.latitude, lng: position.coords.longitude }),
+        () => resolve(null),
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+      )
+    );
+
+  const rankActiveWorksites = (location: { lat: number; lng: number } | null) =>
+    activeWorksites
+      .map(worksite => {
+        const distance = location ? getDistanceMeters(location, worksite.center) : Number.POSITIVE_INFINITY;
+        return {
           worksite,
-          distance: getDistanceMeters(location, worksite.center),
-          radius: typeof worksite.radiusMeters === 'number' && worksite.radiusMeters > 0 ? worksite.radiusMeters : 150,
-        }))
-        .filter(candidate => candidate.distance <= candidate.radius)
-        .sort((a, b) => a.distance - b.distance)[0];
-      setInsideWorksiteId(inside?.worksite.id || null);
+          id: worksite.id,
+          distance,
+          isInside: location ? distance <= effectiveGeofenceRadiusMeters(worksite.radiusMeters) : false,
+        };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+  useEffect(() => {
+    if (selectedWorksite && !activeWorksites.some(worksite => worksite.id === selectedWorksite.id)) {
+      setSelectedWorksite(null);
+      defaultWorksiteAppliedRef.current = false;
+    }
+  }, [activeWorksites, selectedWorksite]);
+
+  useEffect(() => {
+    if (defaultWorksiteAppliedRef.current || userPickedWorksiteRef.current || !activeWorksites.length) {
+      return;
+    }
+    void (async () => {
+      const [lastWorksiteId, location] = await Promise.all([
+        getLastSelectedWorksiteId(),
+        readCurrentLocation(),
+      ]);
+      if (userPickedWorksiteRef.current || defaultWorksiteAppliedRef.current) return;
+      const ranked = rankActiveWorksites(location);
+      const nextId = pickDefaultWorksiteId(ranked, {
+        locationUsable: !!location,
+        lastWorksiteId,
+      });
+      defaultWorksiteAppliedRef.current = true;
+      const next = nextId ? activeWorksites.find(worksite => worksite.id === nextId) || null : null;
+      setSelectedWorksite(next);
+      if (next) {
+        setSelectedWorkCategory(null);
+        void setLastSelectedWorksiteId(next.id);
+      }
+      const inside = ranked.find(item => item.isInside);
+      setInsideWorksiteId(inside?.id || null);
+    })();
+  }, [activeWorksites, selectedWorksite]);
+
+  const openWorksitePicker = () => {
+    setWorksiteOptionClusterWidth(null);
+    setWorksitePickerOpen(true);
+    void readCurrentLocation().then(location => {
+      const inside = rankActiveWorksites(location).find(item => item.isInside);
+      setInsideWorksiteId(inside?.id || null);
     });
   };
 
+  const toggleWorksitePicker = () => {
+    if (worksitePickerOpen) {
+      setWorksitePickerOpen(false);
+      return;
+    }
+    openWorksitePicker();
+  };
+
+  const drivingSelected = displayedWorkCategory === 'driving';
+  const showYouAreHere = Boolean(worksiteLocationEnabled && insideWorksite);
+
+  const renderWorksiteGlyph = (icon: WorksiteGlyph, color: string, size = 16) => {
+    if (icon === 'truck') {
+      return <Icons.truck color={color} width={size} height={size} />;
+    }
+    if (icon === 'location') {
+      return <Icons.location color={color} width={size} height={size} />;
+    }
+    if (icon === 'clock') {
+      return <Icons.clock color={color} width={size} height={size} />;
+    }
+    return <View style={styles.worksiteOptionIconSpacer} />;
+  };
+
+  const worksiteButtonIcon = drivingSelected
+    ? renderWorksiteGlyph('truck', PIZZA_FIRE.flame)
+    : renderWorksiteGlyph('location', PIZZA_FIRE.gold);
+
+  const renderWorksiteOption = (
+    key: string,
+    label: string,
+    selected: boolean,
+    onPress: () => void,
+    icon: WorksiteGlyph
+  ) => {
+    const iconColor = selected ? PIZZA_FIRE.flame : PIZZA_FIRE.textPrimary;
+    return (
+      <TouchableOpacity
+        key={key}
+        style={[styles.worksiteOption, selected && styles.worksiteOptionSelected]}
+        onPress={onPress}
+      >
+        <View style={styles.worksiteOptionAlign}>
+          <View
+            style={[
+              styles.worksiteOptionRow,
+              worksiteOptionClusterWidth != null ? { minWidth: worksiteOptionClusterWidth } : null,
+            ]}
+            onLayout={event => {
+              const width = event.nativeEvent.layout.width;
+              setWorksiteOptionClusterWidth(prev => (prev == null || width > prev ? width : prev));
+            }}
+          >
+            {renderWorksiteGlyph(icon, iconColor)}
+            <Text
+              style={[styles.worksiteOptionTitle, selected && styles.worksiteOptionTitleSelected]}
+              numberOfLines={1}
+            >
+              {label}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderSheetWorksiteOptions = () => (
+    <>
+      {insideWorksite
+        ? renderWorksiteOption(
+            insideWorksite.id,
+            insideWorksite.name,
+            displayedWorksite?.id === insideWorksite.id,
+            () => void chooseWorksite(insideWorksite),
+            'location'
+          )
+        : null}
+      {renderWorksiteOption(
+        'driving',
+        'Driving',
+        drivingSelected,
+        () => void chooseWorksite(null, 'driving'),
+        'truck'
+      )}
+      {otherActiveWorksites.map(worksite =>
+        renderWorksiteOption(
+          worksite.id,
+          worksite.name,
+          displayedWorksite?.id === worksite.id,
+          () => void chooseWorksite(worksite),
+          'location'
+        )
+      )}
+      {renderWorksiteOption(
+        'none',
+        'No worksite',
+        !displayedWorksite && !displayedWorkCategory,
+        () => void chooseWorksite(null),
+        'clock'
+      )}
+    </>
+  );
+
+  const persistWorksiteChoice = (worksite: Geofence | null) => {
+    void setLastSelectedWorksiteId(worksite && isActiveWorksite(worksite) ? worksite.id : null);
+  };
+
   const chooseWorksite = async (worksite: Geofence | null, workCategory: 'driving' | null = null) => {
+    const nextWorksite = worksite && isActiveWorksite(worksite) ? worksite : null;
+    userPickedWorksiteRef.current = true;
+    persistWorksiteChoice(nextWorksite);
     if (activeShift) {
-      const sameWorksite = (activeShift.geofenceId || null) === (worksite?.id || null);
+      const sameWorksite = (activeShift.geofenceId || null) === (nextWorksite?.id || null);
       const sameCategory = (activeShift.workCategory || null) === workCategory;
       if (sameWorksite && sameCategory) {
         setWorksitePickerOpen(false);
         return;
       }
-      setShiftActionBusy(true);
-      try {
-        await endLiveShift(activeShift.id, 'manual');
-        await startLiveShift({
-          userId: sessionUid || activeShift.userId,
-          geofenceId: worksite?.id ?? null,
-          geofenceName: worksite?.name ?? null,
-          workCategory,
-          startedBy: 'manual',
-        });
-        if (worksite?.id) {
-          const { markEnterHandledForVisit } = require('../geofencing/storage');
-          void markEnterHandledForVisit(worksite.id);
-        }
-        const { onShiftStarted } = require('../geofencing/notificationPolicy');
-        void onShiftStarted();
-        await refreshOfflineShift();
-      } catch (err: any) {
-        Alert.alert('Notice', err?.message || 'Could not switch worksite.');
-      } finally {
-        setShiftActionBusy(false);
-        setWorksitePickerOpen(false);
-      }
+      await proceedStartShift(nextWorksite, { workCategory });
       return;
     }
-    setSelectedWorksite(worksite);
+    setSelectedWorksite(nextWorksite);
     setSelectedWorkCategory(workCategory);
     setWorksitePickerOpen(false);
+  };
+
+  const proceedStartShift = async (
+    worksite: Geofence | null,
+    options?: { workCategory?: 'driving' | null }
+  ) => {
+    if (!sessionUid) {
+      Alert.alert('Notice', 'Sign in to start a shift.');
+      return;
+    }
+    if (shiftActionBusyRef.current) return;
+    const workCategory = options?.workCategory !== undefined ? options.workCategory : selectedWorkCategory;
+    shiftActionBusyRef.current = true;
+    setShiftActionBusy(true);
+    try {
+      if (worksite?.id) {
+        const { cancelNativeAutoTracking } = require('../geofencing/native');
+        cancelNativeAutoTracking(worksite.id);
+      }
+      await startLiveShift({
+        userId: sessionUid,
+        geofenceId: worksite?.id ?? null,
+        geofenceName: worksite?.name ?? null,
+        workCategory,
+        startedBy: 'manual',
+      });
+      liveTickerStoppedRef.current = false;
+      setLiveTickerStopped(false);
+      setEndedLiveShiftIds([]);
+      await refreshOfflineShift();
+      const { markEnterHandledForVisit } = require('../geofencing/storage');
+      const { onShiftStarted } = require('../geofencing/notificationPolicy');
+      if (worksite?.id) void markEnterHandledForVisit(worksite.id);
+      void onShiftStarted({
+        userId: sessionUid,
+        geofenceId: worksite?.id ?? null,
+        geofenceName: worksite?.name ?? null,
+        paused: false,
+      });
+      setSelectedWorksite(worksite);
+      setSelectedWorkCategory(workCategory);
+      setWorksitePickerOpen(false);
+    } catch (err: any) {
+      Alert.alert('Notice', err?.message || 'Could not start shift.');
+    } finally {
+      shiftActionBusyRef.current = false;
+      setShiftActionBusy(false);
+    }
   };
 
   const handleStartShift = async () => {
@@ -406,39 +753,51 @@ export default function HomeScreen() {
       Alert.alert('Notice', 'Sign in to start a shift.');
       return;
     }
-    if (activeShift) return;
-    setShiftActionBusy(true);
-    try {
-      await startLiveShift({
-        userId: sessionUid,
-        geofenceId: selectedWorksite?.id ?? null,
-        geofenceName: selectedWorksite?.name ?? null,
-        workCategory: selectedWorkCategory,
-        startedBy: 'manual',
-      });
-      await refreshOfflineShift();
-      const { markEnterHandledForVisit } = require('../geofencing/storage');
-      const { onShiftStarted } = require('../geofencing/notificationPolicy');
-      if (selectedWorksite?.id) void markEnterHandledForVisit(selectedWorksite.id);
-      void onShiftStarted();
-    } catch (err: any) {
-      Alert.alert('Notice', err?.message || 'Could not start shift.');
-    } finally {
-      setShiftActionBusy(false);
+    if (activeShift || shiftActionBusyRef.current) return;
+    const site = selectedActiveWorksite;
+    if (site) {
+      const [alertsEnabled, locationEnabled, location] = await Promise.all([
+        getWorksiteAlertsEnabled(),
+        getWorksiteLocationEnabled(),
+        readCurrentLocation(),
+      ]);
+      if (location) {
+        const distanceMeters = getDistanceMeters(location, site.center);
+        const isInsideSelectedSite = distanceMeters <= effectiveGeofenceRadiusMeters(site.radiusMeters);
+        if (
+          shouldShowOutsideSiteStartPrompt({
+            worksiteSelected: true,
+            worksiteAlertsEnabled: alertsEnabled,
+            worksiteLocationEnabled: locationEnabled,
+            isInsideSelectedSite,
+            worksiteActive: isActiveWorksite(site),
+          })
+        ) {
+          setOutsideStartPrompt({ worksite: site, distanceMeters });
+          return;
+        }
+      }
     }
+    await proceedStartShift(site);
   };
 
   const handlePauseResume = async () => {
     if (!activeShift?.id || shiftActionBusy) return;
     setShiftActionBusy(true);
     try {
-      const result = shiftPaused
-        ? await resumeLiveShift(activeShift.id)
-        : await pauseLiveShift(activeShift.id);
-      await refreshOfflineShift();
-      if (result.queued) {
-        Alert.alert('Saved offline', 'Shift change will sync when you are back online.');
+      if (activeShift.geofenceId) {
+        const { cancelNativeAutoTracking } = require('../geofencing/native');
+        cancelNativeAutoTracking(activeShift.geofenceId);
       }
+      const { onManualBreak, onManualResume } = require('../geofencing/notificationPolicy');
+      if (shiftPaused) {
+        await onManualResume(activeShift.geofenceId);
+        await resumeLiveShift(activeShift.id);
+      } else {
+        await onManualBreak();
+        await pauseLiveShift(activeShift.id);
+      }
+      await refreshOfflineShift();
     } catch (err: any) {
       Alert.alert('Notice', err?.message || 'Could not update shift.');
     } finally {
@@ -446,16 +805,22 @@ export default function HomeScreen() {
     }
   };
 
-  const handleEndShift = () => {
-    if (!activeShift?.id || shiftActionBusy) return;
+  const handleEndDay = () => {
+    if (shiftActionBusy) return;
     setDaySummaryOpen(true);
   };
+
+  useEffect(() => {
+    if (!route.params?.openEndShift) return;
+    setDaySummaryOpen(true);
+    navigation.setParams({ openEndShift: undefined });
+  }, [navigation, route.params?.openEndShift]);
 
   const navigateQuickLink = (route: keyof RootStackParamList) => {
     setMenuOpen(false);
     navigation.navigate(route as any);
   };
-  const visibleQuickLinks = QUICK_LINKS.filter(link => SHOW_DEBUG_ONLY_OPERATIONS || link.route !== 'Chat');
+  const visibleQuickLinks = QUICK_LINKS.filter(link => link.route !== 'Chat');
   const hasSingleFinalMenuItem = (visibleQuickLinks.length + 1) % 3 === 1;
 
   return (
@@ -472,6 +837,7 @@ export default function HomeScreen() {
             },
           ]}
         >
+          {offlineHint ? <Text style={styles.offlineHint}>offline</Text> : null}
           <View style={[styles.header, { marginBottom: chrome.headerGap }]}>
             <TouchableOpacity
               onPress={() => navigation.navigate('EditProfile')}
@@ -513,31 +879,52 @@ export default function HomeScreen() {
           </View>
 
           <View style={[styles.timerSection, { paddingTop: chrome.timerPadTop, paddingBottom: layout.isShort ? 0 : 8 }]}>
-            <TouchableOpacity
-              activeOpacity={0.92}
-              onPress={() => {
-                if (activeShift) void handlePauseResume();
-                else void handleStartShift();
+            <View
+              style={styles.timerBlock}
+              onLayout={event => {
+                const nextWidth = Math.round(event.nativeEvent.layout.width);
+                if (nextWidth > 0) {
+                  setTimerBlockWidth(prev => (prev === nextWidth ? prev : nextWidth));
+                }
               }}
-              disabled={shiftActionBusy}
-              accessibilityRole="button"
-              accessibilityLabel={
-                activeShift
-                  ? shiftPaused
-                    ? 'Resume shift'
-                    : 'Take a break'
-                  : 'Start shift'
-              }
             >
-              <CircularShiftTimer
-                elapsedMs={timerElapsedMs}
-                state={timerState}
-                label={timerLabel}
-                size={timerSize}
-              />
-            </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.92}
+                onPress={() => {
+                  if (activeShift) void handlePauseResume();
+                  else void handleStartShift();
+                }}
+                disabled={shiftActionBusy}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  activeShift
+                    ? shiftPaused
+                      ? 'Resume shift'
+                      : 'Take a break'
+                    : 'Start shift'
+                }
+              >
+                <CircularShiftTimer
+                  elapsedMs={timerElapsedMs}
+                  state={timerState}
+                  label={timerLabel}
+                  size={timerSize}
+                />
+              </TouchableOpacity>
 
-            <Text style={[styles.tapHint, { marginTop: chrome.hintGap }]}>{tapHint}</Text>
+              <Text
+                style={[styles.tapHint, { marginTop: chrome.hintGap }]}
+                onLayout={event => {
+                  if (activeShift) return;
+                  const nextWidth = Math.round(event.nativeEvent.layout.width);
+                  if (nextWidth > 0) {
+                    setTimerHintWidth(prev => (prev === nextWidth ? prev : nextWidth));
+                  }
+                }}
+              >
+                {tapHint}
+              </Text>
+            </View>
 
             <View
               style={[
@@ -545,43 +932,183 @@ export default function HomeScreen() {
                 {
                   marginTop: chrome.statusGap,
                   minHeight: layout.isShort ? 0 : 46,
-                  maxWidth: layout.isTablet ? 420 : 320,
                 },
               ]}
             >
               {statusText ? <Text style={styles.statusText}>{statusText}</Text> : null}
-              <TouchableOpacity style={styles.selectWorksiteButton} onPress={openWorksitePicker} activeOpacity={0.82}>
-                <Icons.location color={PIZZA_FIRE.gold} width={16} height={16} />
-                <Text style={styles.selectWorksiteText}>
-                  {displayedWorkCategory === 'driving'
-                    ? 'Driving'
-                    : displayedWorksite
-                      ? displayedWorksite.name
-                      : 'No worksite'}
-                </Text>
-              </TouchableOpacity>
+              <View
+                style={[
+                  styles.worksiteSwitch,
+                  USE_INLINE_WORKSITE_DROPDOWN ? { width: worksiteControlWidth } : null,
+                ]}
+                pointerEvents="box-none"
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.selectWorksiteButton,
+                    { maxWidth: worksiteControlWidth },
+                    worksitePickerOpen && styles.selectWorksiteButtonOpen,
+                  ]}
+                  onPress={toggleWorksitePicker}
+                  activeOpacity={0.82}
+                  accessibilityRole="button"
+                  accessibilityLabel="Select worksite"
+                  accessibilityState={{ expanded: worksitePickerOpen }}
+                >
+                  {worksiteButtonIcon}
+                  <Text style={styles.selectWorksiteText} numberOfLines={1}>
+                    {displayedWorksiteLabel}
+                  </Text>
+                  <Icons.chevronDown color={PIZZA_FIRE.gold} width={16} height={16} />
+                </TouchableOpacity>
+                {USE_INLINE_WORKSITE_DROPDOWN && worksitePickerOpen ? (
+                  <ScrollView
+                    style={styles.worksiteDropdown}
+                    contentContainerStyle={styles.worksiteDropdownContent}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator={pickerListScrolls}
+                  >
+                    {insideWorksite ? (
+                      <TouchableOpacity
+                        style={[
+                          styles.worksiteOption,
+                          displayedWorksite?.id === insideWorksite.id && styles.worksiteOptionSelected,
+                        ]}
+                        onPress={() => void chooseWorksite(insideWorksite)}
+                      >
+                        <View style={styles.worksiteOptionRow}>
+                          {renderWorksiteGlyph(
+                            'location',
+                            displayedWorksite?.id === insideWorksite.id
+                              ? PIZZA_FIRE.flame
+                              : PIZZA_FIRE.textPrimary
+                          )}
+                          <Text
+                            style={[
+                              styles.worksiteOptionTitle,
+                              displayedWorksite?.id === insideWorksite.id && styles.worksiteOptionTitleSelected,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {insideWorksite.name}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity
+                      style={[
+                        styles.worksiteOption,
+                        displayedWorkCategory === 'driving' && styles.worksiteOptionSelected,
+                      ]}
+                      onPress={() => void chooseWorksite(null, 'driving')}
+                    >
+                      <View style={styles.worksiteOptionRow}>
+                        <Icons.truck
+                          color={
+                            displayedWorkCategory === 'driving' ? PIZZA_FIRE.flame : PIZZA_FIRE.textPrimary
+                          }
+                          width={16}
+                          height={16}
+                        />
+                        <Text
+                          style={[
+                            styles.worksiteOptionTitle,
+                            displayedWorkCategory === 'driving' && styles.worksiteOptionTitleSelected,
+                          ]}
+                        >
+                          Driving
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                    {otherActiveWorksites.map(worksite => (
+                      <TouchableOpacity
+                        key={worksite.id}
+                        style={[
+                          styles.worksiteOption,
+                          displayedWorksite?.id === worksite.id && styles.worksiteOptionSelected,
+                        ]}
+                        onPress={() => void chooseWorksite(worksite)}
+                      >
+                        <View style={styles.worksiteOptionRow}>
+                          {renderWorksiteGlyph(
+                            'location',
+                            displayedWorksite?.id === worksite.id
+                              ? PIZZA_FIRE.flame
+                              : PIZZA_FIRE.textPrimary
+                          )}
+                          <Text
+                            style={[
+                              styles.worksiteOptionTitle,
+                              displayedWorksite?.id === worksite.id && styles.worksiteOptionTitleSelected,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {worksite.name}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                      style={[
+                        styles.worksiteOption,
+                        !displayedWorksite && !displayedWorkCategory && styles.worksiteOptionSelected,
+                      ]}
+                      onPress={() => void chooseWorksite(null)}
+                    >
+                      <View style={styles.worksiteOptionRow}>
+                        <Icons.clock
+                          color={
+                            !displayedWorksite && !displayedWorkCategory
+                              ? PIZZA_FIRE.flame
+                              : PIZZA_FIRE.textPrimary
+                          }
+                          width={16}
+                          height={16}
+                        />
+                        <Text
+                          style={[
+                            styles.worksiteOptionTitle,
+                            !displayedWorksite && !displayedWorkCategory && styles.worksiteOptionTitleSelected,
+                          ]}
+                        >
+                          No worksite
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  </ScrollView>
+                ) : null}
+              </View>
             </View>
-          </View>
 
-          {isAdmin ? (
-            <TouchableOpacity
-              style={[styles.adminButton, { marginTop: chrome.adminGap, paddingVertical: chrome.adminPad }]}
-              onPress={() => navigation.navigate('AdminOptions')}
-              activeOpacity={0.88}
-            >
-              <Image source={require('../../assets/Icons/Admin.png')} style={styles.adminIcon} resizeMode="contain" />
-              <Text style={styles.adminButtonText}>Admin</Text>
-            </TouchableOpacity>
-          ) : null}
+            {isAdmin ? (
+              <TouchableOpacity
+                style={[
+                  styles.adminButton,
+                  { marginTop: chrome.adminGap, paddingVertical: chrome.adminPad },
+                ]}
+                onPress={() => navigation.navigate('AdminOptions')}
+                activeOpacity={0.88}
+              >
+                <Image source={require('../../assets/Icons/Admin.png')} style={styles.adminIcon} resizeMode="contain" />
+                <Text style={styles.adminButtonText}>Admin</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
       </SafeAreaView>
 
       <HomeBottomNav
-        hasOpenShift={!!activeShift}
         busy={shiftActionBusy}
         onOpenMenu={() => setMenuOpen(true)}
         onOpenWorkingHours={() => navigation.navigate('WorkingHours')}
-        onEndShift={handleEndShift}
+        onEndDay={handleEndDay}
+      />
+
+      <ShiftEditReviewModal
+        payload={isAdmin ? shiftReview : null}
+        onClose={dismissShiftReview}
+        onResolved={dismissShiftReview}
       />
 
       <DaySummaryModal
@@ -589,14 +1116,73 @@ export default function HomeScreen() {
         userId={sessionUid}
         activeShift={activeShift}
         onCancel={() => setDaySummaryOpen(false)}
-        onConfirmed={async result => {
+        onConfirmed={async () => {
+          liveTickerStoppedRef.current = true;
+          setLiveTickerStopped(true);
+          setEndedLiveShiftIds(ids => {
+            const next = new Set(ids);
+            if (offlineShift?.id) next.add(offlineShift.id);
+            if (openShift?.id) next.add(openShift.id);
+            return [...next];
+          });
+          setOfflineShift(null);
+          setOpenShift(null);
           setDaySummaryOpen(false);
           await refreshOfflineShift();
-          if (result.queued) {
-            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
-          }
         }}
       />
+
+      <Modal
+        visible={!USE_INLINE_WORKSITE_DROPDOWN && worksitePickerOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setWorksitePickerOpen(false)}
+      >
+        <View style={styles.menuBackdrop}>
+          <Pressable
+            style={styles.menuDismissArea}
+            onPress={() => setWorksitePickerOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close worksite picker"
+          />
+          <View
+            style={[
+              styles.menuSheet,
+              styles.worksiteSheet,
+              { paddingBottom: Math.max(insets.bottom, 20) },
+              layout.isTablet && styles.menuSheetTablet,
+            ]}
+          >
+            <View style={styles.menuSheetHeader}>
+              <View style={styles.menuHandle} />
+              <Text style={styles.menuTitle}>Select Worksite</Text>
+              {showYouAreHere && insideWorksite ? (
+                <View
+                  style={styles.youAreHereLine}
+                  accessibilityLabel={`you are here ${insideWorksite.name}`}
+                >
+                  <Text style={styles.youAreHereText}>you are here</Text>
+                  <View style={styles.youAreHereSite}>
+                    <Icons.location color={PIZZA_FIRE.gold} width={12} height={12} />
+                    <Text style={styles.youAreHereSiteText} numberOfLines={1}>
+                      {insideWorksite.name}
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+            <ScrollView
+              style={styles.worksiteSheetScroller}
+              contentContainerStyle={styles.worksiteSheetList}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator={pickerListScrolls}
+              keyboardShouldPersistTaps="handled"
+            >
+              {renderSheetWorksiteOptions()}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={menuOpen} transparent animationType="slide" onRequestClose={() => setMenuOpen(false)}>
         <View style={styles.menuBackdrop}>
@@ -653,55 +1239,77 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      <Modal visible={worksitePickerOpen} transparent animationType="slide" onRequestClose={() => setWorksitePickerOpen(false)}>
-        <View style={styles.worksitePickerBackdrop}>
-          <Pressable style={styles.menuDismissArea} onPress={() => setWorksitePickerOpen(false)} />
-          <View style={[styles.worksitePickerSheet, layout.isTablet && styles.menuSheetTablet]}>
-            <View style={styles.menuHandle} />
-            <Text style={styles.worksitePickerTitle}>Select Worksite</Text>
-            <Text style={styles.worksitePickerSubtitle}>Optional — you can start without one.</Text>
-            <ScrollView style={styles.worksitePickerList} contentContainerStyle={styles.worksitePickerListContent}>
-              {insideWorksite ? (
-                <TouchableOpacity
-                  style={[styles.worksiteOption, displayedWorksite?.id === insideWorksite.id && styles.worksiteOptionSelected]}
-                  onPress={() => void chooseWorksite(insideWorksite)}
-                >
-                  <View style={styles.worksiteOptionText}>
-                    <Text style={styles.worksiteOptionTitle}>📍 {insideWorksite.name}</Text>
-                    <Text style={styles.worksiteOptionHint}>Inside geofence</Text>
-                  </View>
-                </TouchableOpacity>
-              ) : null}
+      <Modal
+        visible={!!outsideStartPrompt}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setOutsideStartPrompt(null);
+          setWorksitePickerOpen(false);
+        }}
+      >
+        <View style={styles.outsidePromptBackdrop}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setOutsideStartPrompt(null);
+              setWorksitePickerOpen(false);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss start prompt"
+          />
+          <View style={styles.outsidePromptCard}>
+            <Text style={styles.outsidePromptDistance}>
+              You&apos;re {formatDistanceFromWorksite(outsideStartPrompt?.distanceMeters || 0)} from selected worksite
+            </Text>
+            <TouchableOpacity
+              style={styles.outsidePromptSite}
+              onPress={() => {
+                const center = outsideStartPrompt?.worksite.center;
+                if (!center) return;
+                void Linking.openURL(worksiteGoogleMapsUrl(center.lat, center.lng));
+              }}
+              activeOpacity={0.82}
+              accessibilityRole="link"
+              accessibilityLabel="Open worksite in Google Maps"
+            >
+              <Icons.location color={PIZZA_FIRE.flame} width={16} height={16} />
+              <Text style={styles.outsidePromptSiteName}>{outsideStartPrompt?.worksite.name}</Text>
+            </TouchableOpacity>
+            <View style={styles.outsidePromptActions}>
               <TouchableOpacity
-                style={[styles.worksiteOption, displayedWorkCategory === 'driving' && styles.worksiteOptionSelected]}
-                onPress={() => void chooseWorksite(null, 'driving')}
+                style={[styles.outsidePromptAction, styles.outsidePromptStart]}
+                onPress={() => {
+                  const site = outsideStartPrompt?.worksite || null;
+                  setOutsideStartPrompt(null);
+                  setWorksitePickerOpen(false);
+                  void proceedStartShift(site && isActiveWorksite(site) ? site : null);
+                }}
+                activeOpacity={0.88}
               >
-                <View style={styles.worksiteOptionText}>
-                  <Text style={styles.worksiteOptionTitle}>Driving</Text>
-                  <Text style={styles.worksiteOptionHint}>Track driving time separately</Text>
-                </View>
+                <Text style={styles.outsidePromptStartText}>Start anyway</Text>
               </TouchableOpacity>
-              {otherActiveWorksites.map(worksite => (
-                <TouchableOpacity
-                  key={worksite.id}
-                  style={[styles.worksiteOption, displayedWorksite?.id === worksite.id && styles.worksiteOptionSelected]}
-                  onPress={() => void chooseWorksite(worksite)}
-                >
-                  <View style={styles.worksiteOptionText}>
-                    <Text style={styles.worksiteOptionTitle}>{worksite.name}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
               <TouchableOpacity
-                style={[styles.worksiteOption, !displayedWorksite && !displayedWorkCategory && styles.worksiteOptionSelected]}
-                onPress={() => void chooseWorksite(null)}
+                style={[styles.outsidePromptAction, styles.outsidePromptSwitch]}
+                onPress={() => {
+                  setOutsideStartPrompt(null);
+                  openWorksitePicker();
+                }}
+                activeOpacity={0.88}
               >
-                <View style={styles.worksiteOptionText}>
-                  <Text style={styles.worksiteOptionTitle}>No worksite</Text>
-                  <Text style={styles.worksiteOptionHint}>Track time without assigning a site</Text>
-                </View>
+                <Text style={styles.outsidePromptSwitchText}>Switch</Text>
               </TouchableOpacity>
-            </ScrollView>
+              <TouchableOpacity
+                style={[styles.outsidePromptAction, styles.outsidePromptCancel]}
+                onPress={() => {
+                  setOutsideStartPrompt(null);
+                  setWorksitePickerOpen(false);
+                }}
+                activeOpacity={0.88}
+              >
+                <Text style={styles.outsidePromptCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -722,10 +1330,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 8,
     paddingBottom: 12,
+    overflow: 'visible',
   },
   header: {
     alignItems: 'center',
     marginBottom: 20,
+  },
+  offlineHint: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
   },
   avatar: {
     width: 80,
@@ -752,6 +1369,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 18,
     paddingBottom: 8,
+    overflow: 'visible',
+  },
+  timerBlock: {
+    alignItems: 'center',
+    alignSelf: 'center',
   },
   tapHint: {
     marginTop: 16,
@@ -761,30 +1383,65 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: 0.2,
   },
+  worksiteSwitch: {
+    alignSelf: 'center',
+    position: 'relative',
+    alignItems: 'center',
+    zIndex: 8,
+    elevation: 12,
+    overflow: 'visible',
+  },
   selectWorksiteButton: {
-    marginTop: 12,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    flexGrow: 0,
     gap: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: PIZZA_FIRE.inputBg,
+    borderRadius: PIZZA_FIRE_RADIUS.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: PIZZA_FIRE.bgMid,
+  },
+  selectWorksiteButtonOpen: {
+    borderColor: PIZZA_FIRE.gold,
+    backgroundColor: 'rgba(255, 209, 102, 0.12)',
   },
   selectWorksiteText: {
+    flexShrink: 1,
     color: PIZZA_FIRE.gold,
     fontWeight: '800',
     fontSize: 14,
+    textAlign: 'center',
+  },
+  worksiteDropdown: {
+    position: 'absolute',
+    top: '100%',
+    left: 0,
+    right: 0,
+    marginTop: 4,
+    maxHeight: WORKSITE_LIST_MAX_HEIGHT,
+    width: '100%',
+    backgroundColor: PIZZA_FIRE.bgMid,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.flame,
+    borderRadius: PIZZA_FIRE_RADIUS.lg,
+    zIndex: 20,
+    elevation: 16,
+  },
+  worksiteDropdownContent: {
+    paddingVertical: 2,
   },
   statusBlock: {
     marginTop: 18,
-    width: '100%',
-    maxWidth: 320,
+    alignSelf: 'center',
     alignItems: 'center',
     gap: 8,
     minHeight: 46,
+    overflow: 'visible',
+    zIndex: 8,
   },
   worksiteRow: {
     flexDirection: 'row',
@@ -794,7 +1451,7 @@ const styles = StyleSheet.create({
   worksiteText: {
     fontSize: 14,
     fontWeight: '700',
-    color: PIZZA_FIRE.gold,
+    color: PIZZA_FIRE.flame,
     textAlign: 'center',
   },
   statusText: {
@@ -805,10 +1462,12 @@ const styles = StyleSheet.create({
     lineHeight: 21,
   },
   adminButton: {
+    alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
     marginTop: 20,
+    zIndex: 1,
   },
   adminIcon: {
     width: 28,
@@ -835,8 +1494,8 @@ const styles = StyleSheet.create({
   },
   menuSheet: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderTopLeftRadius: WORKSITE_SHEET_CORNER_RADIUS,
+    borderTopRightRadius: WORKSITE_SHEET_CORNER_RADIUS,
     paddingHorizontal: 20,
     paddingTop: 10,
     paddingBottom: 28,
@@ -851,66 +1510,164 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
     maxHeight: '64%',
   },
-  worksitePickerBackdrop: {
+  outsidePromptBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'flex-end',
+    backgroundColor: PIZZA_FIRE.overlay,
+    justifyContent: 'center',
+    paddingHorizontal: 28,
   },
-  worksitePickerSheet: {
-    maxHeight: '72%',
+  outsidePromptCard: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingBottom: 28,
+    borderRadius: PIZZA_FIRE_RADIUS.xl,
     borderWidth: 1,
-    borderColor: PIZZA_FIRE.cardBorder,
+    borderColor: PIZZA_FIRE.flame,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    gap: 12,
   },
-  worksitePickerTitle: {
+  outsidePromptDistance: {
     color: PIZZA_FIRE.textPrimary,
-    fontSize: 20,
-    fontWeight: '900',
+    fontSize: 15,
+    fontWeight: '700',
     textAlign: 'center',
   },
-  worksitePickerSubtitle: {
-    color: PIZZA_FIRE.textMuted,
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 14,
+  outsidePromptSite: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
   },
-  worksitePickerList: {
-    maxHeight: 420,
-  },
-  worksitePickerListContent: {
-    gap: 10,
-    paddingBottom: 4,
-  },
-  worksiteOption: {
-    backgroundColor: PIZZA_FIRE.crustDark,
-    borderColor: PIZZA_FIRE.cardBorder,
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 14,
-  },
-  worksiteOptionSelected: {
-    borderColor: PIZZA_FIRE.gold,
-    backgroundColor: 'rgba(255, 190, 79, 0.12)',
-  },
-  worksiteOptionText: {
-    flex: 1,
-  },
-  worksiteOptionTitle: {
-    color: PIZZA_FIRE.textPrimary,
+  outsidePromptSiteName: {
+    color: PIZZA_FIRE.flame,
     fontSize: 16,
     fontWeight: '800',
   },
-  worksiteOptionHint: {
+  outsidePromptActions: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  outsidePromptAction: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: PIZZA_FIRE_RADIUS.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  outsidePromptStart: {
+    backgroundColor: PIZZA_FIRE.flame,
+  },
+  outsidePromptStartText: {
+    color: PIZZA_FIRE.charcoal,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  outsidePromptSwitch: {
+    backgroundColor: 'rgba(255, 159, 28, 0.18)',
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.flame,
+  },
+  outsidePromptSwitchText: {
+    color: PIZZA_FIRE.flame,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  outsidePromptCancel: {
+    backgroundColor: PIZZA_FIRE.inputBg,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.cardBorder,
+  },
+  outsidePromptCancelText: {
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  worksiteSheet: {
+    paddingBottom: 12,
+    maxHeight: '68%',
+  },
+  worksiteSheetScroller: {
+    maxHeight: WORKSITE_LIST_MAX_HEIGHT,
+  },
+  worksiteSheetList: {
+    paddingTop: WORKSITE_LIST_PADDING_TOP,
+    paddingBottom: WORKSITE_LIST_PADDING_BOTTOM,
+    alignItems: 'stretch',
+    width: '100%',
+  },
+  youAreHereLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 4,
+    maxWidth: '100%',
+  },
+  youAreHereText: {
     color: PIZZA_FIRE.textMuted,
     fontSize: 12,
     fontWeight: '600',
-    marginTop: 3,
+    flexShrink: 0,
+  },
+  youAreHereSite: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  youAreHereSiteText: {
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  worksiteOptionAlign: {
+    width: '100%',
+    alignItems: 'center',
+  },
+  worksiteOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 8,
+    maxWidth: '100%',
+  },
+  worksiteOptionIconSpacer: {
+    width: 16,
+    height: 16,
+  },
+  worksiteOption: {
+    width: '100%',
+    minHeight: WORKSITE_OPTION_ROW_HEIGHT,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    alignItems: 'stretch',
+    justifyContent: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: PIZZA_FIRE.divider,
+  },
+  worksiteOptionSelected: {
+    backgroundColor: 'rgba(255, 159, 28, 0.16)',
+    borderRadius: WORKSITE_OPTION_SELECTED_RADIUS,
+    borderBottomWidth: 0,
+    overflow: 'hidden',
+  },
+  worksiteOptionTitle: {
+    flexShrink: 1,
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'left',
+  },
+  worksiteOptionTitleSelected: {
+    color: PIZZA_FIRE.flame,
   },
   menuSheetHeader: {
     alignItems: 'center',
@@ -950,7 +1707,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 14,
     paddingHorizontal: 6,
-    borderRadius: 16,
+    borderRadius: PIZZA_FIRE_RADIUS.lg,
     backgroundColor: 'rgba(255, 159, 28, 0.14)',
     borderWidth: 1,
     borderColor: 'rgba(255, 159, 28, 0.28)',
@@ -965,7 +1722,7 @@ const styles = StyleSheet.create({
   menuIconWrap: {
     width: 48,
     height: 48,
-    borderRadius: 14,
+    borderRadius: PIZZA_FIRE_RADIUS.md,
     backgroundColor: 'rgba(255, 159, 28, 0.18)',
     alignItems: 'center',
     justifyContent: 'center',

@@ -10,6 +10,7 @@ import {
   Modal,
   TextInput,
     ActivityIndicator,
+  Linking,
   Platform,
   ToastAndroid,
 } from 'react-native';
@@ -33,7 +34,13 @@ import { auth } from '../services/firebase';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { Icons } from '../components/Icons';
 import { cacheGeofences, loadCachedGeofences } from '../geofencing/storage';
-import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
+import {
+  hasLocationPermission,
+  isLocationServicesEnabled,
+  normalizeLatLng,
+  requestLocationForFeature,
+} from '../utils/geo';
+import { shouldPromptLocationForWorksiteActivate } from '../utils/locationPrompt';
 import { startNativeMonitoring, getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 import { useIsFocused } from '@react-navigation/native';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
@@ -251,7 +258,7 @@ export function WorksitesPanel({ navigation, embedded = false }: WorksitesPanelP
   const getCurrentLocation = async () => {
     if (locating) return;
 
-    const granted = await requestLocationForFeature();
+    const granted = (await hasLocationPermission()) || (await requestLocationForFeature());
     if (!granted) {
       Alert.alert('Permission denied', 'Location access is required.');
       return;
@@ -578,8 +585,28 @@ export function WorksitesPanel({ navigation, embedded = false }: WorksitesPanelP
 
   const handleToggleActive = async (id: string, currentStatus: boolean) => {
     if (!isAdmin) return;
+    const turningOn = !currentStatus;
+    if (turningOn) {
+      const hasPermission = await hasLocationPermission();
+      const locationServicesOn = hasPermission ? await isLocationServicesEnabled() : true;
+      if (shouldPromptLocationForWorksiteActivate(hasPermission, locationServicesOn)) {
+        if (!hasPermission) {
+          const granted = await requestLocationForFeature();
+          if (!granted) return;
+        } else {
+          Alert.alert(
+            'Location is off',
+            'Turn on Location Services so worksite tracking can run on this device.',
+            [
+              { text: 'Not now', style: 'cancel' },
+              { text: 'Open Settings', onPress: () => void Linking.openSettings() },
+            ]
+          );
+        }
+      }
+    }
     try {
-      await updateDoc(doc(getFirestore(), 'geofences', id), { active: !currentStatus });
+      await updateDoc(doc(getFirestore(), 'geofences', id), { active: turningOn });
     } catch (err: any) {
       Alert.alert('Notice', 'Failed to toggle worksite status.');
     }
@@ -863,7 +890,7 @@ const styles = StyleSheet.create({
   item: {
     backgroundColor: PIZZA_FIRE.surface,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 8,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
@@ -893,7 +920,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.qlFill,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
   },
@@ -902,7 +929,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.qlFill,
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
   },
@@ -918,14 +945,14 @@ const styles = StyleSheet.create({
   addBtn: {
     backgroundColor: PIZZA_FIRE.accent,
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: 'center',
   },
   addText: { color: '#FFF', fontWeight: 'bold' },
   deleteSelectedBtn: {
     backgroundColor: '#9E3C2E',
     padding: 12,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: 'center',
     marginBottom: 12,
   },
@@ -938,7 +965,7 @@ const styles = StyleSheet.create({
   modal: {
     margin: 20,
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 24,
+    borderRadius: 8,
     padding: 24,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,

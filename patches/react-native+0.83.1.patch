@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native/src/private/devsupport/rndevtools/ReactDevToolsSettingsManager.js b/node_modules/react-native/src/private/devsupport/rndevtools/ReactDevToolsSettingsManager.js
+new file mode 100644
+index 0000000..a1b2c3d
+--- /dev/null
++++ b/node_modules/react-native/src/private/devsupport/rndevtools/ReactDevToolsSettingsManager.js
+@@ -0,0 +1,12 @@
++/**
++ * Fallback when Metro resolves this module without an android/ios platform
++ * (reload, DevTools, or missing platform query). Platform-specific files win.
++ *
++ * @format
++ */
++
++export function setGlobalHookSettings(_settings: string) {}
++
++export function getGlobalHookSettings(): ?string {
++  return null;
++}
++

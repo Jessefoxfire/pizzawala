@@ -34,6 +34,7 @@ import {
 } from '@react-native-firebase/firestore';
 import { auth, uploadStorageRef, uploadStorageRefFallback } from '../services/firebase';
 import { resolveAvatarSource } from '../utils/avatar';
+import { sortEmployeesByOrgActive } from '../utils/orgStatus';
 import { openUserProfile } from '../navigation/openUserProfile';
 import { Icons } from '../components/Icons';
 import {
@@ -44,6 +45,7 @@ import { ensureImagePickerPermission } from '../utils/imagePickerPermissions';
 import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { SHOW_EVENT_CHAT } from '../config/buildFeatures';
 
 const DEBUG_TAG = '[ChatImageDebug]';
 const REACTION_OPTIONS = ['👍', '❤️', '🔥', '😂', '👏', '😮', '😢', '😡'];
@@ -194,6 +196,7 @@ export default function ChatScreen({ navigation, route }: any) {
   }, [chatMode, effectiveEventChatId, user?.uid, messages.length]);
 
   useEffect(() => {
+    if (!SHOW_EVENT_CHAT) return;
     if (eventIdTrimmed) {
       setSelectedEventChat(prev =>
         prev && prev.id === eventIdTrimmed
@@ -348,7 +351,7 @@ export default function ChatScreen({ navigation, route }: any) {
           .map(d => ({ ...d.data(), id: d.id }))
           .filter((u: any) => u.id !== user.uid)
           .sort((a: any, b: any) => String(a?.name || a?.email || '').localeCompare(String(b?.name || b?.email || '')));
-        setDirectoryUsers(users);
+        setDirectoryUsers(sortEmployeesByOrgActive(users));
         if (dmUserIdFromRoute && !selectedDmUser) {
           const match = users.find((u: any) => u.id === dmUserIdFromRoute);
           if (match) {
@@ -787,6 +790,7 @@ export default function ChatScreen({ navigation, route }: any) {
           <Text style={[styles.tabPillText, chatMode === 'private' && styles.tabPillTextActive]}>Private</Text>
         </TouchableOpacity>
 
+        {SHOW_EVENT_CHAT ? (
         <FlatList
           horizontal
           data={availableEventChats}
@@ -811,6 +815,7 @@ export default function ChatScreen({ navigation, route }: any) {
             );
           }}
         />
+        ) : null}
       </View>
 
       {chatMode === 'event' && (
@@ -997,7 +1002,7 @@ const styles = StyleSheet.create({
     paddingRight: 6,
   },
   tabPill: {
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(246,237,226,0.25)',
     paddingHorizontal: 12,
@@ -1026,7 +1031,7 @@ const styles = StyleSheet.create({
   eventLinkButton: {
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(246,237,226,0.35)',
     backgroundColor: 'rgba(201,120,43,0.22)',
@@ -1076,7 +1081,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingHorizontal: 10,
     paddingVertical: 7,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(246,237,226,0.25)',
     backgroundColor: 'rgba(255,255,255,0.06)',
@@ -1098,7 +1103,7 @@ const styles = StyleSheet.create({
   },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   listContent: { padding: 16 },
-  messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 16, marginBottom: 12 },
+  messageBubble: { maxWidth: '85%', padding: 10, borderRadius: 8, marginBottom: 12 },
   myMessage: { alignSelf: 'flex-end', backgroundColor: PIZZA_FIRE.accent },
   theirMessage: { alignSelf: 'flex-start' },
   senderHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
@@ -1113,7 +1118,7 @@ const styles = StyleSheet.create({
   reactionChip: {
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 999,
+    borderRadius: 8,
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.25)',
@@ -1123,7 +1128,7 @@ const styles = StyleSheet.create({
     borderColor: PIZZA_FIRE.gold,
   },
   reactionChipText: { color: PIZZA_FIRE.textPrimary, fontSize: 12, fontWeight: '700' },
-  photoContainer: { width: '100%', marginBottom: 6, borderRadius: 12, overflow: 'hidden' },
+  photoContainer: { width: '100%', marginBottom: 6, borderRadius: 8, overflow: 'hidden' },
   messagePhoto: { width: '100%', height: 220, backgroundColor: PIZZA_FIRE.surfaceInset },
   photoLoader: { position: 'absolute', top: '45%', left: '45%' },
   errorText: { color: '#fff', fontSize: 10, fontWeight: 'bold', marginTop: 4 },
@@ -1133,10 +1138,10 @@ const styles = StyleSheet.create({
   messageTime: { fontSize: 10, color: 'rgba(255,255,255,0.6)' },
   sentCheck: { fontSize: 10, color: 'rgba(255,255,255,0.6)' },
   inputContainer: { flexDirection: 'row', padding: 12, backgroundColor: PIZZA_FIRE.bgMid, alignItems: 'center' },
-  input: { flex: 1, backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, color: PIZZA_FIRE.textPrimary, maxHeight: 100 },
+  input: { flex: 1, backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 8, paddingHorizontal: 16, paddingVertical: 10, marginRight: 10, color: PIZZA_FIRE.textPrimary, maxHeight: 100 },
   sendButton: {
     backgroundColor: PIZZA_FIRE.qlFillStrong,
-    borderRadius: 20,
+    borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderWidth: 1,
@@ -1145,12 +1150,12 @@ const styles = StyleSheet.create({
   sendButtonText: { color: PIZZA_FIRE.textPrimary, fontWeight: '800' },
   attachButton: { marginRight: 12 },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, padding: 20, borderRadius: 20, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, padding: 20, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
-  modalInput: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 16, borderRadius: 12, fontSize: 16, minHeight: 100, textAlignVertical: 'top' },
+  modalInput: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 16, borderRadius: 8, fontSize: 16, minHeight: 100, textAlignVertical: 'top' },
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 16, gap: 20 },
   modalCancel: { color: PIZZA_FIRE.textMuted, fontWeight: '600' },
-  modalSave: { backgroundColor: PIZZA_FIRE.accent, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10 },
+  modalSave: { backgroundColor: PIZZA_FIRE.accent, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 7 },
   modalSaveText: { color: PIZZA_FIRE.charcoal, fontWeight: 'bold' },
   reactionPickerGrid: {
     flexDirection: 'row',
@@ -1162,7 +1167,7 @@ const styles = StyleSheet.create({
   reactionOption: {
     width: 52,
     height: 52,
-    borderRadius: 12,
+    borderRadius: 8,
     backgroundColor: PIZZA_FIRE.inputBg,
     alignItems: 'center',
     justifyContent: 'center',

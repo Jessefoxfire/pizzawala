@@ -82,6 +82,17 @@ const resetPassword = (email: string) => {
     return nativeAuth().sendPasswordResetEmail(email);
 }
 
+const changePassword = async (currentPassword: string, nextPassword: string) => {
+    const user = nativeAuth().currentUser;
+    const email = user?.email?.trim();
+    if (!user || !email) {
+      throw new Error('Sign in again to change your password.');
+    }
+    const credential = nativeAuth.EmailAuthProvider.credential(email, currentPassword);
+    await user.reauthenticateWithCredential(credential);
+    await user.updatePassword(nextPassword);
+}
+
 /** Web-SDK-shaped compat: screens use `auth.currentUser` while RN Firebase is `nativeAuth()`. */
 export const auth = {
   get currentUser() {
@@ -103,4 +114,4 @@ export const uploadStorageRef = (storagePath: string) =>
 export const uploadStorageRefFallback = (storagePath: string) =>
   getStorage(getNativeApp(), LEGACY_STORAGE_BUCKET_URL).ref(storagePath);
 
-export { db, loginWithEmail, createAccountWithEmail, signOutUser, resetPassword, nativeAuth };
+export { db, loginWithEmail, createAccountWithEmail, signOutUser, resetPassword, changePassword, nativeAuth };

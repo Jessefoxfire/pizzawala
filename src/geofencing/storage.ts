@@ -12,13 +12,20 @@ const LAST_USER_NAME_KEY = 'geofence_last_user_name';
 const LAST_EVENT_DEBUG_KEY = 'geofence_last_event_debug';
 const PROMPT_ACTION_STATUS_PREFIX = 'geofence_prompt_status_';
 const AUTO_SHIFT_ENABLED_KEY = 'geofence_auto_shift_enabled';
+const WORKSITE_LOCATION_ENABLED_KEY = 'geofence_worksite_location_enabled';
 const WORKSITE_ALERTS_ENABLED_KEY = 'geofence_worksite_alerts_enabled';
-const SHIFT_SETUP_INTRO_SEEN_KEY = 'shift_setup_intro_seen';
+const LAST_SELECTED_WORKSITE_ID_KEY = 'last_selected_worksite_id';
 const TRACKING_ACTIVE_KEY = 'geofence_tracking_active';
 const SHIFT_START_TIME_KEY = 'geofence_shift_start_time';
 const SUPPRESS_WHILE_ON_SHIFT_KEY = 'geofence_suppress_while_on_shift';
 const ENTER_HANDLED_PREFIX = 'geofence_enter_handled_';
+const BREAK_RETURN_HANDLED_PREFIX = 'geofence_break_return_handled_';
+const CONFIRMED_AWAY_PREFIX = 'geofence_confirmed_away_';
 const GEOFENCE_STATE_PREFIX = 'geofence_state_';
+const BREAK_SOURCE_KEY = 'geofence_break_source';
+const AUTO_BREAK_ARMED_KEY = 'geofence_auto_break_armed';
+const CUTOFF_REACHED_KEY = 'geofence_cutoff_reached';
+const ORIGINAL_START_MS_KEY = 'geofence_original_start_ms';
 
 type LocationFeatureSettingsListener = () => void;
 const locationFeatureSettingsListeners = new Set<LocationFeatureSettingsListener>();
@@ -50,14 +57,28 @@ export const getAutoShiftEnabled = async (): Promise<boolean> => {
   return raw === 'true'; // Defaults to false
 };
 
-export const setWorksiteAlertsEnabled = async (enabled: boolean): Promise<void> => {
-  await AsyncStorage.setItem(WORKSITE_ALERTS_ENABLED_KEY, enabled ? 'true' : 'false');
+const syncNativeWorksiteNotifications = async (enabled: boolean): Promise<void> => {
   try {
     const { setNativeNotificationsEnabled } = require('./native');
     await setNativeNotificationsEnabled(enabled);
   } catch (err) {
     console.warn('Failed to sync worksite alerts to native:', err);
   }
+};
+
+export const setWorksiteLocationEnabled = async (enabled: boolean): Promise<void> => {
+  await AsyncStorage.setItem(WORKSITE_LOCATION_ENABLED_KEY, enabled ? 'true' : 'false');
+  notifyLocationFeatureSettingsChanged();
+};
+
+export const getWorksiteLocationEnabled = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(WORKSITE_LOCATION_ENABLED_KEY);
+  return raw === 'true';
+};
+
+export const setWorksiteAlertsEnabled = async (enabled: boolean): Promise<void> => {
+  await AsyncStorage.setItem(WORKSITE_ALERTS_ENABLED_KEY, enabled ? 'true' : 'false');
+  await syncNativeWorksiteNotifications(enabled);
   notifyLocationFeatureSettingsChanged();
 };
 
@@ -66,21 +87,37 @@ export const getWorksiteAlertsEnabled = async (): Promise<boolean> => {
   return raw === 'true';
 };
 
-export const getLocationFeaturesEnabled = async (): Promise<boolean> => {
-  const [autoShift, worksiteAlerts] = await Promise.all([
-    getAutoShiftEnabled(),
+/** Geofence / site-awareness engine (not OS notifications). */
+export const getWorksiteLocationEngineEnabled = async (): Promise<boolean> => {
+  const [worksiteLocation, worksiteAlerts] = await Promise.all([
+    getWorksiteLocationEnabled(),
     getWorksiteAlertsEnabled(),
   ]);
-  return autoShift || worksiteAlerts;
+  return worksiteLocation || worksiteAlerts;
 };
 
-export const getShiftSetupIntroSeen = async (): Promise<boolean> => {
-  const raw = await AsyncStorage.getItem(SHIFT_SETUP_INTRO_SEEN_KEY);
-  return raw === 'true';
+export const getLocationFeaturesEnabled = async (): Promise<boolean> => {
+  const [autoShift, locationEngine] = await Promise.all([
+    getAutoShiftEnabled(),
+    getWorksiteLocationEngineEnabled(),
+  ]);
+  return autoShift || locationEngine;
 };
 
-export const setShiftSetupIntroSeen = async (seen = true): Promise<void> => {
-  await AsyncStorage.setItem(SHIFT_SETUP_INTRO_SEEN_KEY, seen ? 'true' : 'false');
+export const syncNativeWorksiteNotificationPref = async (): Promise<void> => {
+  await syncNativeWorksiteNotifications(await getWorksiteAlertsEnabled());
+};
+
+export const setLastSelectedWorksiteId = async (id: string | null): Promise<void> => {
+  if (!id) {
+    await AsyncStorage.removeItem(LAST_SELECTED_WORKSITE_ID_KEY);
+    return;
+  }
+  await AsyncStorage.setItem(LAST_SELECTED_WORKSITE_ID_KEY, id);
+};
+
+export const getLastSelectedWorksiteId = async (): Promise<string | null> => {
+  return AsyncStorage.getItem(LAST_SELECTED_WORKSITE_ID_KEY);
 };
 
 const randomId = () => {
@@ -259,6 +296,34 @@ export const isEnterHandledForVisit = async (geofenceId: string): Promise<boolea
   return raw === 'true';
 };
 
+export const markBreakReturnHandledForVisit = async (geofenceId: string): Promise<void> => {
+  if (!geofenceId) return;
+  await AsyncStorage.setItem(BREAK_RETURN_HANDLED_PREFIX + geofenceId, 'true');
+};
+
+export const clearBreakReturnHandledForVisit = async (geofenceId: string): Promise<void> => {
+  if (!geofenceId) return;
+  await AsyncStorage.removeItem(BREAK_RETURN_HANDLED_PREFIX + geofenceId);
+};
+
+export const isBreakReturnHandledForVisit = async (geofenceId: string): Promise<boolean> => {
+  if (!geofenceId) return false;
+  const raw = await AsyncStorage.getItem(BREAK_RETURN_HANDLED_PREFIX + geofenceId);
+  return raw === 'true';
+};
+
+export const setConfirmedAwayForVisit = async (geofenceId: string, away: boolean): Promise<void> => {
+  if (!geofenceId) return;
+  if (away) await AsyncStorage.setItem(CONFIRMED_AWAY_PREFIX + geofenceId, 'true');
+  else await AsyncStorage.removeItem(CONFIRMED_AWAY_PREFIX + geofenceId);
+};
+
+export const isConfirmedAwayForVisit = async (geofenceId: string): Promise<boolean> => {
+  if (!geofenceId) return false;
+  const raw = await AsyncStorage.getItem(CONFIRMED_AWAY_PREFIX + geofenceId);
+  return raw === 'true';
+};
+
 /** After ending a shift while still inside, treat every currently-inside geofence visit as processed. */
 export const markEnterHandledForInsideVisits = async (
   extraGeofenceId?: string | null
@@ -276,4 +341,55 @@ export const markEnterHandledForInsideVisits = async (
       })
   );
   await Promise.all([...ids].map(id => markEnterHandledForVisit(id)));
+};
+
+export const setBreakSource = async (source: 'auto' | 'manual' | null): Promise<void> => {
+  if (!source) await AsyncStorage.removeItem(BREAK_SOURCE_KEY);
+  else await AsyncStorage.setItem(BREAK_SOURCE_KEY, source);
+};
+
+export const getBreakSource = async (): Promise<'auto' | 'manual' | null> => {
+  const raw = await AsyncStorage.getItem(BREAK_SOURCE_KEY);
+  if (raw === 'auto' || raw === 'manual') return raw;
+  return null;
+};
+
+export const setAutoBreakArmed = async (armed: boolean): Promise<void> => {
+  await AsyncStorage.setItem(AUTO_BREAK_ARMED_KEY, armed ? 'true' : 'false');
+};
+
+export const getAutoBreakArmed = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(AUTO_BREAK_ARMED_KEY);
+  return raw !== 'false';
+};
+
+export const setCutoffReached = async (reached: boolean): Promise<void> => {
+  if (reached) await AsyncStorage.setItem(CUTOFF_REACHED_KEY, 'true');
+  else await AsyncStorage.removeItem(CUTOFF_REACHED_KEY);
+};
+
+export const getCutoffReached = async (): Promise<boolean> => {
+  const raw = await AsyncStorage.getItem(CUTOFF_REACHED_KEY);
+  return raw === 'true';
+};
+
+export const setOriginalShiftStartMs = async (ms: number | null): Promise<void> => {
+  if (ms == null || ms <= 0) await AsyncStorage.removeItem(ORIGINAL_START_MS_KEY);
+  else await AsyncStorage.setItem(ORIGINAL_START_MS_KEY, String(ms));
+};
+
+export const getOriginalShiftStartMs = async (): Promise<number | null> => {
+  const raw = await AsyncStorage.getItem(ORIGINAL_START_MS_KEY);
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+export const clearShiftTrackingExtras = async (): Promise<void> => {
+  await Promise.all([
+    setBreakSource(null),
+    setAutoBreakArmed(true),
+    setCutoffReached(false),
+    setOriginalShiftStartMs(null),
+  ]);
 };

@@ -998,7 +998,7 @@ const styles = StyleSheet.create({
   },
   loadingCard: {
     backgroundColor: PIZZA_FIRE.surface,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 14,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
@@ -1013,7 +1013,7 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     backgroundColor: PIZZA_FIRE.surface,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 18,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
@@ -1044,7 +1044,7 @@ const styles = StyleSheet.create({
   teamChip: {
     width: 210,
     backgroundColor: PIZZA_FIRE.surface,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 14,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
@@ -1061,7 +1061,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     paddingHorizontal: 8,
     paddingVertical: 5,
-    borderRadius: 999,
+    borderRadius: 8,
     overflow: 'hidden',
     marginBottom: 10,
   },
@@ -1088,7 +1088,7 @@ const styles = StyleSheet.create({
   },
   progressCard: {
     backgroundColor: PIZZA_FIRE.surface,
-    borderRadius: 18,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
@@ -1118,7 +1118,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#16110E',
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#433228',
     maxWidth: '100%',
@@ -1134,7 +1134,7 @@ const styles = StyleSheet.create({
   progressTrack: {
     height: 12,
     backgroundColor: '#120E0C',
-    borderRadius: 999,
+    borderRadius: 8,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#3C2D24',
@@ -1142,7 +1142,7 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
     backgroundColor: '#E2A14A',
-    borderRadius: 999,
+    borderRadius: 8,
   },
   progressSub: {
     color: '#BFA690',
@@ -1152,7 +1152,7 @@ const styles = StyleSheet.create({
   sharedMetaBanner: {
     marginTop: 12,
     backgroundColor: '#17120F',
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 12,
     borderWidth: 1,
     borderColor: '#3B2D24',
@@ -1183,7 +1183,7 @@ const styles = StyleSheet.create({
   },
   stepCard: {
     backgroundColor: PIZZA_FIRE.surface,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1.5,
   },
@@ -1216,7 +1216,7 @@ const styles = StyleSheet.create({
   },
   statusBadge: {
     alignSelf: 'flex-start',
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
     flexShrink: 0,
@@ -1252,7 +1252,7 @@ const styles = StyleSheet.create({
   },
   checkCard: {
     backgroundColor: 'rgba(18, 10, 6, 0.4)',
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 12,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
@@ -1282,7 +1282,7 @@ const styles = StyleSheet.create({
   },
   answerButton: {
     flex: 1,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#4A382C',
     backgroundColor: '#251D18',
@@ -1313,7 +1313,7 @@ const styles = StyleSheet.create({
   navButton: {
     flex: 0.9,
     backgroundColor: '#2C211A',
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
     borderWidth: 1,
@@ -1330,7 +1330,7 @@ const styles = StyleSheet.create({
   navButtonAccent: {
     flex: 1.3,
     backgroundColor: '#E2A14A',
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 12,
     alignItems: 'center',
   },
@@ -1341,7 +1341,7 @@ const styles = StyleSheet.create({
   },
   sidebarCard: {
     backgroundColor: '#201915',
-    borderRadius: 18,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: '#372A22',
@@ -1366,7 +1366,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#17120F',
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 12,
     borderWidth: 1,
     borderColor: '#30241E',

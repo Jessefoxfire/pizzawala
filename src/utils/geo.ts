@@ -2,13 +2,41 @@
 
 import { PermissionsAndroid, Platform, Alert, Linking, NativeModules } from 'react-native';
 import Geolocation from 'react-native-geolocation-service';
+import { check, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
+
+export { shouldPromptLocationForWorksiteActivate } from './locationPrompt';
 
 const { GeofenceModule } = NativeModules;
 
 export type LatLng = { lat: number; lng: number };
 
-export function requestLocationForFeature(requireBackground = false): Promise<boolean> {
+export async function requestLocationForFeature(requireBackground = false): Promise<boolean> {
+  const alreadyGranted = requireBackground
+    ? await hasGeofencePermissions()
+    : await hasLocationPermission();
+  if (alreadyGranted) {
+    const servicesOn = await isLocationServicesEnabled();
+    if (servicesOn) return true;
+    return new Promise(resolve => {
+      Alert.alert(
+        'Location is off',
+        'Turn on Location Services so worksite tracking can run on this device.',
+        [
+          { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
+          {
+            text: 'Open Settings',
+            onPress: () => {
+              void Linking.openSettings();
+              resolve(false);
+            },
+          },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) }
+      );
+    });
+  }
+
   return new Promise(resolve => {
     Alert.alert(
       'Location required',
@@ -55,11 +83,41 @@ export async function ensureLocationPermission(): Promise<boolean> {
 
 export async function hasLocationPermission(): Promise<boolean> {
   if (Platform.OS === 'ios') {
-    // Geolocation-service doesn't have a simple check for iOS without requesting
-    // But we can check current status
-    return true; // Fallback or implement more thorough iOS check
+    try {
+      const whenInUse = await check(PERMISSIONS.IOS.LOCATION_WHEN_IN_USE);
+      if (whenInUse === RESULTS.GRANTED || whenInUse === RESULTS.LIMITED) {
+        return true;
+      }
+      const always = await check(PERMISSIONS.IOS.LOCATION_ALWAYS);
+      return always === RESULTS.GRANTED || always === RESULTS.LIMITED;
+    } catch (error) {
+      console.warn('iOS location permission check failed:', error);
+      return false;
+    }
   }
   return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+}
+
+export function isLocationServicesEnabled(): Promise<boolean> {
+  return new Promise(resolve => {
+    Geolocation.getCurrentPosition(
+      () => resolve(true),
+      err => {
+        // 2 = POSITION_UNAVAILABLE, 5 = SETTINGS_NOT_SATISFIED (Location Services off)
+        if (err?.code === 2 || err?.code === 5) {
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 2500,
+        maximumAge: 120000,
+        showLocationDialog: false,
+      }
+    );
+  });
 }
 
 export async function hasActivityRecognitionPermission(): Promise<boolean> {

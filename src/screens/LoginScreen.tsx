@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -18,16 +18,31 @@ import { RootStackParamList } from '../navigation/AppNavigator';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { useAppLayout } from '../theme/responsiveLayout';
+import { persistPendingInviteToken, readPendingInviteToken } from '../services/pendingInvite';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
 
-export default function LoginScreen({ navigation }: Props) {
+export default function LoginScreen({ navigation, route }: Props) {
   const layout = useAppLayout();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsLoadingResetting] = useState(false);
+  const [inviteToken, setInviteToken] = useState(route.params?.invite || '');
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const token = route.params?.invite || await readPendingInviteToken();
+      if (cancelled || !token) return;
+      setInviteToken(token);
+      await persistPendingInviteToken(token);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [route.params?.invite]);
 
   const handleSignIn = async () => {
     const trimmedEmail = email.trim();
@@ -111,6 +126,11 @@ export default function LoginScreen({ navigation }: Props) {
                 Welcome to The Pizza Wala Team!{"\n"}
                 Create your account or sign in.
               </Text>
+              {inviteToken ? (
+                <Text style={styles.inviteHint}>
+                  You have a Pizza Wala invite. Create an account to join the team, or sign in if you already have one.
+                </Text>
+              ) : null}
 
               <View style={styles.form}>
                 <TextInput
@@ -168,7 +188,7 @@ export default function LoginScreen({ navigation }: Props) {
 
                 <TouchableOpacity
                   style={styles.secondaryButton}
-                  onPress={() => navigation.navigate('CreateAccount')}
+                  onPress={() => navigation.navigate('CreateAccount', inviteToken ? { invite: inviteToken } : undefined)}
                 >
                   <Text style={styles.secondaryButtonText}>Create Account</Text>
                 </TouchableOpacity>
@@ -213,12 +233,20 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.textPrimary,
     paddingHorizontal: 24,
   },
+  inviteHint: {
+    marginTop: 10,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    color: PIZZA_FIRE.gold,
+    paddingHorizontal: 16,
+  },
   form: {
     width: '100%',
     marginTop: 24,
     backgroundColor: PIZZA_FIRE.surfaceInset,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
@@ -226,7 +254,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.inputBg,
     paddingVertical: 12,
     paddingHorizontal: 14,
-    borderRadius: 10,
+    borderRadius: 7,
     fontSize: 16,
     color: PIZZA_FIRE.textSecondary,
     marginBottom: 12,
@@ -235,7 +263,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 10,
+    borderRadius: 7,
     marginBottom: 12,
   },
   passwordInput: {
@@ -257,7 +285,7 @@ const styles = StyleSheet.create({
   primaryButton: {
     backgroundColor: PIZZA_FIRE.accent,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: 8,
     alignItems: 'center',
     marginTop: 4,
   },

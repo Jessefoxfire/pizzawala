@@ -88,11 +88,16 @@ exports.notifyUserInbox = onDocumentCreated(
     const screen = typeof nav.screen === 'string' ? nav.screen : '';
     const view = typeof nav.view === 'string' ? nav.view : '';
     const eventId = typeof nav.eventId === 'string' ? nav.eventId : '';
+    const shiftId = typeof nav.shiftId === 'string' ? nav.shiftId : '';
+    const employeeUserId = typeof nav.employeeUserId === 'string' ? nav.employeeUserId : '';
+    const employeeName = typeof nav.employeeName === 'string' ? nav.employeeName : '';
+    const kind = typeof payload.kind === 'string' ? payload.kind : '';
+    const type = kind === 'shift_edit_request' ? 'shift_edit_request' : 'personal_notification';
     await sendToToken(
       token,
       title,
       body,
-      { type: 'personal_notification', screen, view, eventId },
+      { type, screen, view, eventId, shiftId, employeeUserId, employeeName },
       'personal_alerts'
     );
   }

@@ -7,6 +7,7 @@ import { name as appName } from './app.json';
 import { handleGeofenceBootHeadless, handleGeofenceEventHeadless } from './src/geofencing/headless';
 
 import { setPromptActionStatus } from './src/geofencing/storage';
+import { handleGeofenceNotificationAction } from './src/notifications/geofenceNotificationActions';
 
 // Data-only FCM (high priority) — display while native isn't showing a notification payload.
 messaging().setBackgroundMessageHandler(async remoteMessage => {
@@ -43,19 +44,32 @@ messaging().setBackgroundMessageHandler(async remoteMessage => {
 // Handle notifee background events (e.g. action buttons)
 notifee.onBackgroundEvent(async ({ type, detail }) => {
   const { notification, pressAction } = detail;
-  const eventId = notification?.data?.payload?.eventId;
-
-  if (type === EventType.ACTION_PRESS) {
-    if (pressAction?.id === 'start_shift' || pressAction?.id === 'end_shift') {
-      if (eventId) await setPromptActionStatus(eventId, 'confirmed');
-      console.log('[Notifee] Background action confirmed:', pressAction.id);
-    } else if (pressAction?.id === 'ignore') {
-      if (eventId) await setPromptActionStatus(eventId, 'vetoed');
-      console.log('[Notifee] Background action vetoed');
+  const data = notification?.data || {};
+  let eventId;
+  if (data.payload && typeof data.payload === 'object') {
+    eventId = data.payload.eventId;
+  } else if (typeof data.payload === 'string') {
+    try {
+      eventId = JSON.parse(data.payload).eventId;
+    } catch (_err) {
+      eventId = undefined;
     }
   }
 
-  // Remove the notification after interaction
+  if (type === EventType.ACTION_PRESS) {
+    const handled = await handleGeofenceNotificationAction(pressAction?.id, data, notification?.id);
+    if (!handled) {
+      if (pressAction?.id === 'end_shift' && eventId) {
+        await setPromptActionStatus(eventId, 'confirmed');
+      }
+    } else if (eventId) {
+      await setPromptActionStatus(
+        eventId,
+        pressAction?.id === 'ignore' || pressAction?.id === 'ignore_break_return' ? 'vetoed' : 'confirmed'
+      );
+    }
+  }
+
   if (notification?.id) {
     await notifee.cancelNotification(notification.id);
   }

@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 10,
   },
   title: {

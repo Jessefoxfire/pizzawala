@@ -4,6 +4,7 @@ import DateTimePicker, {
   DateTimePickerAndroid,
   DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
+import PizzaFireButton from './PizzaFireButton';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import {
@@ -20,6 +21,7 @@ type Props = {
   endTime: string;
   onClose: () => void;
   onConfirm: (startTime: string, endTime: string) => void | Promise<void>;
+  onDelete?: () => void;
 };
 
 type Field = 'start' | 'end';
@@ -31,6 +33,7 @@ export default function EventDayTimeModal({
   endTime,
   onClose,
   onConfirm,
+  onDelete,
 }: Props) {
   const layout = useAppLayout();
   const [startDraft, setStartDraft] = useState(startTime);
@@ -104,6 +107,14 @@ export default function EventDayTimeModal({
     onClose();
   };
 
+  const handleDelete = () => {
+    if (!onDelete) return;
+    Alert.alert('Delete shift', 'Remove this entire shift from hours and Shift Audit?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: onDelete },
+    ]);
+  };
+
   const confirm = async () => {
     if (confirmingRef.current) return;
     const start = picking === 'start' ? dateToTimeString(pendingRef.current) : startDraft;
@@ -156,12 +167,20 @@ export default function EventDayTimeModal({
           ) : null}
 
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmBtn} onPress={() => void confirm()}>
-              <Text style={styles.confirmText}>Done</Text>
-            </TouchableOpacity>
+            {onDelete ? (
+              <>
+                <PizzaFireButton label="Delete" variant="danger" onPress={handleDelete} fontSize={13.3} style={styles.rounderBtn} />
+                <View style={styles.actionsRight}>
+                  <PizzaFireButton label="Cancel" variant="muted" onPress={handleCancel} fontSize={13.3} style={styles.rounderBtn} />
+                  <PizzaFireButton label="Save" onPress={() => void confirm()} fontSize={13.3} style={styles.rounderBtn} />
+                </View>
+              </>
+            ) : (
+              <>
+                <PizzaFireButton label="Cancel" variant="muted" onPress={handleCancel} fontSize={13.3} style={styles.rounderBtn} />
+                <PizzaFireButton label="Done" onPress={() => void confirm()} fontSize={13.3} style={styles.rounderBtn} />
+              </>
+            )}
           </View>
         </View>
       </View>
@@ -178,8 +197,9 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
-    padding: 16,
+    borderRadius: 8.4,
+    paddingHorizontal: 16,
+    paddingVertical: 15.2,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
@@ -193,15 +213,15 @@ const styles = StyleSheet.create({
     color: PIZZA_FIRE.textMuted,
     fontSize: 13,
     textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 12,
+    marginTop: 3.8,
+    marginBottom: 11.4,
   },
   previewRow: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 10,
-    paddingVertical: 10,
+    borderRadius: 7.35,
+    paddingVertical: 9.5,
     paddingHorizontal: 12,
-    marginBottom: 12,
+    marginBottom: 11.4,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
@@ -216,12 +236,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 10,
+    borderRadius: 7.35,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    paddingVertical: 14,
+    paddingVertical: 13.3,
     paddingHorizontal: 12,
-    marginBottom: 8,
+    marginBottom: 7.6,
   },
   timeRowLabel: {
     color: PIZZA_FIRE.textMuted,
@@ -237,26 +257,17 @@ const styles = StyleSheet.create({
   },
   actions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     gap: 12,
-    marginTop: 8,
+    marginTop: 7.6,
   },
-  cancelBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+  actionsRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  cancelText: {
-    color: PIZZA_FIRE.textMuted,
-    fontWeight: '700',
-  },
-  confirmBtn: {
-    backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  confirmText: {
-    color: PIZZA_FIRE.charcoal,
-    fontWeight: '900',
+  rounderBtn: {
+    borderRadius: 8.4,
   },
 });

@@ -14,42 +14,162 @@ import com.djtranscendence.pizzawala.R
 object ShiftOngoingStore {
   const val NOTIFICATION_ID = 92010
   const val CHANNEL_ID = "pizzawala-shift-ongoing"
+  const val SHIFT_LIMIT_MS = 24L * 60L * 60L * 1000L
+  const val CUTOFF_TITLE = "Your shift reached the 24-hour limit."
+  const val CUTOFF_BODY = "Review your times and end the day."
 
   private const val PREFS = "pizzawala_shift_ongoing"
   private const val KEY_ACTIVE = "active"
   private const val KEY_MODE = "mode"
   private const val KEY_PERIOD_START_MS = "period_start_ms"
   private const val KEY_BASE_ELAPSED_MS = "base_elapsed_ms"
+  private const val KEY_WORK_ELAPSED_MS = "work_elapsed_ms"
+  private const val KEY_ACTIONS_REVEALED = "actions_revealed"
+  private const val KEY_ORIGINAL_START_MS = "original_start_ms"
+  private const val KEY_CUTOFF = "cutoff"
 
   fun isActive(context: Context): Boolean {
     return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ACTIVE, false)
   }
 
-  fun save(context: Context, mode: String, periodStartMs: Long, baseElapsedMs: Long) {
-    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+  fun isCutoff(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_CUTOFF, false)
+  }
+
+  fun originalStartMs(context: Context): Long {
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(KEY_ORIGINAL_START_MS, 0L)
+  }
+
+  fun cutoffAtMs(context: Context): Long {
+    val start = originalStartMs(context)
+    if (start <= 0L) return 0L
+    return start + SHIFT_LIMIT_MS
+  }
+
+  fun save(
+    context: Context,
+    mode: String,
+    periodStartMs: Long,
+    baseElapsedMs: Long,
+    workElapsedMs: Long? = null,
+  ) {
+    if (isCutoff(context) && GeofencePrefs.isShiftActive(context)) return
+    val normalizedMode = if (mode == "break") "break" else "working"
+    val wasActive = isActive(context)
+    val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
       .edit()
       .putBoolean(KEY_ACTIVE, true)
-      .putString(KEY_MODE, if (mode == "break") "break" else "working")
+      .putBoolean(KEY_CUTOFF, false)
+      .putString(KEY_MODE, normalizedMode)
       .putLong(KEY_PERIOD_START_MS, periodStartMs)
       .putLong(KEY_BASE_ELAPSED_MS, baseElapsedMs.coerceAtLeast(0L))
-      .commit()
+    if (!wasActive) {
+      editor.putBoolean(KEY_ACTIONS_REVEALED, false)
+      val original = if (normalizedMode == "working") periodStartMs else System.currentTimeMillis()
+      editor.putLong(KEY_ORIGINAL_START_MS, original)
+    }
+    if (workElapsedMs != null) {
+      editor.putLong(KEY_WORK_ELAPSED_MS, workElapsedMs.coerceAtLeast(0L))
+    }
+    editor.commit()
   }
 
   fun clear(context: Context) {
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+    GeofencePrefs.setCutoffReached(context, false)
+    GeofencePrefs.setBreakSource(context, null)
+    GeofencePrefs.setAutoBreakArmed(context, true)
+    GeofenceShiftCutoffWorker.cancel(context)
   }
 
   fun elapsedMs(context: Context, nowMs: Long = System.currentTimeMillis()): Long {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     if (!prefs.getBoolean(KEY_ACTIVE, false)) return 0L
+    if (prefs.getBoolean(KEY_CUTOFF, false)) {
+      return prefs.getLong(KEY_BASE_ELAPSED_MS, 0L)
+    }
     val periodStart = prefs.getLong(KEY_PERIOD_START_MS, nowMs)
     val base = prefs.getLong(KEY_BASE_ELAPSED_MS, 0L)
-    return base + (nowMs - periodStart).coerceAtLeast(0L)
+    val raw = base + (nowMs - periodStart).coerceAtLeast(0L)
+    val cutoffAt = cutoffAtMs(context)
+    if (cutoffAt <= 0L) return raw
+    val original = originalStartMs(context)
+    return raw.coerceAtMost((cutoffAt - original).coerceAtLeast(0L))
   }
 
   fun label(context: Context): String {
+    if (isCutoff(context)) return CUTOFF_TITLE
     val mode = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MODE, "working")
     return if (mode == "break") "Break" else "Working"
+  }
+
+  fun isBreak(context: Context): Boolean {
+    if (isCutoff(context)) return false
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MODE, "working") == "break"
+  }
+
+  fun actionsRevealed(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ACTIONS_REVEALED, false)
+  }
+
+  fun setActionsRevealed(context: Context, revealed: Boolean) {
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_ACTIONS_REVEALED, revealed)
+      .commit()
+  }
+
+  fun applyBreak(context: Context): Boolean {
+    if (!isActive(context) || isCutoff(context) || isBreak(context)) return false
+    val workElapsed = elapsedMs(context)
+    val now = System.currentTimeMillis()
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_MODE, "break")
+      .putLong(KEY_PERIOD_START_MS, now)
+      .putLong(KEY_BASE_ELAPSED_MS, 0L)
+      .putLong(KEY_WORK_ELAPSED_MS, workElapsed)
+      .putBoolean(KEY_ACTIONS_REVEALED, false)
+      .commit()
+    return true
+  }
+
+  fun applyResume(context: Context): Boolean {
+    if (!isActive(context) || isCutoff(context) || !isBreak(context)) return false
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    val workElapsed = prefs.getLong(KEY_WORK_ELAPSED_MS, 0L)
+    val now = System.currentTimeMillis()
+    prefs.edit()
+      .putString(KEY_MODE, "working")
+      .putLong(KEY_PERIOD_START_MS, now)
+      .putLong(KEY_BASE_ELAPSED_MS, workElapsed)
+      .putBoolean(KEY_ACTIONS_REVEALED, false)
+      .commit()
+    return true
+  }
+
+  fun applyRestart(context: Context): Boolean = applyResume(context)
+
+  fun applyCutoffIfDue(context: Context, nowMs: Long = System.currentTimeMillis()): Boolean {
+    if (!isActive(context) || isCutoff(context)) return false
+    val cutoffAt = cutoffAtMs(context)
+    if (cutoffAt <= 0L || nowMs < cutoffAt) return false
+    val original = originalStartMs(context)
+    val frozen = (cutoffAt - original).coerceAtLeast(0L)
+    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_CUTOFF, true)
+      .putString(KEY_MODE, "cutoff")
+      .putLong(KEY_PERIOD_START_MS, cutoffAt)
+      .putLong(KEY_BASE_ELAPSED_MS, frozen)
+      .putBoolean(KEY_ACTIONS_REVEALED, true)
+      .commit()
+    GeofencePrefs.setCutoffReached(context, true)
+    GeofencePrefs.setPendingAutoAction(context, GeofencePrefs.getShiftGeofenceId(context) ?: "", null)
+    GeofenceAutoEnterWorker.cancel(context, GeofencePrefs.getShiftGeofenceId(context) ?: "")
+    GeofenceAutoExitWorker.cancel(context, GeofencePrefs.getShiftGeofenceId(context) ?: "")
+    GeofenceShiftCutoffWorker.cancel(context)
+    return true
   }
 
   fun formatHms(ms: Long): String {
@@ -100,23 +220,36 @@ object ShiftOngoingStore {
   fun buildNotification(context: Context): Notification {
     ensureChannel(context)
     val appCtx = context.applicationContext
-    val status = label(appCtx)
+    val cutoff = isCutoff(appCtx)
+    val status = if (cutoff) CUTOFF_TITLE else label(appCtx)
     val elapsed = elapsedMs(appCtx)
-    val elapsedText = formatBodyElapsed(elapsed)
-    val launch = Intent(appCtx, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-      putExtra("screen", "Home")
+    val elapsedText = if (cutoff) CUTOFF_BODY else formatBodyElapsed(elapsed)
+    val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    val tapIntent = Intent(appCtx, GeofenceNotificationActionReceiver::class.java).apply {
+      action = GeofenceNotificationActionReceiver.ACTION_ONGOING_TAP
     }
-    val pending = PendingIntent.getActivity(
+    val tapPending = PendingIntent.getBroadcast(
       appCtx,
       NOTIFICATION_ID,
-      launch,
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+      tapIntent,
+      pendingFlags
     )
-    val notification = NotificationCompat.Builder(appCtx, CHANNEL_ID)
+    val endIntent = Intent(appCtx, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+      putExtra("screen", "Home")
+      putExtra("action", "open_end_shift")
+    }
+    val endPending = PendingIntent.getActivity(
+      appCtx,
+      NOTIFICATION_ID + 1,
+      endIntent,
+      pendingFlags
+    )
+    val builder = NotificationCompat.Builder(appCtx, CHANNEL_ID)
       .setSmallIcon(R.drawable.ic_shift_clock)
       .setContentTitle(status)
       .setContentText(elapsedText)
+      .setStyle(NotificationCompat.BigTextStyle().bigText(elapsedText))
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setSilent(true)
@@ -124,21 +257,41 @@ object ShiftOngoingStore {
       .setVibrate(null)
       .setPriority(NotificationCompat.PRIORITY_LOW)
       .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-      .setContentIntent(pending)
+      .setContentIntent(tapPending)
       .setColor(0xFFFF6B00.toInt())
-      .setWhen(System.currentTimeMillis() - elapsed)
-      .setUsesChronometer(true)
-      .setChronometerCountDown(false)
-      .build()
-
-    // Android 16+ can promote qualifying ongoing notifications into a status-bar live-update
-    // chip. Raw extras keep this compatible with the project's current AndroidX Core version;
-    // older Android releases safely ignore them.
-    notification.extras.putBoolean("android.requestPromotedOngoing", true)
-    notification.extras.putString(
-      "android.shortCriticalText",
-      formatChipElapsed(elapsed)
-    )
-    return notification
+      .setShowWhen(true)
+    if (cutoff) {
+      builder
+        .setUsesChronometer(false)
+        .setWhen(System.currentTimeMillis())
+        .addAction(0, "End Day", endPending)
+    } else {
+      builder
+        .setWhen(System.currentTimeMillis() - elapsed)
+        .setUsesChronometer(true)
+        .setChronometerCountDown(false)
+      if (actionsRevealed(appCtx)) {
+        val isBreak = isBreak(appCtx)
+        val toggleAction = if (isBreak) {
+          GeofenceNotificationActionReceiver.ACTION_RESUME
+        } else {
+          GeofenceNotificationActionReceiver.ACTION_BREAK
+        }
+        val toggleLabel = if (isBreak) "Resume" else "Break"
+        val toggleIntent = Intent(appCtx, GeofenceNotificationActionReceiver::class.java).apply {
+          action = toggleAction
+        }
+        val togglePending = PendingIntent.getBroadcast(
+          appCtx,
+          NOTIFICATION_ID + 2,
+          toggleIntent,
+          pendingFlags
+        )
+        builder
+          .addAction(0, "End Day", endPending)
+          .addAction(0, toggleLabel, togglePending)
+      }
+    }
+    return builder.build()
   }
 }

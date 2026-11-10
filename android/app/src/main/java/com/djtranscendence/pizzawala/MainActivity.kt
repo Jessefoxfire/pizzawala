@@ -1,5 +1,9 @@
 package com.djtranscendence.pizzawala
 
+import android.content.Intent
+import android.os.Bundle
+import com.djtranscendence.pizzawala.geofence.GeofenceNotifier
+import com.djtranscendence.pizzawala.geofence.GeofencePrefs
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -19,4 +23,26 @@ class MainActivity : ReactActivity() {
    */
   override fun createReactActivityDelegate(): ReactActivityDelegate =
       DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    consumeGeofenceNotificationIntent(intent)
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    consumeGeofenceNotificationIntent(intent)
+  }
+
+  private fun consumeGeofenceNotificationIntent(intent: Intent?) {
+    val action = intent?.getStringExtra("action") ?: return
+    val geofenceId = intent.getStringExtra("geofenceId")
+    val geofenceName = intent.getStringExtra("geofenceName")
+    GeofencePrefs.setPendingJsAction(this, action, geofenceId, geofenceName)
+    if (action == "start_shift" && !geofenceId.isNullOrBlank()) {
+      GeofencePrefs.setEnterHandledForVisit(this, geofenceId, true)
+      GeofenceNotifier.cancel(this, geofenceId, "enter")
+    }
+  }
 }

@@ -24,6 +24,61 @@ service cloud.firestore {
         userDoc().data.roles.hasAny(['admin']);
     }
 
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isBootstrapAdminEmail() {
+      return signedIn() &&
+        request.auth.token.email is string &&
+        request.auth.token.email.matches('(?i)^(indispirit@gmail\\.com|goddessjyotis@gmail\\.com|maromabeauty@gmail\\.com)$');
+    }
+
+    function memberOnlyRoles(roles) {
+      return roles is list && roles.hasOnly(['member']) && roles.size() > 0;
+    }
+
+    function existingRoleSet(roles) {
+      return roles is list && roles.hasOnly(['admin', 'member']);
+    }
+
+    function optionalStringField(data, key) {
+      return !(key in data) || data[key] is string;
+    }
+
+    function optionalBoolField(data, key) {
+      return !(key in data) || data[key] is bool;
+    }
+
+    function validCompanyProfile(data) {
+      return data.teamId == 'team-1' &&
+        data.displayName is string &&
+        data.displayName.size() > 0 &&
+        optionalStringField(data, 'shortName') &&
+        optionalStringField(data, 'email') &&
+        optionalStringField(data, 'phone') &&
+        optionalStringField(data, 'address') &&
+        optionalStringField(data, 'notes') &&
+        optionalStringField(data, 'legalName') &&
+        optionalStringField(data, 'legalForm') &&
+        optionalStringField(data, 'registeredOffice') &&
+        optionalStringField(data, 'registerCourt') &&
+        optionalStringField(data, 'registerNumber') &&
+        optionalStringField(data, 'managingDirector') &&
+        optionalStringField(data, 'invoiceContactName') &&
+        optionalStringField(data, 'invoiceContactEmail') &&
+        optionalStringField(data, 'invoiceContactPhone') &&
+        optionalStringField(data, 'taxNumber') &&
+        optionalStringField(data, 'vatId') &&
+        optionalStringField(data, 'billingAddress') &&
+        optionalStringField(data, 'bankAccountHolder') &&
+        optionalStringField(data, 'iban') &&
+        optionalStringField(data, 'bic') &&
+        optionalStringField(data, 'paymentTerms') &&
+        optionalStringField(data, 'invoiceFooter') &&
+        optionalBoolField(data, 'smallBusiness');
+    }
+
     // Team + DM: path is always `chats/{roomId}/messages/{messageId}` (odd depth to `messages` collection).
     // Team rooms use user team id (e.g. team-1); DM rooms use sorted `uid_uid` thread ids (underscore, not slashes).
     match /chats/{chatRoomId}/messages/{messageId} {
@@ -70,9 +125,127 @@ service cloud.firestore {
       }
     }
 
-    // Keep non-event collections available to signed-in app users.
+    match /users/{userId} {
+      allow read: if signedIn();
+
+      allow create: if isSelf(userId) &&
+        request.resource.data.get('uid', userId) == userId &&
+        request.resource.data.get('teamId', 'team-1') == 'team-1' &&
+        request.resource.data.get('disabled', false) != true &&
+        request.resource.data.get('orgActive', true) != false &&
+        request.resource.data.roles is list &&
+        (
+          memberOnlyRoles(request.resource.data.roles) ||
+          (isBootstrapAdminEmail() && existingRoleSet(request.resource.data.roles) && request.resource.data.roles.hasAny(['admin']))
+        );
+
+      allow update: if signedIn() && (
+        (
+          isSelf(userId) &&
+          request.resource.data.get('uid', userId) == userId &&
+          (
+            !('orgActive' in request.resource.data) ||
+            request.resource.data.orgActive == true
+          ) &&
+          (
+            !('orgActiveLastAutoKey' in request.resource.data) ||
+            (
+              request.resource.data.orgActiveLastAutoKey is string &&
+              request.resource.data.orgActiveLastAutoKey.size() < 200
+            )
+          ) &&
+          (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['roles', 'teamId', 'disabled']) ||
+            (
+              isBootstrapAdminEmail() &&
+              existingRoleSet(request.resource.data.roles) &&
+              request.resource.data.roles.hasAny(['admin']) &&
+              request.resource.data.get('teamId', 'team-1') == 'team-1'
+            )
+          )
+        ) ||
+        (
+          isAdmin() &&
+          request.resource.data.get('uid', userId) == userId &&
+          request.resource.data.get('teamId', 'team-1') == 'team-1' &&
+          optionalBoolField(request.resource.data, 'orgActive') &&
+          (
+            !('orgActiveLastAutoKey' in request.resource.data) ||
+            (
+              request.resource.data.orgActiveLastAutoKey is string &&
+              request.resource.data.orgActiveLastAutoKey.size() < 200
+            )
+          ) &&
+          (
+            !('roles' in request.resource.data) ||
+            existingRoleSet(request.resource.data.roles)
+          )
+        )
+      );
+
+      allow delete: if isAdmin();
+
+      match /{subcollection}/{document=**} {
+        allow read, write: if signedIn();
+      }
+    }
+
+    match /appConfig/company {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() && validCompanyProfile(request.resource.data);
+      allow delete: if false;
+    }
+
+    match /invitations/{inviteId} {
+      allow get: if inviteId.matches('^[a-f0-9]{32,}$');
+      allow list: if isAdmin();
+
+      allow create: if isAdmin() &&
+        inviteId.matches('^[a-f0-9]{32,}$') &&
+        inviteId == request.resource.data.token &&
+        request.resource.data.token is string &&
+        request.resource.data.token.size() >= 32 &&
+        request.resource.data.teamId == 'team-1' &&
+        request.resource.data.role == 'member' &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.expiresAt is timestamp &&
+        request.resource.data.expiresAt > request.time &&
+        !request.resource.data.keys().hasAny(['acceptedBy', 'acceptedAt']);
+
+      allow update: if (
+        isAdmin() &&
+        resource.data.status == 'pending' &&
+        request.resource.data.status == 'revoked' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+      ) || (
+        signedIn() &&
+        resource.data.status == 'pending' &&
+        resource.data.role == 'member' &&
+        resource.data.teamId == 'team-1' &&
+        resource.data.expiresAt is timestamp &&
+        resource.data.expiresAt > request.time &&
+        request.resource.data.status == 'accepted' &&
+        request.resource.data.acceptedBy == request.auth.uid &&
+        request.resource.data.acceptedAt == request.time &&
+        request.resource.data.token == resource.data.token &&
+        request.resource.data.teamId == resource.data.teamId &&
+        request.resource.data.role == 'member' &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'acceptedBy', 'acceptedAt'])
+      );
+
+      allow delete: if false;
+    }
+
+    // Keep remaining non-event collections available to signed-in app users.
     match /{rootCollection}/{document=**} {
-      allow read, write: if signedIn() && rootCollection != 'events';
+      allow read, write: if signedIn() &&
+        rootCollection != 'events' &&
+        rootCollection != 'invitations' &&
+        rootCollection != 'users' &&
+        !(rootCollection == 'appConfig' && document == 'company');
     }
   }
 }

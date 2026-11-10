@@ -29,6 +29,9 @@ import { Icons } from '../components/Icons';
 import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import { resolveAvatarSource } from '../utils/avatar';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { activeWorksites } from '../utils/locationPrompt';
+import { applyOrgActivation } from '../services/orgStatus';
+import { isCurrentOrUpcomingDate, orgStatusLabel, shiftAssignAutoKey, sortEmployeesByOrgActive } from '../utils/orgStatus';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AssignShifts'>;
 
@@ -63,7 +66,9 @@ export default function AssignShiftsScreen({ navigation, route }: Props) {
         setLoading(false);
         return;
       }
-      setWorksites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const live = activeWorksites(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setWorksites(live);
+      setSelectedWorksite(prev => (prev && live.some(item => item.id === prev.id) ? prev : null));
       setLoading(false);
     });
 
@@ -132,6 +137,11 @@ export default function AssignShiftsScreen({ navigation, route }: Props) {
       
       await batch.commit();
 
+      const upcomingDates = dateKeys.filter(isCurrentOrUpcomingDate);
+      if (upcomingDates.length > 0) {
+        await applyOrgActivation(selectedUser.id, shiftAssignAutoKey(selectedUser.id, upcomingDates));
+      }
+
       // Notify the user
       const dateRange = dateKeys.length > 1 
         ? `${dateKeys.length} days starting ${dateKeys.sort()[0]}` 
@@ -173,7 +183,7 @@ export default function AssignShiftsScreen({ navigation, route }: Props) {
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.sectionLabel}>1. Select Team Member</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.userPicker}>
-          {users.map(u => (
+          {sortEmployeesByOrgActive(users).map(u => (
             <TouchableOpacity 
               key={u.id} 
               style={[styles.userItem, selectedUser?.id === u.id && styles.userItemActive]}
@@ -183,6 +193,7 @@ export default function AssignShiftsScreen({ navigation, route }: Props) {
               <Text style={[styles.userName, selectedUser?.id === u.id && styles.userNameActive]} numberOfLines={1}>
                 {u.name?.split(' ')[0] || 'Member'}
               </Text>
+              {orgStatusLabel(u) ? <Text style={styles.inactiveHint}>{orgStatusLabel(u)}</Text> : null}
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -275,16 +286,17 @@ const styles = StyleSheet.create({
   userItemActive: { opacity: 1 },
   userName: { fontSize: 11, color: PIZZA_FIRE.textMuted, marginTop: 6, textAlign: 'center' },
   userNameActive: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
+  inactiveHint: { color: PIZZA_FIRE.textMuted, fontSize: 9, marginTop: 2 },
   worksiteGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
-  worksitePill: { backgroundColor: PIZZA_FIRE.surface, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  worksitePill: { backgroundColor: PIZZA_FIRE.surface, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   worksitePillActive: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accentSoft },
   worksiteText: { color: PIZZA_FIRE.textMuted, fontSize: 13, fontWeight: '600' },
   worksiteTextActive: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
-  calendar: { borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginBottom: 12 },
+  calendar: { borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginBottom: 12 },
   timeRow: { flexDirection: 'row', marginBottom: 24 },
   timeLabel: { color: PIZZA_FIRE.textMuted, fontSize: 10, fontWeight: 'bold', marginBottom: 6 },
-  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 14, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
-  saveBtn: { backgroundColor: PIZZA_FIRE.hotAccent, paddingVertical: 16, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.hotAccentBorder },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 14, borderRadius: 8, fontSize: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  saveBtn: { backgroundColor: PIZZA_FIRE.hotAccent, paddingVertical: 16, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.hotAccentBorder },
   saveBtnDisabled: { opacity: 0.5 },
   saveBtnText: { color: PIZZA_FIRE.textPrimary, fontWeight: '900', fontSize: 16, textTransform: 'uppercase' },
 });

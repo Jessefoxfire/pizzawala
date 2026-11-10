@@ -10,6 +10,7 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  BackHandler,
   ScrollView,
   Image,
   Platform,
@@ -49,13 +50,21 @@ import { resolveAvatarSource } from '../utils/avatar';
 import {
   type EventDay,
   DEFAULT_EVENT_DAY_TIMES,
+  addNextEventDay,
+  eventDateWindowFromDays,
+  eventDayIssue,
+  eventDaysHaveGaps,
   formatDayHeading,
   formatOfficialOpeningRange,
   formatTimeLabel24,
+  isCompleteEventDay,
   isValidEventOpeningRange,
   normalizeEventDay,
   normalizeEventDays,
   pickLinkedScheduleDate,
+  reconcileEventDays,
+  removeEventDayByDate,
+  shouldShowEventDayExpanded,
   sortEventsByDays,
   timesForNewEventDay,
   eventDayEndsNextDay,
@@ -63,14 +72,23 @@ import {
   timeStringToDate,
   trimOpeningNote,
 } from '../utils/eventDays';
+import { canMutateEvents, resolveEventsBackLayer } from '../utils/eventEditorNav';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import { normalizeLatLng, requestLocationForFeature } from '../utils/geo';
+import { hasLocationPermission, normalizeLatLng, requestLocationForFeature } from '../utils/geo';
 import type { Geofence } from '../types';
 import { getNativeStatus, openBatteryExemptionUi } from '../geofencing/native';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
-import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
+import { SHOW_EVENT_CHAT } from '../config/buildFeatures';
 import PizzaFireScreen from '../components/PizzaFireScreen';
+import { applyOrgActivation, applyOrgActivationForUsers } from '../services/orgStatus';
+import {
+  eventAcceptAutoKey,
+  eventAssignAutoKey,
+  isCurrentOrUpcomingEvent,
+  orgStatusLabel,
+  sortEmployeesByOrgActive,
+} from '../utils/orgStatus';
 import { startNewNamedSeason } from '../services/eventSeasons';
 import {
   EVENT_SEASONS_CONFIG_ID,
@@ -116,6 +134,7 @@ type Availability = {
 type UserProfile = {
   id: string;
   name: string;
+  orgActive?: boolean;
   avatarUrl?: string;
   customAvatarUrl?: string;
 };
@@ -178,6 +197,21 @@ export default function EventsScreen({ navigation, route }: Props) {
   const stickToLatestRef = useRef(true);
   const initialEventFocusDoneRef = useRef(false);
   const [openedSeasonId, setOpenedSeasonId] = useState<string | null>(null);
+  const [calendarMode, setCalendarMode] = useState<'addFirst' | 'rangeStart' | 'rangeEnd' | null>(null);
+  const [expandedDayDates, setExpandedDayDates] = useState<string[]>([]);
+  const [activeDayDate, setActiveDayDate] = useState<string | null>(null);
+  const [noteFocusDate, setNoteFocusDate] = useState<string | null>(null);
+  const [pendingNewDayDate, setPendingNewDayDate] = useState<string | null>(null);
+  const [timePickDate, setTimePickDate] = useState<string | null>(null);
+  const [timePickMode, setTimePickMode] = useState<'add' | 'edit' | null>(null);
+  const [pickingTimeField, setPickingTimeField] = useState<'start' | 'end' | null>(null);
+  const [timeDraftStart, setTimeDraftStart] = useState(DEFAULT_EVENT_DAY_TIMES.startTime);
+  const [timeDraftEnd, setTimeDraftEnd] = useState(DEFAULT_EVENT_DAY_TIMES.endTime);
+  const timeDraftStartRef = useRef(DEFAULT_EVENT_DAY_TIMES.startTime);
+  const [availModalVisible, setAvailModalVisible] = useState(false);
+  const [availEventId, setAvailEventId] = useState<string | null>(null);
+  const [availNotes, setAvailNotes] = useState('');
+  const [submittingAvail, setSubmittingAvail] = useState(false);
   const openedFromNotificationRef = useRef<string | null>(null);
   const eventSplit = useMemo(
     () => splitSortedEventsLiveAndArchived(events, seasons, currentSeasonId),
@@ -278,22 +312,6 @@ export default function EventsScreen({ navigation, route }: Props) {
     }, [isAdmin])
   );
 
-  // Add-day calendar picker
-  const [addDayPickerVisible, setAddDayPickerVisible] = useState(false);
-  const [pendingNewDayDate, setPendingNewDayDate] = useState<string | null>(null);
-  const [timePickDate, setTimePickDate] = useState<string | null>(null);
-  const [timePickMode, setTimePickMode] = useState<'add' | 'edit' | null>(null);
-  const [pickingTimeField, setPickingTimeField] = useState<'start' | 'end' | null>(null);
-  const [timeDraftStart, setTimeDraftStart] = useState(DEFAULT_EVENT_DAY_TIMES.startTime);
-  const [timeDraftEnd, setTimeDraftEnd] = useState(DEFAULT_EVENT_DAY_TIMES.endTime);
-  const timeDraftStartRef = useRef(DEFAULT_EVENT_DAY_TIMES.startTime);
-
-  // Availability Modal
-  const [availModalVisible, setAvailModalVisible] = useState(false);
-  const [availEventId, setAvailEventId] = useState<string | null>(null);
-  const [availNotes, setAvailNotes] = useState('');
-  const [submittingAvail, setSubmittingAvail] = useState(false);
-
   useEffect(() => {
     if (Platform.OS !== 'android' || !isAdmin) return;
     void getNativeStatus().then(status => {
@@ -373,7 +391,7 @@ export default function EventsScreen({ navigation, route }: Props) {
           return;
         }
         const users = snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
-        setAllUsers(users);
+        setAllUsers(sortEmployeesByOrgActive(users));
       },
       () => {
         setAllUsers([]);
@@ -426,7 +444,7 @@ export default function EventsScreen({ navigation, route }: Props) {
           );
           availUnsubs.push(u);
 
-          if (!SHOW_DEBUG_ONLY_OPERATIONS) return;
+          if (!SHOW_EVENT_CHAT) return;
           const eventThreadDocRef = doc(collection(doc(fs, 'chats', 'events'), 'threads'), event.id);
           const messagesQuery = query(
             collection(eventThreadDocRef, 'messages'),
@@ -537,7 +555,7 @@ export default function EventsScreen({ navigation, route }: Props) {
 
   const getCurrentWorksiteLocation = async () => {
     if (locating) return;
-    const granted = await requestLocationForFeature();
+    const granted = (await hasLocationPermission()) || (await requestLocationForFeature());
     if (!granted) {
       Alert.alert('Permission denied', 'Location access is required.');
       return;
@@ -579,7 +597,7 @@ export default function EventsScreen({ navigation, route }: Props) {
   };
 
   const handleSave = async () => {
-    if (!isAdmin) {
+    if (!canMutateEvents(isAdmin)) {
       Alert.alert('Notice', 'Only admins can create or edit events.');
       return;
     }
@@ -705,6 +723,12 @@ export default function EventsScreen({ navigation, route }: Props) {
       }
       if (savedEventId) {
         await sendEventAssignmentNotifications(savedEventId, trimmedTitle, newlySelectedStaffIds);
+        if (newlySelectedStaffIds.length > 0 && isCurrentOrUpcomingEvent(payload)) {
+          const nonce = String(Date.now());
+          await applyOrgActivationForUsers(newlySelectedStaffIds, userId =>
+            eventAssignAutoKey(savedEventId, userId, nonce)
+          );
+        }
       }
       const previousGeofenceId = originalGeofenceIdRef.current;
       if (previousGeofenceId && previousGeofenceId !== geofenceId) {
@@ -783,6 +807,12 @@ export default function EventsScreen({ navigation, route }: Props) {
         },
         { merge: true }
       );
+      if (attendanceStatus === 'confirmed') {
+        const event = events.find(item => item.id === eventId);
+        if (event && isCurrentOrUpcomingEvent(event)) {
+          await applyOrgActivation(user.uid, eventAcceptAutoKey(eventId, user.uid));
+        }
+      }
       setExpandedEventIds(current => current.filter(id => id !== eventId));
     } catch (err: any) {
       Alert.alert('Notice', err?.message || 'Unable to save your event response.');
@@ -863,6 +893,14 @@ export default function EventsScreen({ navigation, route }: Props) {
             updatedAt: serverTimestamp(),
           });
           await sendEventAssignmentNotifications(eventRef.id, r.title, r.staffIds);
+          if (r.staffIds.length > 0 && isCurrentOrUpcomingEvent({
+            startDate: r.startDate,
+            endDate: r.endDate || r.startDate,
+            arrivalDate: r.arrivalDate,
+          })) {
+            const nonce = String(Date.now());
+            await applyOrgActivationForUsers(r.staffIds, userId => eventAssignAutoKey(eventRef.id, userId, nonce));
+          }
           ok++;
         } catch (e: any) {
           writeErrors.push(`Row ${i + 1}: ${e?.message || 'write failed'}`);
@@ -897,6 +935,10 @@ export default function EventsScreen({ navigation, route }: Props) {
     setNotes('');
     setNotesInputKey(current => current + 1);
     setEditingId(null);
+    setExpandedDayDates([]);
+    setActiveDayDate(null);
+    setNoteFocusDate(null);
+    setCalendarMode(null);
     setLinkedGeofenceId(null);
     originalGeofenceIdRef.current = null;
     setWorksiteCenter(null);
@@ -918,7 +960,11 @@ export default function EventsScreen({ navigation, route }: Props) {
     pendingNewSeasonNameRef.current = null;
     setPendingNewSeasonName(null);
     setTitle(event.title);
-    setEventDays(normalizeEventDays(event));
+    const days = normalizeEventDays(event);
+    setEventDays(days);
+    setExpandedDayDates(days.filter(day => !isCompleteEventDay(day)).map(day => day.date));
+    setActiveDayDate(null);
+    setNoteFocusDate(null);
     setEventMenuItems(Array.isArray(event.menuItems) ? event.menuItems : []);
     setLocationName(event.locationName);
     setLocationUrl(event.locationUrl);
@@ -939,20 +985,80 @@ export default function EventsScreen({ navigation, route }: Props) {
     setModalVisible(true);
   };
 
+  const expandDay = (dateKey: string) => {
+    setExpandedDayDates(current => {
+      const incomplete = eventDays.filter(day => !isCompleteEventDay(day)).map(day => day.date);
+      return [...new Set([...incomplete, ...current.filter(date => date === dateKey), dateKey])];
+    });
+    setActiveDayDate(dateKey);
+  };
+
+  const collapseDayIfValid = (dateKey: string, days: EventDay[] = eventDays) => {
+    const day = days.find(item => item.date === dateKey);
+    if (!day || !isCompleteEventDay(day)) return;
+    setExpandedDayDates(current => current.filter(date => date !== dateKey));
+    setActiveDayDate(current => (current === dateKey ? null : current));
+  };
+
+  const applyDateRange = (startDate: string, endDate: string) => {
+    const next = reconcileEventDays(eventDays, startDate, endDate || startDate);
+    setEventDays(next);
+    setExpandedDayDates(next.filter(day => !isCompleteEventDay(day)).map(day => day.date));
+    setActiveDayDate(null);
+  };
+
   const beginAddEventDay = (dateKey: string) => {
     if (eventDays.some(day => day.date === dateKey)) {
-      setAddDayPickerVisible(false);
+      setCalendarMode(null);
+      expandDay(dateKey);
       return;
     }
     const times = timesForNewEventDay(eventDays, dateKey);
-    timeDraftStartRef.current = times.startTime;
-    setTimeDraftStart(times.startTime);
-    setTimeDraftEnd(times.endTime);
-    setPendingNewDayDate(dateKey);
-    setTimePickDate(dateKey);
-    setTimePickMode('add');
-    setAddDayPickerVisible(false);
-    setPickingTimeField('start');
+    const added = normalizeEventDay({ date: dateKey, ...times });
+    setEventDays(prev => [...prev, added].sort((a, b) => a.date.localeCompare(b.date)));
+    setCalendarMode(null);
+    expandDay(dateKey);
+    if (!isCompleteEventDay(added)) {
+      timeDraftStartRef.current = times.startTime;
+      setTimeDraftStart(times.startTime);
+      setTimeDraftEnd(times.endTime);
+      setPendingNewDayDate(dateKey);
+      setTimePickDate(dateKey);
+      setTimePickMode('add');
+      setPickingTimeField('start');
+    }
+  };
+
+  const handleAddDay = () => {
+    if (!eventDays.length) {
+      setCalendarMode('addFirst');
+      return;
+    }
+    const result = addNextEventDay(eventDays);
+    if (!result) {
+      Alert.alert('Could not add day', 'Pick a start date first.');
+      return;
+    }
+    setEventDays(result.days);
+    setExpandedDayDates([result.added.date]);
+    setActiveDayDate(result.added.date);
+  };
+
+  const onCalendarDayPress = (dateKey: string) => {
+    if (calendarMode === 'rangeStart') {
+      const window = eventDateWindowFromDays(eventDays);
+      applyDateRange(dateKey, window.endDate && window.endDate >= dateKey ? window.endDate : dateKey);
+      setCalendarMode(null);
+      return;
+    }
+    if (calendarMode === 'rangeEnd') {
+      const window = eventDateWindowFromDays(eventDays);
+      const start = window.startDate && window.startDate <= dateKey ? window.startDate : dateKey;
+      applyDateRange(start, dateKey);
+      setCalendarMode(null);
+      return;
+    }
+    beginAddEventDay(dateKey);
   };
 
   const cancelTimePick = () => {
@@ -965,18 +1071,24 @@ export default function EventsScreen({ navigation, route }: Props) {
   const commitOpeningTimes = (dateKey: string, startTime: string, endTime: string, asNew: boolean) => {
     if (!isValidEventOpeningRange(startTime, endTime)) {
       Alert.alert('Invalid times', 'Opening and closing times must be valid and different.');
+      expandDay(dateKey);
       return false;
     }
+    const nextDay = normalizeEventDay({
+      date: dateKey,
+      startTime,
+      endTime,
+      note: eventDays.find(day => day.date === dateKey)?.note,
+    });
     if (asNew) {
       setEventDays(prev => {
         if (prev.some(day => day.date === dateKey)) return prev;
-        return [...prev, normalizeEventDay({ date: dateKey, startTime, endTime })].sort((a, b) =>
-          a.date.localeCompare(b.date)
-        );
+        return [...prev, nextDay].sort((a, b) => a.date.localeCompare(b.date));
       });
     } else {
       updateEventDayTimes(dateKey, startTime, endTime);
     }
+    expandDay(dateKey);
     return true;
   };
 
@@ -1019,6 +1131,7 @@ export default function EventsScreen({ navigation, route }: Props) {
   };
 
   const openStartTimeEditor = (day: EventDay) => {
+    expandDay(day.date);
     timeDraftStartRef.current = day.startTime;
     setTimeDraftStart(day.startTime);
     setTimeDraftEnd(day.endTime);
@@ -1028,6 +1141,7 @@ export default function EventsScreen({ navigation, route }: Props) {
   };
 
   const openEndTimeEditor = (day: EventDay) => {
+    expandDay(day.date);
     timeDraftStartRef.current = day.startTime;
     setTimeDraftStart(day.startTime);
     setTimeDraftEnd(day.endTime);
@@ -1037,7 +1151,9 @@ export default function EventsScreen({ navigation, route }: Props) {
   };
 
   const removeEventDay = (dateKey: string) => {
-    setEventDays(prev => prev.filter(day => day.date !== dateKey));
+    setEventDays(prev => removeEventDayByDate(prev, dateKey));
+    setExpandedDayDates(current => current.filter(date => date !== dateKey));
+    setActiveDayDate(current => (current === dateKey ? null : current));
     if (timePickDate === dateKey) cancelTimePick();
   };
 
@@ -1058,6 +1174,91 @@ export default function EventsScreen({ navigation, route }: Props) {
       prev.map(day => (day.date === dateKey ? normalizeEventDay({ ...day, note }) : day))
     );
   };
+
+  const closeEventForm = () => {
+    setModalVisible(false);
+    setPendingNewSeasonName(null);
+    setCalendarMode(null);
+    setExpandedDayDates([]);
+    setActiveDayDate(null);
+    setNoteFocusDate(null);
+    resetForm();
+  };
+
+  const handleScreenBack = () => {
+    const layer = resolveEventsBackLayer({
+      pickingTime: Boolean(pickingTimeField),
+      calendarVisible: calendarMode != null,
+      menuEditorOpen: Boolean(menuEditor),
+      seasonModalVisible,
+      availModalVisible,
+      eventFormVisible: modalVisible,
+      openedSeasonId,
+    });
+    if (layer === 'closeTimePick') {
+      cancelTimePick();
+      return true;
+    }
+    if (layer === 'closeCalendar') {
+      setCalendarMode(null);
+      return true;
+    }
+    if (layer === 'closeMenuEditor') {
+      setMenuEditor(null);
+      return true;
+    }
+    if (layer === 'closeSeasonModal') {
+      setSeasonModalVisible(false);
+      return true;
+    }
+    if (layer === 'closeAvailModal') {
+      setAvailModalVisible(false);
+      return true;
+    }
+    if (layer === 'closeEventForm') {
+      closeEventForm();
+      return true;
+    }
+    if (layer === 'closeSeasonArchive') {
+      stickToLatestRef.current = true;
+      setOpenedSeasonId(null);
+      return true;
+    }
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return true;
+    }
+    return false;
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', handleScreenBack);
+      return () => sub.remove();
+    }, [
+      availModalVisible,
+      calendarMode,
+      menuEditor,
+      modalVisible,
+      openedSeasonId,
+      pickingTimeField,
+      seasonModalVisible,
+    ])
+  );
+
+  useEffect(() => {
+    if (pickingTimeField || noteFocusDate) return undefined;
+    const timer = setTimeout(() => {
+      setExpandedDayDates(current =>
+        current.filter(date => {
+          if (date === activeDayDate || date === noteFocusDate) return true;
+          const day = eventDays.find(item => item.date === date);
+          return !day || !isCompleteEventDay(day);
+        })
+      );
+    }, 650);
+    return () => clearTimeout(timer);
+  }, [activeDayDate, eventDays, noteFocusDate, pickingTimeField]);
 
   const openAvail = (eventId: string) => {
     const existing = availabilityMap[eventId]?.find(a => a.userId === auth.currentUser?.uid);
@@ -1372,7 +1573,7 @@ export default function EventsScreen({ navigation, route }: Props) {
           )}
         </View>
 
-        {SHOW_DEBUG_ONLY_OPERATIONS ? <TouchableOpacity
+        {SHOW_EVENT_CHAT ? <TouchableOpacity
           style={styles.eventChatBtn}
           onPress={() => navigation.navigate('Chat', { eventId: item.id, eventTitle: item.title })}
         >
@@ -1418,16 +1619,7 @@ export default function EventsScreen({ navigation, route }: Props) {
     <PizzaFireScreen>
     <View style={styles.safe}>
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => {
-            if (openedSeasonId) {
-              stickToLatestRef.current = true;
-              setOpenedSeasonId(null);
-              return;
-            }
-            navigation.goBack();
-          }}
-        >
+        <TouchableOpacity onPress={() => { handleScreenBack(); }}>
           <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
         </TouchableOpacity>
         <Text style={styles.title} numberOfLines={1}>{openedSeason ? openedSeason.season.name : 'Events'}</Text>
@@ -1546,7 +1738,7 @@ export default function EventsScreen({ navigation, route }: Props) {
       </Modal>
 
       {/* Main Modal */}
-      <Modal visible={modalVisible && isAdmin} animationType="slide" transparent>
+      <Modal visible={modalVisible && isAdmin} animationType="slide" transparent onRequestClose={handleScreenBack}>
         <View style={styles.modalBg}>
           <ScrollView style={styles.modalContent} keyboardShouldPersistTaps="handled">
             <Text style={styles.modalTitle}>{editingId && !pendingNewSeasonName ? 'Edit Event' : 'New Event'}</Text>
@@ -1561,17 +1753,91 @@ export default function EventsScreen({ navigation, route }: Props) {
 
             <Text style={styles.label}>Event Days & Official Opening</Text>
             <Text style={styles.hintInline}>
-              These times are shop/event opening hours, not employee shifts. Tap START or FINISH to edit. Overnight closing shows +1 day.
+              These times are shop/event opening hours, not employee shifts. A date range creates one entry per day. Add Day copies the last day’s times onto the next date. Overnight closing shows +1 day.
             </Text>
-            {eventDays.map((day, index) => (
+            {(() => {
+              const window = eventDateWindowFromDays(eventDays);
+              return (
+                <View style={styles.rangeRow}>
+                  <TouchableOpacity
+                    style={styles.rangeChip}
+                    onPress={() => {
+                      setActiveDayDate(null);
+                      setCalendarMode('rangeStart');
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Range start date"
+                  >
+                    <Text style={styles.rangeChipLabel}>From</Text>
+                    <Text style={styles.rangeChipValue}>{window.startDate ? formatDayHeading(window.startDate) : 'Date'}</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.dayTimeDash}>–</Text>
+                  <TouchableOpacity
+                    style={styles.rangeChip}
+                    onPress={() => {
+                      setActiveDayDate(null);
+                      setCalendarMode(window.startDate ? 'rangeEnd' : 'rangeStart');
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Range end date"
+                  >
+                    <Text style={styles.rangeChipLabel}>To</Text>
+                    <Text style={styles.rangeChipValue}>{window.endDate ? formatDayHeading(window.endDate) : 'Date'}</Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })()}
+            {eventDaysHaveGaps(eventDays) ? (
+              <Text style={styles.hintInline}>
+                Days are not consecutive. Changing From or To fills every day in between.
+              </Text>
+            ) : null}
+            {eventDays.map((day, index) => {
+              const issue = eventDayIssue(day);
+              const expanded = shouldShowEventDayExpanded({
+                day,
+                forceExpanded: expandedDayDates.includes(day.date),
+                interacting: activeDayDate === day.date || noteFocusDate === day.date || timePickDate === day.date,
+              });
+              if (!expanded) {
+                return (
+                  <View key={day.date} style={styles.daySummaryRow}>
+                    <View style={styles.daySummaryText}>
+                      <Text style={styles.dayEditorDate}>
+                        {formatDayHeading(day.date)}
+                      </Text>
+                      <Text style={styles.daySummaryTimes}>
+                        {formatOfficialOpeningRange(day.startTime, day.endTime, eventDayEndsNextDay(day))}
+                        {day.note ? ` · ${day.note}` : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.daySummaryActions}>
+                      <TouchableOpacity onPress={() => expandDay(day.date)} hitSlop={8} accessibilityRole="button">
+                        <Text style={styles.dayEditText}>Edit</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => removeEventDay(day.date)} hitSlop={8} accessibilityRole="button">
+                        <Text style={styles.dayRemoveText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              }
+              return (
               <View key={day.date} style={styles.dayEditorRow}>
                 <View style={styles.dayEditorHeader}>
                   <Text style={styles.dayEditorDate}>
                     Day {index + 1} · {formatDayHeading(day.date)}
                   </Text>
-                  <TouchableOpacity onPress={() => removeEventDay(day.date)}>
-                    <Text style={styles.dayRemoveText}>Remove</Text>
-                  </TouchableOpacity>
+                  <View style={styles.daySummaryActions}>
+                    {isCompleteEventDay(day) ? (
+                      <TouchableOpacity onPress={() => collapseDayIfValid(day.date)} hitSlop={8}>
+                        <Text style={styles.dayEditText}>Done</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    <TouchableOpacity onPress={() => removeEventDay(day.date)} hitSlop={8}>
+                      <Text style={styles.dayRemoveText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
                 <View style={styles.dayTimeSplit}>
                   <TouchableOpacity style={styles.dayTimeHalf} onPress={() => openStartTimeEditor(day)}>
@@ -1587,19 +1853,26 @@ export default function EventsScreen({ navigation, route }: Props) {
                     </Text>
                   </TouchableOpacity>
                 </View>
+                {issue ? <Text style={styles.dayIssueText}>{issue}</Text> : null}
                 <Text style={styles.dayNoteLabel}>Note</Text>
                 <TextInput
                   key={`event-day-note-${day.date}-${notesInputKey}`}
                   style={styles.dayNoteInput}
                   defaultValue={day.note || ''}
                   onChangeText={text => updateEventDayNote(day.date, text)}
+                  onFocus={() => {
+                    expandDay(day.date);
+                    setNoteFocusDate(day.date);
+                  }}
+                  onBlur={() => setNoteFocusDate(current => (current === day.date ? null : current))}
                   placeholder="Optional — e.g. Food trucks may arrive from 16:00"
                   placeholderTextColor="#5A4739"
                   multiline
                 />
               </View>
-            ))}
-            <TouchableOpacity style={styles.addDayBtn} onPress={() => setAddDayPickerVisible(true)}>
+              );
+            })}
+            <TouchableOpacity style={styles.addDayBtn} onPress={handleAddDay}>
               <Icons.plus color={PIZZA_FIRE.gold} width={22} height={22} />
               <Text style={styles.addDayBtnText}>Add Day</Text>
             </TouchableOpacity>
@@ -1777,7 +2050,9 @@ export default function EventsScreen({ navigation, route }: Props) {
                 return (
                   <TouchableOpacity key={user.id} style={[styles.staffPickerItem, isSelected && styles.staffPickerItemActive, isConfirmed && styles.staffPickerItemConfirmed]} onPress={() => toggleStaffSelection(user.id)}>
                     <Image source={resolveAvatarSource(user.avatarUrl, user.customAvatarUrl)} style={styles.pickerAvatar} />
-                    <Text style={[styles.staffPickerName, isSelected && styles.staffPickerNameActive, isConfirmed && styles.staffPickerNameConfirmed]}>{user.name}</Text>
+                    <Text style={[styles.staffPickerName, isSelected && styles.staffPickerNameActive, isConfirmed && styles.staffPickerNameConfirmed]}>
+                      {user.name}{orgStatusLabel(user) ? ` · ${orgStatusLabel(user)}` : ''}
+                    </Text>
                     {isSelected && <Text style={[styles.checkMark, isConfirmed && styles.checkMarkConfirmed]}>✓</Text>}
                   </TouchableOpacity>
                 );
@@ -1790,11 +2065,7 @@ export default function EventsScreen({ navigation, route }: Props) {
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={styles.cancelBtn}
-                onPress={() => {
-                  setModalVisible(false);
-                  setPendingNewSeasonName(null);
-                  resetForm();
-                }}
+                onPress={closeEventForm}
               >
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
@@ -1804,20 +2075,22 @@ export default function EventsScreen({ navigation, route }: Props) {
         </View>
       </Modal>
 
-      <Modal visible={addDayPickerVisible && isAdmin} transparent animationType="fade">
+      <Modal visible={calendarMode != null && isAdmin} transparent animationType="fade" onRequestClose={handleScreenBack}>
         <View style={styles.datePickerOverlay}>
           <View style={styles.calendarCard}>
-            <Text style={styles.calendarTitle}>Add event day</Text>
+            <Text style={styles.calendarTitle}>
+              {calendarMode === 'rangeEnd' ? 'Range end' : calendarMode === 'rangeStart' ? 'Range start' : 'First event day'}
+            </Text>
             <PizzaFireCalendar
               firstDay={1}
               theme={{
                 backgroundColor: PIZZA_FIRE.surfaceInset, calendarBackground: 'transparent', selectedDayBackgroundColor: PIZZA_FIRE.accent,
                 dayTextColor: '#F6EDE2', monthTextColor: '#F6EDE2', textDisabledColor: '#3A2D24',
               }}
-              onDayPress={(day: any) => beginAddEventDay(day.dateString)}
+              onDayPress={(day: any) => onCalendarDayPress(day.dateString)}
               markedDates={markedAddDays}
             />
-            <TouchableOpacity onPress={() => setAddDayPickerVisible(false)} style={styles.closeCalendarBtn}>
+            <TouchableOpacity onPress={() => setCalendarMode(null)} style={styles.closeCalendarBtn}>
               <Text style={styles.closeCalendarBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
@@ -1915,7 +2188,7 @@ export default function EventsScreen({ navigation, route }: Props) {
       </Modal>
 
       {/* Availability Notes Modal */}
-      <Modal visible={availModalVisible} animationType="fade" transparent>
+      <Modal visible={availModalVisible} animationType="fade" transparent onRequestClose={handleScreenBack}>
         <View style={styles.modalBg}>
           <View style={[styles.modalCard, sheetCardStyle(layout)]}>
             <Text style={styles.modalTitle}>Set Availability</Text>
@@ -1948,7 +2221,7 @@ const styles = StyleSheet.create({
   csvBtn: {
     paddingHorizontal: 10,
     paddingVertical: 8,
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
     backgroundColor: PIZZA_FIRE.qlFill,
@@ -1964,7 +2237,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.qlFill,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
@@ -1987,7 +2260,7 @@ const styles = StyleSheet.create({
     marginBottom: 28,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 14,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
     backgroundColor: PIZZA_FIRE.qlFill,
@@ -2000,7 +2273,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 16,
     marginBottom: 16,
   },
@@ -2019,7 +2292,7 @@ const styles = StyleSheet.create({
   eventCard: {
     backgroundColor: PIZZA_FIRE.surface,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 8,
     marginBottom: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -2028,7 +2301,7 @@ const styles = StyleSheet.create({
   eventHeaderExpanded: { marginBottom: 10 },
   eventTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '800' },
   eventHeaderControls: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', marginLeft: 10 },
-  memberResponsePill: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 10, borderWidth: 1 },
+  memberResponsePill: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 7, borderWidth: 1 },
   memberResponseIn: { backgroundColor: 'rgba(76, 175, 80, 0.12)', borderColor: '#4CAF50' },
   memberResponseOut: { backgroundColor: 'rgba(255, 69, 58, 0.20)', borderColor: 'rgba(255, 160, 150, 0.75)' },
   memberResponseText: { fontSize: 11, fontWeight: '900' },
@@ -2048,7 +2321,7 @@ const styles = StyleSheet.create({
   },
   daysSection: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 12,
     marginBottom: 12,
     borderWidth: 1,
@@ -2092,7 +2365,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.qlFill,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     paddingVertical: 10,
     alignItems: 'center',
   },
@@ -2119,7 +2392,7 @@ const styles = StyleSheet.create({
   availBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 11, fontWeight: '700' },
   availBtnTextActive: { color: '#4CAF50' },
   attendanceActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
-  attendanceBtn: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 16, borderWidth: 1 },
+  attendanceBtn: { flex: 1, alignItems: 'center', paddingVertical: 10, borderRadius: 8, borderWidth: 1 },
   attendanceConfirmBtn: { backgroundColor: 'rgba(76, 175, 80, 0.10)', borderColor: '#4CAF50' },
   attendanceConfirmBtnActive: { backgroundColor: 'rgba(76, 175, 80, 0.22)' },
   attendanceConfirmText: { color: '#4CAF50', fontSize: 13, fontWeight: '800' },
@@ -2132,7 +2405,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 44,
@@ -2143,7 +2416,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.4,
   },
-  menuSection: { marginTop: 14, backgroundColor: PIZZA_FIRE.surfaceInset, borderRadius: 14, padding: 12, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
+  menuSection: { marginTop: 14, backgroundColor: PIZZA_FIRE.surfaceInset, borderRadius: 7, padding: 12, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
   menuRow: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
   menuItemTap: { flex: 1, minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   // Match the text treatment used by the official-opening day rows.
@@ -2174,7 +2447,7 @@ const styles = StyleSheet.create({
   viewAvailBtnText: { color: PIZZA_FIRE.accent, fontSize: 12, fontWeight: '700' },
   editBtn: {
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: PIZZA_FIRE.qlFill,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
@@ -2184,7 +2457,7 @@ const styles = StyleSheet.create({
   editBtnText: { color: PIZZA_FIRE.textSecondary, fontSize: 13, fontWeight: '800' },
   deleteBtn: {
     paddingVertical: 10,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: 'rgba(255, 69, 58, 0.34)',
     borderWidth: 1,
     borderColor: 'rgba(255, 160, 150, 0.75)',
@@ -2195,26 +2468,68 @@ const styles = StyleSheet.create({
   empty: { color: PIZZA_FIRE.textMuted, textAlign: 'center', marginTop: 40, fontStyle: 'italic' },
   errorWrap: { padding: 24, marginTop: 24, alignItems: 'center' },
   errorText: { color: '#9E3C2E', textAlign: 'center', fontSize: 14, marginBottom: 16 },
-  retryBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  retryBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 7, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
   retryBtnText: { color: PIZZA_FIRE.accent, fontWeight: '800' },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', padding: 20 },
-  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 24, padding: 24, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  modalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 8, padding: 24, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   modalContent: { backgroundColor: PIZZA_FIRE.bgMid, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: '95%' },
   modalTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 20, fontWeight: '900', marginBottom: 16, textAlign: 'center' },
   label: { color: PIZZA_FIRE.textMuted, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginTop: 14, marginBottom: 4, letterSpacing: 1 },
   hintInline: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginBottom: 8 },
   gridRow: { flexDirection: 'row', gap: 12 },
+  rangeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  rangeChip: {
+    flex: 1,
+    minHeight: 48,
+    backgroundColor: PIZZA_FIRE.crustDark,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.cardBorder,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    justifyContent: 'center',
+  },
+  rangeChipLabel: {
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+  },
+  rangeChipValue: { color: PIZZA_FIRE.textPrimary, fontSize: 15, fontWeight: '800', marginTop: 2 },
   dayEditorRow: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 12,
     marginBottom: 10,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
+  daySummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: PIZZA_FIRE.surfaceInset,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: PIZZA_FIRE.cardBorder,
+    minHeight: 48,
+  },
+  daySummaryText: { flex: 1, paddingRight: 8 },
+  daySummaryTimes: { color: PIZZA_FIRE.textSecondary, fontSize: 13, fontWeight: '600', marginTop: 2 },
+  daySummaryActions: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 2 },
+  dayEditText: { color: PIZZA_FIRE.accent, fontSize: 13, fontWeight: '800' },
+  dayIssueText: { color: '#E07A5F', fontSize: 12, fontWeight: '700', marginTop: 8 },
   dayEditorHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   dayEditorDate: { color: PIZZA_FIRE.textPrimary, fontSize: 14, fontWeight: '800' },
-  dayRemoveText: { color: '#9E3C2E', fontSize: 12, fontWeight: '700' },
+  dayRemoveText: { color: '#9E3C2E', fontSize: 13, fontWeight: '700' },
   dayTimeSplit: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2223,7 +2538,7 @@ const styles = StyleSheet.create({
   dayTimeHalf: {
     flex: 1,
     backgroundColor: PIZZA_FIRE.crustDark,
-    borderRadius: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     paddingVertical: 12,
@@ -2254,7 +2569,7 @@ const styles = StyleSheet.create({
   },
   dayNoteInput: {
     backgroundColor: PIZZA_FIRE.crustDark,
-    borderRadius: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     color: PIZZA_FIRE.textPrimary,
@@ -2266,7 +2581,7 @@ const styles = StyleSheet.create({
   },
   dayTimeButton: {
     backgroundColor: PIZZA_FIRE.crustDark,
-    borderRadius: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     paddingVertical: 12,
@@ -2298,7 +2613,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
@@ -2326,7 +2641,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.accent,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
@@ -2337,7 +2652,7 @@ const styles = StyleSheet.create({
   addDayBtnText: { color: PIZZA_FIRE.accent, fontWeight: '800', fontSize: 14 },
   batteryBanner: {
     backgroundColor: '#4A2A1A',
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 12,
     marginBottom: 12,
     borderWidth: 1,
@@ -2345,13 +2660,13 @@ const styles = StyleSheet.create({
   },
   batteryTitle: { color: PIZZA_FIRE.textPrimary, fontWeight: '800', marginBottom: 4 },
   batteryText: { color: PIZZA_FIRE.textSecondary, fontSize: 12, lineHeight: 18 },
-  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 12, borderRadius: 10, fontSize: 14, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
-  dateBtn: { backgroundColor: PIZZA_FIRE.inputBg, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, alignItems: 'center' },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 12, borderRadius: 7, fontSize: 14, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  dateBtn: { backgroundColor: PIZZA_FIRE.inputBg, padding: 12, borderRadius: 7, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, alignItems: 'center' },
   dateBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 14 },
-  staffPicker: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 12, padding: 6, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginTop: 4 },
+  staffPicker: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 8, padding: 6, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginTop: 4 },
   selectAllStaffBtn: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 7, marginBottom: 4, borderRadius: 8, backgroundColor: PIZZA_FIRE.qlFill, borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
   selectAllStaffText: { color: PIZZA_FIRE.accent, fontSize: 12, fontWeight: '800' },
-  staffDropdown: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  staffDropdown: { backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   staffDropdownText: { color: PIZZA_FIRE.textPrimary, fontSize: 14, fontWeight: '700' },
   staffPickerItem: { flexDirection: 'row', alignItems: 'center', padding: 8, borderRadius: 8, marginBottom: 2 },
   staffPickerItemActive: { backgroundColor: 'rgba(201, 120, 43, 0.15)' },
@@ -2368,7 +2683,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
     backgroundColor: PIZZA_FIRE.qlFill,
@@ -2378,14 +2693,14 @@ const styles = StyleSheet.create({
     flex: 2,
     backgroundColor: PIZZA_FIRE.hotAccent,
     paddingVertical: 12,
-    borderRadius: 16,
+    borderRadius: 8,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: PIZZA_FIRE.hotAccentBorder,
   },
   saveText: { color: PIZZA_FIRE.textPrimary, fontWeight: '800', fontSize: 15 },
   datePickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 20 },
-  calendarCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  calendarCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 8, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   calendarTitle: { color: PIZZA_FIRE.accent, fontSize: 14, fontWeight: '800', textAlign: 'center', marginBottom: 12 },
   closeCalendarBtn: { marginTop: 12, padding: 10, alignItems: 'center' },
   closeCalendarBtnText: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },

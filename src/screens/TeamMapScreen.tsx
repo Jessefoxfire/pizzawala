@@ -190,7 +190,7 @@ const styles = StyleSheet.create({
   markerAvatar: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 8,
     borderWidth: 2,
     borderColor: PIZZA_FIRE.accent,
     backgroundColor: PIZZA_FIRE.surfaceInset,
@@ -215,7 +215,7 @@ const styles = StyleSheet.create({
     right: 20,
     backgroundColor: PIZZA_FIRE.bgMid,
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     alignItems: 'center',

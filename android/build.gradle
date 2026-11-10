@@ -22,20 +22,54 @@ buildscript {
 
 apply plugin: "com.facebook.react.rootproject"
 
-subprojects {
-    plugins.withId('com.android.library') {
+// Windows ninja Stat() fails above 260 chars. Keep CMake/Ninja folders short.
+def pizzaWalaCxxRoot = new File("C:/pw-cxx")
+if (!pizzaWalaCxxRoot.exists()) {
+    pizzaWalaCxxRoot.mkdirs()
+}
+
+def configureShortCxx = { Project p ->
+    def androidExt = p.extensions.findByName("android")
+    if (androidExt == null) {
+        return
+    }
+    def safeName = p.name.replaceAll(/[^A-Za-z0-9._-]/, "_")
+    // App uses C:/pw-cxx directly so CMake object dirs stay short enough to hash.
+    def cxxDir = (p.name == "app") ? pizzaWalaCxxRoot : new File(pizzaWalaCxxRoot, safeName)
+    try {
+        androidExt.externalNativeBuild.cmake.buildStagingDirectory = cxxDir
+    } catch (Throwable ignored) {
+        // Module has no CMake / AGP version without buildStagingDirectory.
+    }
+    try {
+        def cmakeArgs = androidExt.defaultConfig.externalNativeBuild.cmake.arguments
+        def preload = new File(rootDir, "cmake-object-path.cmake").absolutePath.replace('\\', '/')
+        if (cmakeArgs.every { !it.toString().startsWith("-DCMAKE_OBJECT_PATH_MAX") }) {
+            cmakeArgs.add("-DCMAKE_OBJECT_PATH_MAX=180")
+        }
+        if (cmakeArgs.every { !it.toString().startsWith("-C") }) {
+            cmakeArgs.add("-C${preload}")
+        }
+    } catch (Throwable ignored) {
+    }
+}
+
+subprojects { Project p ->
+    p.plugins.withId('com.android.library') {
         android {
             compileSdk 36
             buildToolsVersion "36.0.0"
         }
+        configureShortCxx(p)
     }
-    plugins.withId('com.android.application') {
+    p.plugins.withId('com.android.application') {
         android {
             compileSdk 36
             buildToolsVersion "36.0.0"
         }
+        configureShortCxx(p)
     }
-    configurations.all {
+    p.configurations.all {
         resolutionStrategy {
             force "com.google.android.gms:play-services-location:21.3.0"
         }

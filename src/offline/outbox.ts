@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { OfflineOpenShift, OutboxItem, PendingShiftEnd } from './types';
+import type { OfflineClosedShift, OfflineOpenShift, OutboxItem, PendingShiftEnd } from './types';
 import { notifyOutboxChanged } from './events';
 
 const OUTBOX_KEY = 'offline_outbox_v1';
 const OFFLINE_OPEN_SHIFT_KEY = 'offline_open_shift_v1';
+const OFFLINE_CLOSED_SHIFTS_KEY = 'offline_closed_shifts_v1';
 const LAST_OPEN_SHIFT_ID_KEY = 'last_open_shift_id_v1';
 
 const randomId = () =>
@@ -51,7 +52,17 @@ export function createOutboxId(): string {
 }
 
 export function createClientShiftId(): string {
-  return `offline-${randomId()}`;
+  return `shift-${randomId()}`;
+}
+
+export function outboxTouchesShift(item: OutboxItem, shiftId: string): boolean {
+  if (item.type === 'shift_start') return item.clientShiftId === shiftId;
+  if (item.type === 'temperature_log') return false;
+  return item.payload.shiftId === shiftId;
+}
+
+export function outboxHasPendingStart(items: OutboxItem[], shiftId: string): boolean {
+  return items.some(item => item.type === 'shift_start' && item.clientShiftId === shiftId);
 }
 
 export async function getOfflineOpenShift(): Promise<OfflineOpenShift | null> {
@@ -72,6 +83,40 @@ export async function setOfflineOpenShift(shift: OfflineOpenShift): Promise<void
 export async function clearOfflineOpenShift(): Promise<void> {
   await AsyncStorage.removeItem(OFFLINE_OPEN_SHIFT_KEY);
   notifyOutboxChanged();
+}
+
+export async function getOfflineClosedShifts(): Promise<OfflineClosedShift[]> {
+  const raw = await AsyncStorage.getItem(OFFLINE_CLOSED_SHIFTS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as OfflineClosedShift[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveOfflineClosedShifts(shifts: OfflineClosedShift[]): Promise<void> {
+  if (!shifts.length) {
+    await AsyncStorage.removeItem(OFFLINE_CLOSED_SHIFTS_KEY);
+  } else {
+    await AsyncStorage.setItem(OFFLINE_CLOSED_SHIFTS_KEY, JSON.stringify(shifts));
+  }
+  notifyOutboxChanged();
+}
+
+export async function upsertOfflineClosedShift(shift: OfflineClosedShift): Promise<void> {
+  const current = await getOfflineClosedShifts();
+  const next = current.filter(item => item.clientShiftId !== shift.clientShiftId);
+  next.push(shift);
+  await saveOfflineClosedShifts(next);
+}
+
+export async function removeOfflineClosedShift(shiftId: string): Promise<void> {
+  const current = await getOfflineClosedShifts();
+  const next = current.filter(item => item.clientShiftId !== shiftId);
+  if (next.length === current.length) return;
+  await saveOfflineClosedShifts(next);
 }
 
 export async function rememberOpenShiftId(shiftId: string): Promise<void> {

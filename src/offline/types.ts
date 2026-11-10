@@ -98,6 +98,22 @@ export type OfflineOpenShift = {
   pendingSync: true;
 };
 
+export type OfflineClosedShift = {
+  clientShiftId: string;
+  userId: string;
+  teamId: string;
+  geofenceId?: string | null;
+  geofenceName?: string | null;
+  workCategory?: 'driving' | null;
+  startedBy: string;
+  recordedAtIso: string;
+  workPeriods: ShiftPeriod[];
+  breakPeriods: ShiftPeriod[];
+  startAt: string;
+  endAt: string;
+  pendingSync: true;
+};
+
 export type WriteResult = {
   queued: boolean;
   clientShiftId?: string;

@@ -21,6 +21,9 @@ import { resolveAvatarSource } from '../utils/avatar';
 import PizzaFireCalendar from '../components/PizzaFireCalendar';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { formColumnFrame, useAppLayout } from '../theme/responsiveLayout';
+import { activeWorksites } from '../utils/locationPrompt';
+import { applyOrgActivation } from '../services/orgStatus';
+import { isCurrentOrUpcomingDate, orgStatusLabel, shiftAssignAutoKey, sortEmployeesByOrgActive } from '../utils/orgStatus';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ManualShiftEntry'>;
 
@@ -46,7 +49,7 @@ export default function ManualShiftEntryScreen({ navigation }: Props) {
         setUsers(uSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
         const wSnap = await getDocs(query(collection(db, 'geofences'), orderBy('name', 'asc')));
-        setWorksites(wSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setWorksites(activeWorksites(wSnap.docs.map(d => ({ id: d.id, ...d.data() }))));
       } catch (err) {
         console.error(err);
       } finally {
@@ -94,6 +97,9 @@ export default function ManualShiftEntryScreen({ navigation }: Props) {
         manual: true,
         createdAt: serverTimestamp(),
       });
+      if (isCurrentOrUpcomingDate(date)) {
+        await applyOrgActivation(selectedUser.id, shiftAssignAutoKey(selectedUser.id, [date]));
+      }
       Alert.alert('Success', 'Shift created successfully.');
       navigation.goBack();
     } catch (err: any) {
@@ -124,7 +130,7 @@ export default function ManualShiftEntryScreen({ navigation }: Props) {
       <ScrollView contentContainerStyle={[styles.content, formColumnFrame(layout)]}>
         <Text style={styles.label}>1. Select Team Member</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.userPicker}>
-          {users.map(u => (
+          {sortEmployeesByOrgActive(users).map(u => (
             <TouchableOpacity 
               key={u.id} 
               style={[styles.userItem, selectedUser?.id === u.id && styles.userItemActive]}
@@ -238,21 +244,21 @@ const styles = StyleSheet.create({
   userName: { fontSize: 11, color: PIZZA_FIRE.textMuted, marginTop: 6, textAlign: 'center' },
   userNameActive: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
   worksiteGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
-  worksitePill: { backgroundColor: PIZZA_FIRE.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  worksitePill: { backgroundColor: PIZZA_FIRE.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   worksitePillActive: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accentSoft },
   worksiteText: { color: PIZZA_FIRE.textMuted, fontSize: 14 },
   worksiteTextActive: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
   timeRow: { flexDirection: 'row', marginTop: 8 },
-  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 14, borderRadius: 12, fontSize: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, justifyContent: 'center' },
+  input: { backgroundColor: PIZZA_FIRE.inputBg, color: PIZZA_FIRE.textPrimary, padding: 14, borderRadius: 8, fontSize: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, justifyContent: 'center' },
   inputText: { color: PIZZA_FIRE.textPrimary, fontSize: 16 },
-  summaryCard: { backgroundColor: PIZZA_FIRE.surface, padding: 20, borderRadius: 16, borderWidth: 1, borderColor: PIZZA_FIRE.accent, marginTop: 24, alignItems: 'center' },
+  summaryCard: { backgroundColor: PIZZA_FIRE.surface, padding: 20, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.accent, marginTop: 24, alignItems: 'center' },
   summaryLabel: { color: PIZZA_FIRE.textMuted, fontSize: 12, fontWeight: 'bold' },
   summaryValue: { color: PIZZA_FIRE.accent, fontSize: 32, fontWeight: '900', marginTop: 4 },
-  saveBtn: { backgroundColor: PIZZA_FIRE.hotAccent, paddingVertical: 16, borderRadius: 16, alignItems: 'center', marginTop: 24, marginBottom: 40, borderWidth: 1, borderColor: PIZZA_FIRE.hotAccentBorder },
+  saveBtn: { backgroundColor: PIZZA_FIRE.hotAccent, paddingVertical: 16, borderRadius: 8, alignItems: 'center', marginTop: 24, marginBottom: 40, borderWidth: 1, borderColor: PIZZA_FIRE.hotAccentBorder },
   saveBtnDisabled: { opacity: 0.5 },
   saveBtnText: { color: PIZZA_FIRE.textPrimary, fontWeight: '900', fontSize: 16 },
   modalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'center', padding: 20 },
-  calendarCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 20, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  calendarCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 8, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   closeBtn: { marginTop: 16, padding: 12, alignItems: 'center' },
   closeBtnText: { color: PIZZA_FIRE.accent, fontWeight: 'bold' },
 });

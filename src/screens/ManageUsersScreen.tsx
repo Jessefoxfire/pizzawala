@@ -30,26 +30,24 @@ import {
   updateDoc,
 } from '@react-native-firebase/firestore';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { resetPassword } from '../services/firebase';
 import { deleteHygieneCredential, formatDateTime } from '../services/hygiene';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { openUserProfile } from '../navigation/openUserProfile';
 import { Icons } from '../components/Icons';
 import { useHygieneCredentialUpload } from '../hooks/useHygieneCredentialUpload';
 import { getRequiredDocumentTypesForUser } from '../constants/germanEmployeeCompliance';
 import type { HygieneEmployeeOverride } from '../utils/hygieneCredentialPicker';
-import PizzaFireButton from '../components/PizzaFireButton';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
-import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import { isPersonnelDocument } from '../utils/personnelDocuments';
+import { isOrgActive, orgActiveManualWrite, orgStatusLabel, sortEmployeesByOrgActive } from '../utils/orgStatus';
 import {
   GERMAN_COMPLIANCE_FIELDS,
-  SALUTATION_OPTIONS,
   readGermanCompliance,
   type GermanComplianceProfile,
-  type Salutation,
 } from '../constants/germanEmployeeCompliance';
+import { LAST_ADMIN_NOTICE, withAdminRole, wouldLeaveNoActiveAdmin } from '../utils/teamRoles';
+import { resolveAvatarSource } from '../utils/avatar';
+import SalutationDropdown from '../components/SalutationDropdown';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ManageUsers'>;
 
@@ -60,7 +58,9 @@ type UserRecord = {
   emailLower?: string;
   roles?: string[];
   disabled?: boolean;
+  orgActive?: boolean;
   avatarUrl?: string | null;
+  customAvatarUrl?: string | null;
   lastLocation?: { lat: number; lng: number } | null;
   lastLocationUpdate?: any;
   requiredDocuments?: string[];
@@ -80,7 +80,6 @@ export default function ManageUsersScreen({ navigation }: Props) {
   const [editAdmin, setEditAdmin] = useState(false);
   const [editCompliance, setEditCompliance] = useState<GermanComplianceProfile>({});
   const [saving, setSaving] = useState(false);
-  const [resettingId, setResettingId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [availableDocTypes, setAvailableDocTypes] = useState<string[]>([]);
   const [selectedRequiredDocs, setSelectedRequiredDocs] = useState<string[]>([]);
@@ -93,7 +92,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
   const [deletingDocType, setDeletingDocType] = useState<string | null>(null);
   const [uploadingDocType, setUploadingDocType] = useState<string | null>(null);
   const [uploadTargetUserId, setUploadTargetUserId] = useState<string | null>(null);
-  const [expandedUserIds, setExpandedUserIds] = useState<string[]>([]);
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
   const { pickAndUpload, nameConfirmModal, sourcePickerModal, isUploading: isUploadingDoc } = useHygieneCredentialUpload();
 
@@ -208,13 +207,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
     ])).sort((a, b) => a.localeCompare(b));
   }, [availableDocTypes, selectedRequiredDocs]);
 
-  const sortedUsers = useMemo(() => {
-    return [...users].sort((a, b) => {
-      const aName = (a.name || a.emailLower || a.email || '').toLowerCase();
-      const bName = (b.name || b.emailLower || b.email || '').toLowerCase();
-      return aName.localeCompare(bName);
-    });
-  }, [users]);
+  const sortedUsers = useMemo(() => sortEmployeesByOrgActive(users), [users]);
 
   const openEdit = (user: UserRecord) => {
     setSelected(user);
@@ -243,12 +236,13 @@ export default function ManageUsersScreen({ navigation }: Props) {
     const trimmed = editName.trim();
 
     console.log('handleSave: starting', { selectedId: selected.id, trimmed, editAdmin });
+    if (wouldLeaveNoActiveAdmin(users, selected.id, { grantAdmin: editAdmin })) {
+      Alert.alert('Last admin', LAST_ADMIN_NOTICE);
+      return;
+    }
     setSaving(true);
     try {
-      const roles = Array.isArray(selected.roles) ? selected.roles : [];
-      const nextRoles = editAdmin
-        ? Array.from(new Set([...roles, 'admin']))
-        : roles.filter(role => role !== 'admin');
+      const nextRoles = withAdminRole(selected.roles, editAdmin);
 
       console.log('handleSave: updating with', { name: trimmed, roles: nextRoles });
       await updateDoc(doc(getFirestore(), 'users', selected.id), {
@@ -379,29 +373,9 @@ export default function ManageUsersScreen({ navigation }: Props) {
     }
   };
 
-  const handleResetPassword = async (user: UserRecord) => {
-    const targetEmail = user.emailLower || user.email || '';
-    if (!targetEmail) {
-      Alert.alert('No email', 'This user has no email on file.');
-      return;
-    }
-
-    setResettingId(user.id);
+  const handleToggleOrgActive = async (user: UserRecord) => {
     try {
-      await resetPassword(targetEmail);
-      Alert.alert('Reset Email Sent', `Sent to ${targetEmail}.`);
-    } catch (err: any) {
-      const msg = err?.message ? String(err.message) : 'Unable to send reset email.';
-      Alert.alert('Reset Failed', msg);
-    } finally {
-      setResettingId(null);
-    }
-  };
-
-  const handleToggleDisabled = async (user: UserRecord) => {
-    try {
-      const next = !user.disabled;
-      await updateDoc(doc(getFirestore(), 'users', user.id), { disabled: next });
+      await updateDoc(doc(getFirestore(), 'users', user.id), orgActiveManualWrite(!isOrgActive(user)));
     } catch (err: any) {
       const msg = err?.message ? String(err.message) : 'Unable to update status.';
       Alert.alert('Notice', msg);
@@ -409,9 +383,13 @@ export default function ManageUsersScreen({ navigation }: Props) {
   };
 
   const handleDeleteProfile = (user: UserRecord) => {
+    if (wouldLeaveNoActiveAdmin(users, user.id, { grantAdmin: false, disabled: true })) {
+      Alert.alert('Last admin', LAST_ADMIN_NOTICE);
+      return;
+    }
     Alert.alert(
       'Delete Profile Data',
-      `Remove profile data for ${user.email || user.name || 'this user'}?`,
+      `Remove profile data for ${user.email || user.name || 'this user'}? Working hours and other records are not deleted.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -521,75 +499,75 @@ export default function ManageUsersScreen({ navigation }: Props) {
 
   const renderItem = ({ item }: { item: UserRecord }) => {
     const roles = Array.isArray(item.roles) ? item.roles : [];
-    const requiredDocs = Array.isArray(item.requiredDocuments)
-      ? item.requiredDocuments.map(value => String(value || '').trim()).filter(Boolean)
-      : [];
     const label = item.name || item.email || 'Unnamed member';
-    const expanded = expandedUserIds.includes(item.id);
+    const expanded = expandedUserId === item.id;
+    const inactiveLabel = orgStatusLabel(item);
 
     return (
-      <View style={styles.userCard}>
-        <View style={styles.userHeader}>
-          <TouchableOpacity
-            style={styles.userSummaryTap}
-            onPress={() => setExpandedUserIds(current =>
-              current.includes(item.id) ? current.filter(id => id !== item.id) : [...current, item.id]
-            )}
-            activeOpacity={0.85}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={styles.userName}>{label}</Text>
-              <Text style={styles.userMeta}>
-                {roles.includes('admin') ? 'Admin' : 'Member'}
-                {item.disabled ? ' • Disabled' : ''}
-              </Text>
-            </View>
-            <Text style={styles.expandIndicator}>{expanded ? '⌃' : '⌄'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {expanded ? <>
-        {!!item.email && <Text style={styles.userEmail}>{item.email}</Text>}
-        <Text style={styles.userDocsMeta}>
-          Documents required: {requiredDocs.length ? requiredDocs.join(', ') : 'None set'}
-        </Text>
-        <TouchableOpacity onPress={() => openUserProfile(navigation, { userId: item.id, userName: label })}>
-          <Text style={styles.profileLink}>View profile</Text>
+      <View style={styles.userRow}>
+        <TouchableOpacity
+          style={styles.userSummaryTap}
+          onPress={() => setExpandedUserId(current => (current === item.id ? null : item.id))}
+          activeOpacity={0.75}
+        >
+          <Image
+            source={resolveAvatarSource(item.avatarUrl, item.customAvatarUrl)}
+            style={styles.rowAvatar}
+          />
+          <View style={styles.userSummaryText}>
+            <Text style={styles.userName} numberOfLines={1}>{label}</Text>
+            <Text style={styles.userMeta} numberOfLines={1}>
+              {roles.includes('admin') ? 'Admin' : 'Member'}
+              {item.disabled ? ' · Disabled' : ''}
+            </Text>
+          </View>
+          {inactiveLabel ? <Text style={styles.inactiveChip}>{inactiveLabel}</Text> : null}
+          <Text style={styles.expandIndicator}>{expanded ? '⌃' : '⌄'}</Text>
         </TouchableOpacity>
 
-        <View style={styles.actionsRow}>
-          <PizzaFireButton label="Edit" variant="primary" onPress={() => openEdit(item)} style={styles.actionBtn} />
-          {!SHOW_DEBUG_ONLY_OPERATIONS ? <PizzaFireButton
-            label="Send Reset"
-            variant="primary"
-            onPress={() => handleResetPassword(item)}
-            disabled={resettingId === item.id}
-            loading={resettingId === item.id}
-            style={styles.actionBtn}
-          /> : null}
-          <PizzaFireButton
-            label={item.disabled ? 'Activate' : 'Disable'}
-            variant="muted"
-            onPress={() => handleToggleDisabled(item)}
-            style={styles.actionBtn}
-          />
-          <PizzaFireButton
-            label="Delete Profile"
-            variant="danger"
-            onPress={() => handleDeleteProfile(item)}
-            style={styles.actionBtn}
-          />
-        </View>
-
-        <View style={styles.actionsRow}>
-          <PizzaFireButton
-            label="Documents"
-            variant="muted"
-            onPress={() => openDocuments(item)}
-            style={styles.actionBtn}
-          />
-        </View>
-        </> : null}
+        {expanded ? (
+          <View style={styles.quickActions}>
+            <TouchableOpacity
+              style={styles.actionRow}
+              onPress={() => navigation.navigate('WorkingHours', { employeeUserId: item.id, employeeName: label })}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.actionRowLink}>View hours</Text>
+              <Text style={styles.actionRowChevron}>›</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionRow}
+              onPress={() =>
+                navigation.navigate('EditProfile', {
+                  userId: item.id,
+                  userName: label,
+                  openSection: 'details',
+                })
+              }
+              activeOpacity={0.7}
+            >
+              <Text style={styles.actionRowLink}>Details</Text>
+              <Text style={styles.actionRowChevron}>›</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionRow}
+              onPress={() => openDocuments(item)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.actionRowLink}>Request document</Text>
+              <Text style={styles.actionRowChevron}>›</Text>
+            </TouchableOpacity>
+            <View style={[styles.actionRow, styles.actionRowLast]}>
+              <Text style={[styles.actionRowLabel, isOrgActive(item) && styles.actionRowLabelActive]}>Active</Text>
+              <Switch
+                value={isOrgActive(item)}
+                onValueChange={() => void handleToggleOrgActive(item)}
+                trackColor={{ false: PIZZA_FIRE.inputBg, true: PIZZA_FIRE.success }}
+                thumbColor={isOrgActive(item) ? '#E8FBE4' : '#A88E73'}
+              />
+            </View>
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -602,8 +580,8 @@ export default function ManageUsersScreen({ navigation }: Props) {
           <Icons.arrowLeft color={PIZZA_FIRE.gold} width={24} height={24} />
         </TouchableOpacity>
         <View>
-          <Text style={styles.title}>Manage Members</Text>
-          <Text style={styles.subtitle}>{users.length} Total Members</Text>
+          <Text style={styles.title}>Employees</Text>
+          <Text style={styles.subtitle}>{users.length} team members</Text>
         </View>
         <View style={{ width: 60 }} />
       </View>
@@ -619,6 +597,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
           renderItem={renderItem}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.list}
+          ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
           ListEmptyComponent={
             <Text style={styles.empty}>No members found.</Text>
           }
@@ -661,17 +640,10 @@ export default function ManageUsersScreen({ navigation }: Props) {
               <Text style={styles.docsTitle}>Member details</Text>
               <Text style={styles.docsSub}>Enter the employment-record details on the member’s behalf.</Text>
               <Text style={styles.profileFieldLabel}>Title</Text>
-              <View style={styles.salutationRow}>
-                {SALUTATION_OPTIONS.map(option => (
-                  <TouchableOpacity
-                    key={option}
-                    style={[styles.salutationPill, editCompliance.salutation === option && styles.salutationPillActive]}
-                    onPress={() => updateEditCompliance('salutation', option as Salutation)}
-                  >
-                    <Text style={[styles.salutationPillText, editCompliance.salutation === option && styles.salutationPillTextActive]}>{option}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
+              <SalutationDropdown
+                value={editCompliance.salutation}
+                onChange={option => updateEditCompliance('salutation', option)}
+              />
               {GERMAN_COMPLIANCE_FIELDS.map(field => (
                 <View key={field.key} style={styles.profileFieldGroup}>
                   <Text style={styles.profileFieldLabel}>{field.label}</Text>
@@ -713,7 +685,7 @@ export default function ManageUsersScreen({ navigation }: Props) {
                 {saving ? (
                   <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text style={styles.modalButtonText}>Save</Text>
+                  <Text style={styles.modalButtonText}>Update</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -906,34 +878,74 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 12,
     padding: 12,
-    borderRadius: 10,
+    borderRadius: 7,
     backgroundColor: 'rgba(158, 60, 46, 0.2)',
     color: PIZZA_FIRE.textPrimary,
     fontSize: 13,
   },
   title: { fontSize: 20, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
   subtitle: { fontSize: 12, color: PIZZA_FIRE.textMuted, marginTop: 2 },
-  list: { padding: 16 },
+  list: { paddingVertical: 8 },
   empty: { textAlign: 'center', marginTop: 40, color: PIZZA_FIRE.textMuted },
-  userCard: {
-    backgroundColor: PIZZA_FIRE.surface,
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.qlBorder,
+  userRow: {
+    paddingVertical: 0,
   },
-  userHeader: {
+  rowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: PIZZA_FIRE.divider,
+  },
+  userSummaryTap: {
+    minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
   },
-  userSummaryTap: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingRight: 12 },
-  userName: { fontSize: 16, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
+  rowAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 12,
+  },
+  userSummaryText: { flex: 1, paddingRight: 8 },
+  userName: { fontSize: 16, fontWeight: '700', color: PIZZA_FIRE.textPrimary },
   userEmail: { fontSize: 13, color: PIZZA_FIRE.textMuted, marginTop: 2 },
-  userMeta: { fontSize: 12, color: PIZZA_FIRE.textMuted, marginTop: 6 },
+  userMeta: { fontSize: 12, color: PIZZA_FIRE.textMuted, marginTop: 2 },
   userDocsMeta: { fontSize: 12, color: PIZZA_FIRE.textSecondary, marginTop: 6, lineHeight: 17 },
   profileLink: { color: PIZZA_FIRE.gold, fontSize: 12, fontWeight: '700', marginTop: 10 },
-  expandIndicator: { color: PIZZA_FIRE.gold, fontSize: 20, fontWeight: '800', marginLeft: 10, lineHeight: 18 },
+  inactiveChip: { color: PIZZA_FIRE.textMuted, fontSize: 11, fontWeight: '700', marginRight: 8 },
+  expandIndicator: { color: PIZZA_FIRE.gold, fontSize: 16, fontWeight: '700', width: 16, textAlign: 'center' },
+  quickActions: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: PIZZA_FIRE.divider,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  actionRow: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: PIZZA_FIRE.divider,
+  },
+  actionRowLast: {
+    borderBottomWidth: 0,
+  },
+  actionRowLabel: { color: PIZZA_FIRE.textSecondary, fontSize: 15, fontWeight: '600' },
+  actionRowLabelActive: { color: PIZZA_FIRE.success },
+  actionRowLink: { color: PIZZA_FIRE.gold, fontSize: 15, fontWeight: '700' },
+  actionRowChevron: { color: PIZZA_FIRE.gold, fontSize: 22, lineHeight: 24, fontWeight: '300' },
+  activeToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 40,
+    paddingRight: 2,
+  },
+  activeToggleLabel: { color: PIZZA_FIRE.textSecondary, fontSize: 14, fontWeight: '600' },
+  quickLink: { minHeight: 36, justifyContent: 'center' },
+  quickLinkText: { color: PIZZA_FIRE.gold, fontSize: 14, fontWeight: '700' },
   actionsRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -953,7 +965,7 @@ const styles = StyleSheet.create({
   modalCard: {
     margin: 20,
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 20,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1059,7 +1071,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 10,
-    borderRadius: 10,
+    borderRadius: 7,
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1216,7 +1228,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     padding: 10,
-    borderRadius: 10,
+    borderRadius: 7,
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -1262,7 +1274,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 10,
   },
   credentialPreview: {

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, TouchableOpacity } from 'react-native';
+import PizzaFireButton from './PizzaFireButton';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import {
   HYGIENE_DOCUMENT_FOLDERS,
@@ -41,9 +42,7 @@ export default function HygieneFolderPickerModal({
               <Text style={styles.optionText}>{folder.label}</Text>
             </TouchableOpacity>
           ))}
-          <TouchableOpacity style={styles.cancel} onPress={onClose}>
-            <Text style={styles.cancelText}>Cancel</Text>
-          </TouchableOpacity>
+          <PizzaFireButton label="Cancel" variant="muted" onPress={onClose} style={styles.cancel} />
         </Pressable>
       </Pressable>
     </Modal>
@@ -59,7 +58,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 14,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     padding: 18,
@@ -74,7 +73,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 13,
     paddingHorizontal: 14,
     marginBottom: 8,
@@ -85,13 +84,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cancel: {
-    alignItems: 'center',
-    paddingVertical: 10,
     marginTop: 4,
-  },
-  cancelText: {
-    color: PIZZA_FIRE.textMuted,
-    fontSize: 14,
-    fontWeight: '700',
   },
 });

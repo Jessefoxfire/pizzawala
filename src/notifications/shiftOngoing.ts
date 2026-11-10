@@ -5,11 +5,15 @@ import {
   isShiftPaused,
   normalizeShiftPeriods,
 } from '../services/shifts';
+import { shouldPublishOngoingShift } from '../geofencing/geofenceNotificationDecision';
+
+export { shouldPublishOngoingShift };
 
 export type ShiftOngoingPayload = {
   mode: 'working' | 'break';
   periodStartMs: number;
   baseElapsedMs: number;
+  workElapsedMs: number;
 };
 
 export function shiftOngoingPayload(shift: LiveShift): ShiftOngoingPayload {
@@ -24,7 +28,12 @@ export function shiftOngoingPayload(shift: LiveShift): ShiftOngoingPayload {
         break;
       }
     }
-    return { mode: 'break', periodStartMs, baseElapsedMs: 0 };
+    return {
+      mode: 'break',
+      periodStartMs,
+      baseElapsedMs: 0,
+      workElapsedMs: Math.max(0, calcWorkedMs(shift, now)),
+    };
   }
 
   const { workPeriods } = normalizeShiftPeriods(shift, now);

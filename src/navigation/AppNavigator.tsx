@@ -6,6 +6,8 @@ import {
   NativeModules,
   Image,
   Alert,
+  Linking,
+  AppState,
 } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -18,7 +20,6 @@ import HomeScreen from '../screens/HomeScreen';
 import WorksiteFinderScreen from '../screens/WorksiteFinderScreen';
 import ChatScreen from '../screens/ChatScreen';
 import TeamMapScreen from '../screens/TeamMapScreen';
-import ShiftSetupScreen from '../screens/ShiftSetupScreen';
 import GeofenceDebugScreen from '../screens/GeofenceDebugScreen';
 import MapPickerScreen from '../screens/MapPickerScreen';
 import PermissionsScreen from '../screens/PermissionsScreen';
@@ -30,9 +31,9 @@ import ShiftOngoingSync from '../components/ShiftOngoingSync';
 import ShiftEndReminderSync from '../components/ShiftEndReminderSync';
 import PresenceMonitor from '../components/PresenceMonitor';
 import LocationMonitor from '../components/LocationMonitor';
-import { navigationRef } from './navigationRef';
+import { navigate, navigationRef } from './navigationRef';
 import { initNativeGeofencing, stopNativeMonitoring } from '../geofencing/native';
-import { getLocationFeaturesEnabled } from '../geofencing/storage';
+import { getLocationFeaturesEnabled, getWorksiteAlertsEnabled } from '../geofencing/storage';
 import AdminOptionsScreen from '../screens/AdminOptionsScreen';
 import AdminScheduleScreen from '../screens/AdminScheduleScreen';
 import AdminCalendarScreen from '../screens/AdminCalendarScreen';
@@ -50,24 +51,26 @@ import RequiredDocumentsScreen from '../screens/RequiredDocumentsScreen';
 import ReceiptsExpensesScreen from '../screens/ReceiptsExpensesScreen';
 import AdminReceiptsScreen from '../screens/AdminReceiptsScreen';
 import WorkingHoursScreen from '../screens/WorkingHoursScreen';
+import SettingsScreen from '../screens/SettingsScreen';
+import ChangePasswordScreen from '../screens/ChangePasswordScreen';
+import CompanyScreen from '../screens/CompanyScreen';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 
 import type { Geofence } from '../types';
 import type { GeofencePromptPayload } from '../geofencing/types';
 
 export type RootStackParamList = {
-  Login: undefined;
-  CreateAccount: undefined;
+  Login: { invite?: string } | undefined;
+  CreateAccount: { invite?: string } | undefined;
   Permissions: undefined;
-  Home: undefined;
+  Home: { shiftReview?: { shiftId: string; employeeUserId: string; employeeName: string }; openEndShift?: boolean } | undefined;
   Events: { eventId?: string } | undefined;
   Geofences: undefined;
   ManageUsers: undefined;
-  EditProfile: { userId?: string; userName?: string } | undefined;
+  EditProfile: { userId?: string; userName?: string; openSection?: 'details' } | undefined;
   WorksiteFinder: { geofence: Geofence };
   Chat: { prefillText?: string; dmUserId?: string; eventId?: string; eventTitle?: string } | undefined;
   MySchedule: { prompt?: GeofencePromptPayload; initialView?: 'calendar' | 'list'; initialDate?: string } | undefined;
-  ShiftSetup: undefined;
   GeofenceDebug: undefined;
   AdminOptions: undefined;
   WorksiteOverview: undefined;
@@ -89,6 +92,9 @@ export type RootStackParamList = {
   ReceiptsExpenses: undefined;
   AdminReceipts: undefined;
   WorkingHours: { initialDateKey?: string; employeeUserId?: string; employeeName?: string } | undefined;
+  Settings: undefined;
+  ChangePassword: undefined;
+  Company: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -97,6 +103,7 @@ import notifee, { EventType } from '@notifee/react-native';
 import messaging from '@react-native-firebase/messaging';
 import { collection, doc, getDoc, getDocs, getFirestore, query, where } from '@react-native-firebase/firestore';
 import { nativeAuth } from '../services/firebase';
+import { handleGeofenceNotificationAction } from '../notifications/geofenceNotificationActions';
 import { registerPushForCurrentUser } from '../services/pushRegistration';
 import {
   routeNotificationOpen,
@@ -104,11 +111,17 @@ import {
 } from '../notifications/notificationRouting';
 import { displayForegroundRemoteMessage } from '../notifications/displayForegroundRemoteMessage';
 import { setNativeNotificationsEnabled } from '../geofencing/native';
-import OfflineBanner from '../components/OfflineBanner';
 import BirthdayGreeting from '../components/BirthdayGreeting';
 import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { useAppLayout } from '../theme/responsiveLayout';
+import { persistPendingInviteToken } from '../services/pendingInvite';
+import { parseInviteTokenFromUrl } from '../utils/teamInvites';
+import {
+  parseShiftEditReviewFromData,
+  parseShiftEditReviewFromUrl,
+  setPendingShiftReview,
+} from '../notifications/shiftEditReview';
 
 export default function AppNavigator() {
   const auth = useAuth();
@@ -132,9 +145,9 @@ export default function AppNavigator() {
       }
 
       try {
-        await setNativeNotificationsEnabled(true);
+        await setNativeNotificationsEnabled(await getWorksiteAlertsEnabled());
       } catch (error) {
-        console.warn('[Push] failed enabling native notifications:', error);
+        console.warn('[Push] failed syncing native worksite notifications:', error);
       }
 
       try {
@@ -204,6 +217,14 @@ export default function AppNavigator() {
       .catch(err => console.error('Init geofence failed:', err));
 
     const unsubscribeNotifee = notifee.onForegroundEvent(async ({ type, detail }) => {
+      if (type === EventType.ACTION_PRESS) {
+        const handled = await handleGeofenceNotificationAction(
+          detail.pressAction?.id,
+          detail.notification?.data as Record<string, unknown> | undefined,
+          detail.notification?.id
+        );
+        if (handled) return;
+      }
       const isPress = type === EventType.PRESS || type === EventType.ACTION_PRESS;
       if (isPress && detail.notification?.data) {
         routeNotificationOpen(detail.notification.data as Record<string, unknown>);
@@ -240,6 +261,13 @@ export default function AppNavigator() {
       ) {
         return;
       }
+      const review = parseShiftEditReviewFromData((data || {}) as Record<string, unknown>);
+      if (review) {
+        setPendingShiftReview(review);
+        if (navigationRef.isReady() && navigationRef.getCurrentRoute()?.name === 'Home') {
+          routeNotificationOpen({ ...(data as Record<string, unknown>), type: String(type || 'shift_edit_request') });
+        }
+      }
       await displayForegroundRemoteMessage(remoteMessage);
     });
 
@@ -264,19 +292,70 @@ export default function AppNavigator() {
 
         const pending = await GeofenceModule.getPendingAction();
         const uid = nativeAuth().currentUser?.uid;
-        if (pending?.action === 'stop_shift_at' && uid) {
+        if (!pending?.action || !uid) return;
+        if (pending.action === 'stop_shift_at') {
           const { endShift } = require('../geofencing/processor');
           const endTime = pending.endTime ? new Date(pending.endTime) : new Date();
           await endShift(uid, endTime);
-          console.log('[NativeAction] Shift ended at:', endTime.toISOString());
+          return;
+        }
+        if (pending.action === 'start_shift' && pending.geofenceId) {
+          const { startShift } = require('../geofencing/processor');
+          await startShift(uid, pending.geofenceId, pending.geofenceName || 'Worksite');
+          navigate('Home');
+          return;
+        }
+        if (pending.action === 'open_end_shift') {
+          navigate('Home', { openEndShift: true });
+          return;
+        }
+        const nativeAction = pending.pendingShiftAction || pending.action;
+        if (nativeAction === 'pause' || nativeAction === 'resume') {
+          const { applyNativeShiftAction } = require('../geofencing/processor');
+          await applyNativeShiftAction(nativeAction, pending.shiftId, uid);
         }
       } catch (err) {
         console.warn('[NativeAction] Error checking pending action:', err);
       }
     };
-    if (auth.status === 'user' || auth.status === 'admin') {
-      checkPendingAction();
-    }
+    if (auth.status !== 'user' && auth.status !== 'admin') return undefined;
+    void checkPendingAction();
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') void checkPendingAction();
+    });
+    return () => sub.remove();
+  }, [auth.status]);
+
+  React.useEffect(() => {
+    const applyInviteUrl = async (url: string | null) => {
+      const review = parseShiftEditReviewFromUrl(url);
+      if (review) {
+        setPendingShiftReview(review);
+        routeNotificationOpen({
+          type: 'shift_edit_request',
+          screen: 'Home',
+          shiftId: review.shiftId,
+          employeeUserId: review.employeeUserId,
+          employeeName: review.employeeName,
+        });
+        return;
+      }
+      const token = parseInviteTokenFromUrl(url);
+      if (!token) return;
+      await persistPendingInviteToken(token);
+      if (auth.status !== 'signedOut') return;
+      if (navigationRef.isReady()) {
+        navigationRef.navigate('CreateAccount', { invite: token });
+      }
+    };
+
+    void Linking.getInitialURL().then(url => {
+      void applyInviteUrl(url);
+    });
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      void applyInviteUrl(url);
+    });
+    return () => sub.remove();
   }, [auth.status]);
 
   /* ───────────────────────── AUTH LOADING ───────────────────────── */
@@ -340,7 +419,6 @@ export default function AppNavigator() {
               component={WorksiteFinderScreen}
             />
             <Stack.Screen name="MySchedule" component={MyScheduleScreen} />
-            <Stack.Screen name="ShiftSetup" component={ShiftSetupScreen} />
             <Stack.Screen name="GeofenceDebug" component={GeofenceDebugScreen} />
             <Stack.Screen name="AdminOptions" component={AdminOptionsScreen} />
             <Stack.Screen name="WorksiteOverview" component={WorksiteOverviewScreen} />
@@ -361,13 +439,13 @@ export default function AppNavigator() {
             <Stack.Screen name="ReceiptsExpenses" component={ReceiptsExpensesScreen} />
             <Stack.Screen name="AdminReceipts" component={AdminReceiptsScreen} />
             <Stack.Screen name="WorkingHours" component={WorkingHoursScreen} />
+            <Stack.Screen name="Settings" component={SettingsScreen} />
+            <Stack.Screen name="ChangePassword" component={ChangePasswordScreen} />
+            <Stack.Screen name="Company" component={CompanyScreen} />
           </>
         )}
       </Stack.Navigator>
       </NavigationContainer>
-      <View style={styles.bannerOverlay} pointerEvents="box-none">
-        <OfflineBanner />
-      </View>
       {auth.status === 'user' || auth.status === 'admin' ? <BirthdayGreeting /> : null}
     </View>
   );
@@ -382,13 +460,6 @@ const styles = StyleSheet.create({
   },
   navContainer: {
     flex: 1,
-  },
-  bannerOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 20,
   },
   loading: {
     flex: 1,

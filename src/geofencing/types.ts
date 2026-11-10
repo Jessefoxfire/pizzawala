@@ -22,4 +22,5 @@ export type GeofencePromptPayload = {
   userName?: string | null;
   transition: 'enter' | 'exit';
   occurredAt: number;
+  variant?: 'prompt' | 'auto_result' | 'break_return';
 };

@@ -27,6 +27,7 @@ import { processGeofenceEvent, notifyGeofenceTransition } from '../geofencing/pr
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { getNativeStatus, openBatteryExemptionUi, startNativeMonitoring, type NativeGeofenceStatus } from '../geofencing/native';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
+import { activeWorksites } from '../utils/locationPrompt';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'GeofenceDebug'>;
 
@@ -93,7 +94,10 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
           })
           .filter(Boolean) as Geofence[];
         setGeofences(items);
-        setSelectedId(prev => prev || items[0]?.id || null);
+        const live = activeWorksites(items);
+        setSelectedId(prev =>
+          (prev && live.some(item => item.id === prev) ? prev : live[0]?.id) || null
+        );
         setLoading(false);
         if (items.length > 0) {
           void cacheGeofences(items);
@@ -204,9 +208,10 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
     };
   }, []);
 
+  const liveGeofences = useMemo(() => activeWorksites(geofences), [geofences]);
   const selected = useMemo(
-    () => geofences.find(item => item.id === selectedId) || null,
-    [geofences, selectedId]
+    () => liveGeofences.find(item => item.id === selectedId) || null,
+    [liveGeofences, selectedId]
   );
 
   useEffect(() => {
@@ -364,10 +369,10 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
         <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
           <Text style={styles.sectionTitle}>Select worksite</Text>
           <View style={styles.chips}>
-            {geofences.length === 0 ? (
+            {liveGeofences.length === 0 ? (
               <Text style={styles.empty}>No geofences available.</Text>
             ) : (
-              geofences.map(item => (
+              liveGeofences.map(item => (
                 <TouchableOpacity
                   key={item.id}
                   style={[
@@ -561,7 +566,7 @@ export default function GeofenceDebugScreen({ navigation }: Props) {
               <TouchableOpacity
                 style={[styles.debugButton, styles.debugButtonAlt]}
                 onPress={async () => {
-                  await startNativeMonitoring(geofences);
+                  await startNativeMonitoring(liveGeofences);
                   await refreshLastEvent();
                 }}
               >
@@ -633,7 +638,7 @@ const styles = StyleSheet.create({
   chip: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: PIZZA_FIRE.inputBg,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -652,7 +657,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 14,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     padding: 14,
@@ -723,7 +728,7 @@ const styles = StyleSheet.create({
   },
   warningCard: {
     backgroundColor: '#452200',
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 12,
     borderWidth: 1,
     borderColor: '#D97706',

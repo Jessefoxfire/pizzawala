@@ -265,7 +265,7 @@ const styles = StyleSheet.create({
     title: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
     map: { flex: 1 },
     instructions: { position: 'absolute', bottom: 40, width: '100%', alignItems: 'center' },
-    instructionText: { backgroundColor: PIZZA_FIRE.bgMid, color: PIZZA_FIRE.textPrimary, padding: 10, borderRadius: 20, borderWidth: 1, borderColor: PIZZA_FIRE.accent }
+    instructionText: { backgroundColor: PIZZA_FIRE.bgMid, color: PIZZA_FIRE.textPrimary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.accent }
     ,
     searchBarContainer: {
         position: 'absolute',
@@ -317,7 +317,7 @@ const styles = StyleSheet.create({
         backgroundColor: PIZZA_FIRE.bgMid,
         paddingHorizontal: 12,
         paddingVertical: 8,
-        borderRadius: 16,
+        borderRadius: 8,
         borderWidth: 1,
         borderColor: PIZZA_FIRE.accent,
         zIndex: 20,
@@ -329,7 +329,7 @@ const styles = StyleSheet.create({
         left: 20,
         right: 20,
         backgroundColor: PIZZA_FIRE.bgMid,
-        borderRadius: 12,
+        borderRadius: 8,
         borderWidth: 1,
         borderColor: PIZZA_FIRE.hotAccentBorder,
         padding: 12,

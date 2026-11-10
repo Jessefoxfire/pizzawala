@@ -62,6 +62,25 @@ describe('working hours date ownership', () => {
     expect(buildDayTimeEntries(shifts, '2026-09-01', minute.getTime())).toHaveLength(1);
   });
 
+  it('subtracts overlapping breaks from a single work envelope', () => {
+    const start = new Date(2026, 8, 1, 8, 0);
+    const pauseStart = new Date(2026, 8, 1, 10, 0);
+    const pauseEnd = new Date(2026, 8, 1, 10, 30);
+    const end = new Date(2026, 8, 1, 12, 0);
+    const shift: LiveShift = {
+      id: 'envelope',
+      userId: 'user-1',
+      status: 'closed',
+      startAt: start.toISOString(),
+      endAt: end.toISOString(),
+      workPeriods: [{ startIso: start.toISOString(), endIso: end.toISOString() }],
+      breakPeriods: [{ startIso: pauseStart.toISOString(), endIso: pauseEnd.toISOString() }],
+    };
+
+    expect(totalWorkedMsForDay([shift], '2026-09-01', end.getTime())).toBe(3.5 * 60 * 60 * 1000);
+    expect(totalBreakMsForDay([shift], '2026-09-01', end.getTime())).toBe(30 * 60 * 1000);
+  });
+
   it('keeps driving work periods marked as driving in the hours view', () => {
     const start = new Date(2026, 8, 1, 10, 0);
     const end = new Date(2026, 8, 1, 11, 0);
@@ -79,5 +98,33 @@ describe('working hours date ownership', () => {
       end.getTime()
     );
     expect(entries[0].workCategory).toBe('driving');
+  });
+
+  it('shows only the newest open shift as a live ticking counter', () => {
+    const first = new Date(2026, 10, 1, 15, 2, 10);
+    const second = new Date(2026, 10, 1, 15, 2, 40);
+    const now = new Date(2026, 10, 1, 16, 0, 0).getTime();
+    const shifts: LiveShift[] = [
+      {
+        id: 'open-old',
+        userId: 'user-1',
+        status: 'open',
+        startAt: first.toISOString(),
+        workPeriods: [{ startIso: first.toISOString(), endIso: null }],
+      },
+      {
+        id: 'open-new',
+        userId: 'user-1',
+        status: 'open',
+        startAt: second.toISOString(),
+        workPeriods: [{ startIso: second.toISOString(), endIso: null }],
+      },
+    ];
+
+    const entries = buildDayTimeEntries(shifts, '2026-11-01', now);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].shiftId).toBe('open-new');
+    expect(entries[0].isActive).toBe(true);
+    expect(totalWorkedMsForDay(shifts, '2026-11-01', now)).toBe(now - second.getTime());
   });
 });

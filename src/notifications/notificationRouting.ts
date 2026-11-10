@@ -1,8 +1,13 @@
-import type { GeofencePromptPayload } from '../geofencing/types';
 import type { Geofence } from '../types';
+import { isActiveWorksite } from '../utils/locationPrompt';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import { navigate, navigationRef } from '../navigation/navigationRef';
 import { setPendingNotificationOpen, takePendingNotificationOpen } from './pendingNotificationOpen';
+import {
+  parseShiftEditReviewFromData,
+  setPendingShiftReview,
+  SHIFT_EDIT_REQUEST_TYPE,
+} from './shiftEditReview';
 
 function coerceNotificationData(data: Record<string, unknown>): Record<string, unknown> {
   const type = String(data.type);
@@ -29,6 +34,16 @@ function coerceNotificationData(data: Record<string, unknown>): Record<string, u
   return next;
 }
 
+function openShiftEditReview(data: Record<string, unknown>) {
+  const review = parseShiftEditReviewFromData(data);
+  if (!review) {
+    navigate('Home');
+    return;
+  }
+  setPendingShiftReview(review);
+  navigate('Home', { shiftReview: review });
+}
+
 function performRoute(data: Record<string, unknown>) {
   const type = String(data.type);
 
@@ -38,15 +53,12 @@ function performRoute(data: Record<string, unknown>) {
 
   switch (type) {
     case 'geofence_event': {
-      const payload = data.payload as GeofencePromptPayload | undefined;
-      if (payload && typeof payload === 'object' && 'eventId' in payload) {
-        navigate('MySchedule', { prompt: payload });
-      }
+      navigate('Home');
       break;
     }
     case 'navigation_link': {
       const geofence = data.geofence as Geofence | undefined;
-      if (geofence && typeof geofence === 'object' && 'id' in geofence) {
+      if (geofence && typeof geofence === 'object' && 'id' in geofence && isActiveWorksite(geofence)) {
         navigate('WorksiteFinder', { geofence });
       }
       break;
@@ -57,8 +69,15 @@ function performRoute(data: Record<string, unknown>) {
     case 'broadcast':
       navigate('Chat');
       break;
+    case SHIFT_EDIT_REQUEST_TYPE:
+      openShiftEditReview(data);
+      break;
     case 'personal_notification': {
       const screen = String(data.screen || '');
+      if (parseShiftEditReviewFromData(data)) {
+        openShiftEditReview(data);
+        break;
+      }
       if (screen === 'MySchedule') {
         const view = data.view === 'calendar' ? 'calendar' : 'list';
         navigate('MySchedule', { initialView: view });

@@ -49,33 +49,36 @@ class GeofenceModule(private val reactContext: ReactApplicationContext) : ReactC
 
   @ReactMethod
   fun getPendingAction(promise: Promise) {
+    val stored = GeofencePrefs.takePendingJsAction(reactContext)
     val activity = reactContext.currentActivity
-    if (activity == null) {
+    val intent = activity?.intent
+    val action = stored?.first ?: intent?.getStringExtra("action")
+    val geofenceId = stored?.second ?: intent?.getStringExtra("geofenceId")
+    val geofenceName = stored?.third ?: intent?.getStringExtra("geofenceName")
+    val endTime = intent?.getLongExtra("endTime", 0L) ?: 0L
+    val pendingShiftAction = GeofencePrefs.getPendingShiftAction(reactContext)
+    val shiftId = GeofencePrefs.getShiftId(reactContext)
+
+    if (action == null && pendingShiftAction == null) {
       promise.resolve(null)
       return
     }
-    
-    val intent = activity.intent
-    if (intent == null) {
-      promise.resolve(null)
-      return
+
+    intent?.removeExtra("action")
+    intent?.removeExtra("endTime")
+    intent?.removeExtra("geofenceId")
+    intent?.removeExtra("geofenceName")
+
+    val map = Arguments.createMap().apply {
+      if (action != null) putString("action", action)
+      else putString("action", pendingShiftAction)
+      if (endTime != 0L) putDouble("endTime", endTime.toDouble())
+      if (!geofenceId.isNullOrBlank()) putString("geofenceId", geofenceId)
+      if (!geofenceName.isNullOrBlank()) putString("geofenceName", geofenceName)
+      if (!shiftId.isNullOrBlank()) putString("shiftId", shiftId)
+      if (!pendingShiftAction.isNullOrBlank()) putString("pendingShiftAction", pendingShiftAction)
     }
-    
-    val action = intent.getStringExtra("action")
-    val endTime = intent.getLongExtra("endTime", 0L)
-    
-    if (action != null) {
-      val map = Arguments.createMap().apply {
-        putString("action", action)
-        if (endTime != 0L) putDouble("endTime", endTime.toDouble())
-      }
-      // Clear intent extras after reading
-      intent.removeExtra("action")
-      intent.removeExtra("endTime")
-      promise.resolve(map)
-    } else {
-      promise.resolve(null)
-    }
+    promise.resolve(map)
   }
 
   @ReactMethod
@@ -235,18 +238,82 @@ class GeofenceModule(private val reactContext: ReactApplicationContext) : ReactC
   }
 
   @ReactMethod
-  fun syncShiftOngoing(mode: String, periodStartMs: Double, baseElapsedMs: Double) {
+  fun cancelAutoTracking(geofenceId: String) {
+    GeofenceAutoEnterWorker.cancel(reactContext, geofenceId)
+    GeofenceAutoExitWorker.cancel(reactContext, geofenceId)
+  }
+
+  @ReactMethod
+  fun syncShiftOngoing(mode: String, periodStartMs: Double, baseElapsedMs: Double, workElapsedMs: Double) {
     ShiftOngoingService.sync(
       reactContext,
       mode,
       periodStartMs.toLong(),
-      baseElapsedMs.toLong()
+      baseElapsedMs.toLong(),
+      workElapsedMs.toLong()
     )
   }
 
   @ReactMethod
   fun stopShiftOngoing() {
     ShiftOngoingService.stop(reactContext)
+  }
+
+  @ReactMethod
+  fun syncShiftSnapshot(
+    active: Boolean,
+    shiftId: String?,
+    userId: String?,
+    geofenceId: String?,
+    geofenceName: String?,
+    paused: Boolean
+  ) {
+    if (!active) {
+      GeofencePrefs.clearShiftSnapshot(reactContext)
+      GeofenceNotifier.cancelAllWorksitePrompts(reactContext)
+      return
+    }
+    GeofencePrefs.saveShiftSnapshot(
+      reactContext,
+      true,
+      shiftId,
+      userId,
+      geofenceId,
+      geofenceName,
+      paused
+    )
+    GeofencePrefs.setSuppressEnterWhileOnShift(reactContext, true)
+    if (!paused) {
+      GeofenceNotifier.cancelAllWorksitePrompts(reactContext)
+    }
+  }
+
+  @ReactMethod
+  fun clearPendingShiftAction() {
+    GeofencePrefs.setPendingShiftAction(reactContext, null)
+  }
+
+  @ReactMethod
+  fun getShiftSnapshot(promise: Promise) {
+    val map = Arguments.createMap().apply {
+      putBoolean("active", GeofencePrefs.isShiftActive(reactContext))
+      putBoolean("paused", GeofencePrefs.isShiftPaused(reactContext))
+      val shiftId = GeofencePrefs.getShiftId(reactContext)
+      val userId = GeofencePrefs.getShiftUserId(reactContext)
+      val geofenceId = GeofencePrefs.getShiftGeofenceId(reactContext)
+      val geofenceName = GeofencePrefs.getShiftGeofenceName(reactContext)
+      val pending = GeofencePrefs.getPendingShiftAction(reactContext)
+      val breakSource = GeofencePrefs.getBreakSource(reactContext)
+      putBoolean("cutoffReached", GeofencePrefs.isCutoffReached(reactContext) || ShiftOngoingStore.isCutoff(reactContext))
+      putBoolean("autoBreakArmed", GeofencePrefs.isAutoBreakArmed(reactContext))
+      if (!shiftId.isNullOrBlank()) putString("shiftId", shiftId)
+      if (!userId.isNullOrBlank()) putString("userId", userId)
+      if (!geofenceId.isNullOrBlank()) putString("geofenceId", geofenceId)
+      if (!geofenceName.isNullOrBlank()) putString("geofenceName", geofenceName)
+      if (!pending.isNullOrBlank()) putString("pendingAction", pending)
+      if (!breakSource.isNullOrBlank()) putString("breakSource", breakSource)
+    }
+    promise.resolve(map)
   }
 
   private fun isProbablyEmulator(): Boolean {

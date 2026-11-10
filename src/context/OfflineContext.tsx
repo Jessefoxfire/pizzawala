@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
-import { subscribeConnectivity } from '../offline/connectivity';
+import { deviceLooksOnline, subscribeConnectionDegraded, subscribeConnectivity } from '../offline/connectivity';
 import { getOutboxCount, loadOutbox } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
 import { flushOutbox } from '../offline/sync';
@@ -9,8 +9,11 @@ import { nativeAuth } from '../services/firebase';
 
 type OfflineContextValue = {
   isOnline: boolean;
+  /** True after a needed request timed out or the radio dropped. Home shows “offline”. */
+  offlineHint: boolean;
   pendingCount: number;
   syncing: boolean;
+  /** @deprecated Use offlineHint. Kept so older screens compile. */
   syncBannerVisible: boolean;
   refreshPendingCount: () => Promise<void>;
   syncNow: () => Promise<void>;
@@ -18,6 +21,7 @@ type OfflineContextValue = {
 
 const OfflineContext = createContext<OfflineContextValue>({
   isOnline: true,
+  offlineHint: false,
   pendingCount: 0,
   syncing: false,
   syncBannerVisible: false,
@@ -27,19 +31,17 @@ const OfflineContext = createContext<OfflineContextValue>({
 
 const AUTO_SYNC_COOLDOWN_MS = 3000;
 const OUTBOX_SYNC_DEBOUNCE_MS = 250;
-const OFFLINE_BADGE_DURATION_MS = 2200;
 
 export function OfflineProvider({ children }: { children: React.ReactNode }) {
   const [isOnline, setIsOnline] = useState(true);
+  const [offlineHint, setOfflineHint] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
-  const [syncBannerVisible, setSyncBannerVisible] = useState(false);
   const syncingRef = useRef(false);
   const isOnlineRef = useRef(true);
   const lastAutoSyncAtRef = useRef(0);
   const pendingRefreshRef = useRef<Promise<void> | null>(null);
   const outboxSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const offlineBadgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bootSyncDoneRef = useRef(false);
 
   useEffect(() => {
@@ -94,21 +96,12 @@ export function OfflineProvider({ children }: { children: React.ReactNode }) {
   }, [runAutoSync]);
 
   useEffect(() => {
+    return subscribeConnectionDegraded(setOfflineHint);
+  }, []);
+
+  useEffect(() => {
     return subscribeConnectivity(nextOnline => {
       setIsOnline(nextOnline);
-      if (offlineBadgeTimerRef.current) {
-        clearTimeout(offlineBadgeTimerRef.current);
-        offlineBadgeTimerRef.current = null;
-      }
-      if (!nextOnline) {
-        setSyncBannerVisible(true);
-        offlineBadgeTimerRef.current = setTimeout(() => {
-          setSyncBannerVisible(false);
-          offlineBadgeTimerRef.current = null;
-        }, OFFLINE_BADGE_DURATION_MS);
-      } else {
-        setSyncBannerVisible(false);
-      }
       if (nextOnline) {
         runAutoSync(true);
       }
@@ -158,10 +151,20 @@ export function OfflineProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(retryTimer);
   }, [isOnline, pendingCount, syncing, runAutoSync]);
 
+  useEffect(() => {
+    if (!offlineHint) return;
+    const retryTimer = setInterval(() => {
+      void (async () => {
+        const online = await deviceLooksOnline();
+        if (online) runAutoSync(true);
+      })();
+    }, 12000);
+    return () => clearInterval(retryTimer);
+  }, [offlineHint, runAutoSync]);
+
   useEffect(
     () => () => {
       if (outboxSyncTimerRef.current) clearTimeout(outboxSyncTimerRef.current);
-      if (offlineBadgeTimerRef.current) clearTimeout(offlineBadgeTimerRef.current);
     },
     []
   );
@@ -169,13 +172,14 @@ export function OfflineProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       isOnline,
+      offlineHint,
       pendingCount,
       syncing,
-      syncBannerVisible,
+      syncBannerVisible: offlineHint,
       refreshPendingCount,
       syncNow,
     }),
-    [isOnline, pendingCount, syncing, syncBannerVisible, refreshPendingCount, syncNow]
+    [isOnline, offlineHint, pendingCount, syncing, refreshPendingCount, syncNow]
   );
 
   return <OfflineContext.Provider value={value}>{children}</OfflineContext.Provider>;

@@ -3,10 +3,10 @@ import {
   View,
   Text,
   StyleSheet,
-    FlatList,
   TouchableOpacity,
   ActivityIndicator,
   Image,
+  Keyboard,
   ScrollView,
   TextInput,
   Platform,
@@ -22,6 +22,7 @@ import { openUserProfile } from '../navigation/openUserProfile';
 import {
   calcWorkedMs,
   calcWorkedMsInRange,
+  formatShiftDuration,
   getTimestampMs,
   shiftOverlapsRange,
   type LiveShift,
@@ -30,8 +31,8 @@ import { formatClockTime, hoursChangeKind } from '../utils/workingHours';
 import HoursChangeBadge from '../components/HoursChangeBadge';
 import { Avatars, AvatarKey } from '../../assets/avatars';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
-import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
 import PizzaFireScreen from '../components/PizzaFireScreen';
+import { employeeSortName, orgStatusLabel } from '../utils/orgStatus';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'WorksiteOverview'>;
 
@@ -40,23 +41,17 @@ type ShiftRecord = LiveShift & {
   geofenceName?: string;
 };
 
-type WorksiteStats = {
-  id: string;
-  name: string;
-  totalHours: number;
-  activePeople: number;
-  totalShifts: number;
-};
+const NO_WORKSITE_ID = '__none__';
 
-type MemberStats = {
-  userId: string;
-  userName: string;
-  avatarUrl: string;
-  totalHours: number;
-  isOnline: boolean;
-  hasAdded: boolean;
-  hasEdited: boolean;
-};
+function auditWorksiteId(shift: ShiftRecord): string {
+  const id = String(shift.geofenceId || '').trim();
+  return id && id !== 'unknown' ? id : NO_WORKSITE_ID;
+}
+
+function auditWorksiteName(shift: ShiftRecord): string {
+  if (auditWorksiteId(shift) === NO_WORKSITE_ID) return 'No worksite';
+  return String(shift.geofenceName || '').trim() || 'Worksite';
+}
 
 export default function WorksiteOverviewScreen({ navigation }: Props) {
   const [shifts, setShifts] = useState<ShiftRecord[]>([]);
@@ -64,10 +59,16 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(Date.now());
   const [auditUserId, setAuditUserId] = useState<string | null>(null);
+  const [auditGeofenceId, setAuditGeofenceId] = useState<string | null>(null);
   const [auditPeriod, setAuditPeriod] = useState<'today' | 'week' | 'month' | 'all' | 'custom'>('all');
   const [customStart, setCustomStart] = useState(new Date().toISOString().split('T')[0]);
   const [customEnd, setCustomEnd] = useState(new Date().toISOString().split('T')[0]);
   const [auditDayKey, setAuditDayKey] = useState<string | null>(null);
+  const [auditFolderId, setAuditFolderId] = useState<string | null>(null);
+  const [memberPickerOpen, setMemberPickerOpen] = useState(false);
+  const [memberQuery, setMemberQuery] = useState('');
+  const [worksitePickerOpen, setWorksitePickerOpen] = useState(false);
+  const [worksiteQuery, setWorksiteQuery] = useState('');
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -76,7 +77,8 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
 
   useEffect(() => {
     setAuditDayKey(null);
-  }, [auditPeriod, auditUserId]);
+    setAuditFolderId(null);
+  }, [auditPeriod, auditUserId, auditGeofenceId]);
 
   useEffect(() => {
     const fs = getFirestore();
@@ -120,67 +122,6 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
       .sort((a, b) => getTimestampMs(b.startAt) - getTimestampMs(a.startAt));
   }, [shifts, users]);
 
-  const memberStats = useMemo(() => {
-    const map: Record<string, number> = {};
-    const added: Record<string, boolean> = {};
-    const edited: Record<string, boolean> = {};
-
-    shifts.forEach(shift => {
-      if (shift.status !== 'closed' || shift.isScheduled) return;
-      const endMs = getTimestampMs(shift.endAt);
-      if (!endMs) return;
-      const hours = calcWorkedMs(shift, endMs) / 3600000;
-      map[shift.userId] = (map[shift.userId] || 0) + hours;
-      const kind = hoursChangeKind(shift);
-      if (kind === 'added') added[shift.userId] = true;
-      if (kind === 'edited') edited[shift.userId] = true;
-    });
-
-    return users.map(user => {
-      const activeShift = activeShifts.find(s => s.userId === user.id);
-      return {
-        userId: user.id,
-        userName: user.name || user.email || 'Unknown',
-        avatarUrl: user.avatarUrl || 'man-1',
-        totalHours: map[user.id] || 0,
-        isOnline: !!activeShift,
-        hasAdded: !!added[user.id],
-        hasEdited: !!edited[user.id],
-      } as MemberStats;
-    }).sort((a, b) => b.totalHours - a.totalHours);
-  }, [shifts, users, activeShifts]);
-
-  const stats = useMemo(() => {
-    const map: Record<string, WorksiteStats> = {};
-
-    shifts.forEach(shift => {
-      const gId = shift.geofenceId || 'unknown';
-      if (!map[gId]) {
-        map[gId] = {
-          id: gId,
-          name: shift.geofenceName || 'Unknown Worksite',
-          totalHours: 0,
-          activePeople: 0,
-          totalShifts: 0,
-        };
-      }
-
-      const worksite = map[gId];
-      worksite.totalShifts += 1;
-
-      if (shift.status === 'open') {
-        worksite.activePeople += 1;
-      } else if (shift.status === 'closed') {
-        const endMs = getTimestampMs(shift.endAt);
-        if (endMs) {
-          worksite.totalHours += calcWorkedMs(shift, endMs) / 3600000;
-        }
-      }
-    });
-
-    return Object.values(map).sort((a, b) => b.totalHours - a.totalHours);
-  }, [shifts]);
-
   const auditRange = useMemo(() => {
     const nowLocal = new Date(now);
     const startOfToday = new Date(nowLocal.getFullYear(), nowLocal.getMonth(), nowLocal.getDate()).getTime();
@@ -211,13 +152,14 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
     return shifts
       .filter(shift => {
         if (shift.userId !== auditUserId || shift.status !== 'closed' || shift.isScheduled) return false;
+        if (auditGeofenceId && auditWorksiteId(shift) !== auditGeofenceId) return false;
         const endMs = getTimestampMs(shift.endAt);
         if (!endMs) return false;
         if (auditPeriod === 'all') return true;
         return shiftOverlapsRange(shift, auditRange.rangeStart, auditRange.rangeEnd, endMs);
       })
       .sort((a, b) => getTimestampMs(b.startAt) - getTimestampMs(a.startAt));
-  }, [shifts, auditUserId, auditPeriod, auditRange]);
+  }, [shifts, auditUserId, auditGeofenceId, auditPeriod, auditRange]);
 
   const auditResult = useMemo(() => {
     if (!auditUserId) return 0;
@@ -235,9 +177,35 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
     return total;
   }, [auditUserId, auditShifts, auditPeriod, auditRange]);
 
+  const auditWorksiteFolders = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; shifts: ShiftRecord[] }>();
+    auditShifts.forEach(shift => {
+      const id = auditWorksiteId(shift);
+      const prev = map.get(id);
+      if (prev) {
+        prev.shifts.push(shift);
+        if (id !== NO_WORKSITE_ID && !prev.name) prev.name = auditWorksiteName(shift);
+        return;
+      }
+      map.set(id, { id, name: auditWorksiteName(shift), shifts: [shift] });
+    });
+    return [...map.values()].sort((a, b) => {
+      if (a.id === NO_WORKSITE_ID) return 1;
+      if (b.id === NO_WORKSITE_ID) return -1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [auditShifts]);
+
+  const openWorksiteFolderId = auditFolderId || auditGeofenceId;
+  const showingWorksiteFolders = Boolean(auditUserId && !openWorksiteFolderId);
+  const folderShifts = useMemo(() => {
+    if (!openWorksiteFolderId) return [];
+    return auditShifts.filter(shift => auditWorksiteId(shift) === openWorksiteFolderId);
+  }, [auditShifts, openWorksiteFolderId]);
+
   const auditDays = useMemo(() => {
     const byDay = new Map<string, ShiftRecord[]>();
-    auditShifts.forEach(shift => {
+    folderShifts.forEach(shift => {
       const startMs = getTimestampMs(shift.startAt, shift.workPeriods?.[0]?.startIso);
       if (!startMs) return;
       const date = new Date(startMs);
@@ -245,21 +213,104 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
       byDay.set(key, [...(byDay.get(key) || []), shift]);
     });
     return [...byDay.entries()].sort(([a], [b]) => b.localeCompare(a));
-  }, [auditShifts]);
+  }, [folderShifts]);
   const auditUsesDayNavigation = auditPeriod === 'week' || auditPeriod === 'month' || auditPeriod === 'all';
   const displayedAuditShifts = auditUsesDayNavigation && auditDayKey
     ? auditDays.find(([key]) => key === auditDayKey)?.[1] || []
-    : auditShifts;
+    : folderShifts;
 
-  const formatElapsed = (start: unknown) => {
-    const startTime = getTimestampMs(start);
-    if (!startTime) return '00:00';
-    const diff = now - startTime;
-    const hours = Math.floor(diff / 3600000);
-    const mins = Math.floor((diff % 3600000) / 60000);
-    const secs = Math.floor((diff % 60000) / 1000);
-    const f = (n: number) => n.toString().padStart(2, '0');
-    return hours > 0 ? `${hours}:${f(mins)}:${f(secs)}` : `${f(mins)}:${f(secs)}`;
+  const formatElapsed = (shift: LiveShift) => formatShiftDuration(calcWorkedMs(shift, now));
+
+  const auditMembers = useMemo(() => {
+    const lastActivity = new Map<string, { open: number; at: number }>();
+    shifts.forEach(shift => {
+      if (shift.isScheduled) return;
+      const startMs = getTimestampMs(shift.startAt, shift.workPeriods?.[0]?.startIso);
+      const endMs = getTimestampMs(shift.endAt);
+      const prev = lastActivity.get(shift.userId) || { open: 0, at: 0 };
+      if (shift.status === 'open') {
+        lastActivity.set(shift.userId, { open: 1, at: Math.max(prev.at, startMs || 0) });
+        return;
+      }
+      if (prev.open) return;
+      lastActivity.set(shift.userId, { open: 0, at: Math.max(prev.at, endMs || startMs || 0) });
+    });
+
+    return [...users].sort((a, b) => {
+      const aAct = lastActivity.get(a.id) || { open: 0, at: 0 };
+      const bAct = lastActivity.get(b.id) || { open: 0, at: 0 };
+      if (bAct.open !== aAct.open) return bAct.open - aAct.open;
+      if (bAct.at !== aAct.at) return bAct.at - aAct.at;
+      return employeeSortName(a).localeCompare(employeeSortName(b));
+    });
+  }, [shifts, users]);
+
+  const selectedAuditUser = users.find(u => u.id === auditUserId);
+  const memberQueryNorm = memberQuery.trim().toLowerCase();
+  const visibleAuditMembers = memberQueryNorm
+    ? auditMembers.filter(u => {
+        const name = String(u.name || '');
+        const email = String(u.email || u.emailLower || '');
+        return name.toLowerCase().includes(memberQueryNorm) || email.toLowerCase().includes(memberQueryNorm);
+      })
+    : auditMembers;
+
+  const closeMemberPicker = () => {
+    setMemberPickerOpen(false);
+    setMemberQuery('');
+    Keyboard.dismiss();
+  };
+
+  const closeWorksitePicker = () => {
+    setWorksitePickerOpen(false);
+    setWorksiteQuery('');
+    Keyboard.dismiss();
+  };
+
+  const selectAuditMember = (userId: string) => {
+    setAuditUserId(userId);
+    closeMemberPicker();
+  };
+
+  const auditWorksites = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; open: number; at: number }>();
+    shifts.forEach(shift => {
+      const id = auditWorksiteId(shift);
+      const name = auditWorksiteName(shift);
+      const prev = map.get(id) || { id, name, open: 0, at: 0 };
+      const startMs = getTimestampMs(shift.startAt, shift.workPeriods?.[0]?.startIso);
+      const endMs = getTimestampMs(shift.endAt);
+      if (shift.status === 'open') {
+        map.set(id, { id, name: name || prev.name, open: 1, at: Math.max(prev.at, startMs || 0) });
+        return;
+      }
+      if (prev.open) {
+        map.set(id, { ...prev, name: prev.name || name });
+        return;
+      }
+      map.set(id, {
+        id,
+        name: name || prev.name,
+        open: 0,
+        at: Math.max(prev.at, endMs || startMs || 0),
+      });
+    });
+    return [...map.values()].sort((a, b) => {
+      if (b.open !== a.open) return b.open - a.open;
+      if (b.at !== a.at) return b.at - a.at;
+      return a.name.localeCompare(b.name);
+    });
+  }, [shifts]);
+
+  const selectedAuditWorksite = auditWorksites.find(site => site.id === auditGeofenceId);
+  const worksiteQueryNorm = worksiteQuery.trim().toLowerCase();
+  const visibleAuditWorksites = worksiteQueryNorm
+    ? auditWorksites.filter(site => site.name.toLowerCase().includes(worksiteQueryNorm))
+    : auditWorksites;
+
+  const selectAuditWorksite = (geofenceId: string | null) => {
+    setAuditGeofenceId(geofenceId);
+    closeWorksitePicker();
   };
 
   const openEmployeeProfile = (userId: string, userName: string) => {
@@ -282,119 +333,317 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
           <ActivityIndicator size="large" color="#F3E6D3" />
         </View>
       ) : (
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.list}>
-          {/* Shift Audit */}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.list}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={styles.section}>
-            <Text style={styles.sectionHeader}>Shift Audit</Text>
-            <View style={styles.auditCard}>
-              <Text style={styles.auditSubLabel}>1. Select Team Member</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.auditUserScroll}>
-                {users.map(u => (
-                  <TouchableOpacity 
-                    key={u.id} 
-                    style={[styles.auditUserItem, auditUserId === u.id && styles.auditUserItemActive]}
-                    onPress={() => setAuditUserId(u.id)}
-                  >
-                    <Image 
-                      source={Avatars[(u.avatarUrl as AvatarKey) || 'man-1']} 
-                      style={[styles.auditAvatar, auditUserId === u.id && styles.auditAvatarActive]} 
-                    />
-                    <Text style={[styles.auditUserName, auditUserId === u.id && styles.auditUserNameActive]} numberOfLines={1}>
-                      {u.name?.split(' ')[0] || 'Member'}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-
-              <Text style={[styles.auditSubLabel, { marginTop: 16 }]}>2. Select Period</Text>
-              <View style={styles.periodRow}>
-                {(['today', 'week', 'month', 'all', 'custom'] as const).map(p => (
-                  <TouchableOpacity 
-                    key={p} 
-                    style={[styles.periodBtn, auditPeriod === p && styles.periodBtnActive]}
-                    onPress={() => setAuditPeriod(p)}
-                  >
-                    <Text style={[styles.periodBtnText, auditPeriod === p && styles.periodBtnTextActive]}>
-                      {p.toUpperCase()}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {auditPeriod === 'custom' && (
-                <View style={styles.customRangeRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>Start Date</Text>
-                    <TextInput 
-                      style={styles.input} 
-                      value={customStart} 
-                      onChangeText={setCustomStart} 
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor="#8F6A48"
-                    />
-                  </View>
-                  <View style={{ width: 12 }} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.label}>End Date</Text>
-                    <TextInput 
-                      style={styles.input} 
-                      value={customEnd} 
-                      onChangeText={setCustomEnd} 
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor="#8F6A48"
-                    />
-                  </View>
-                </View>
-              )}
-
-              <View style={styles.auditResultContainer}>
+            <Text style={styles.fieldLabel}>Member</Text>
+            <View style={styles.auditDropdown}>
+              <TouchableOpacity
+                style={styles.auditDropdownTrigger}
+                onPress={() => {
+                  if (memberPickerOpen) {
+                    closeMemberPicker();
+                    return;
+                  }
+                  closeWorksitePicker();
+                  setMemberPickerOpen(true);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: memberPickerOpen }}
+                accessibilityLabel={
+                  selectedAuditUser
+                    ? `Member ${selectedAuditUser.name || selectedAuditUser.email || 'Member'}`
+                    : 'Select member'
+                }
+              >
+                {selectedAuditUser ? (
+                  <Image
+                    source={Avatars[(selectedAuditUser.avatarUrl as AvatarKey) || 'man-1']}
+                    style={styles.auditAvatar}
+                  />
+                ) : null}
+                <Text
+                  style={[styles.auditDropdownValue, !selectedAuditUser && styles.auditDropdownPlaceholder]}
+                  numberOfLines={1}
+                >
+                  {selectedAuditUser
+                    ? `${selectedAuditUser.name || selectedAuditUser.email || 'Member'}${
+                        orgStatusLabel(selectedAuditUser) ? ' · Inactive' : ''
+                      }`
+                    : 'Select member'}
+                </Text>
+                <Text style={styles.auditDropdownChevron}>{memberPickerOpen ? '⌃' : '⌄'}</Text>
+              </TouchableOpacity>
+              {memberPickerOpen ? (
                 <View>
-                  <Text style={styles.auditResultLabel}>Total Hours Worked</Text>
-                  <Text style={styles.auditResultPeriod}>
-                    {auditPeriod === 'all' ? 'Lifetime' : auditPeriod === 'custom' ? `${customStart} to ${customEnd}` : `This ${auditPeriod}`}
-                  </Text>
-                </View>
-                <Text style={styles.auditResultValue}>{auditResult.toFixed(1)}h</Text>
-              </View>
-              {auditUserId && auditShifts.length > 0 ? (
-                <View style={styles.auditShiftList}>
-                  {auditUsesDayNavigation && !auditDayKey ? auditDays.map(([dayKey, dayShifts]) => (
-                    <TouchableOpacity key={dayKey} style={styles.auditShiftRow} onPress={() => setAuditDayKey(dayKey)}>
-                      <Text style={styles.auditShiftTime}>{new Date(`${dayKey}T00:00:00`).toLocaleDateString()}</Text>
-                      <Text style={styles.auditShiftScheduled}>{dayShifts.length} {dayShifts.length === 1 ? 'shift' : 'shifts'} ›</Text>
-                    </TouchableOpacity>
-                  )) : (
-                    <>
-                      {auditUsesDayNavigation ? (
-                        <TouchableOpacity onPress={() => setAuditDayKey(null)}><Text style={styles.auditShiftScheduled}>‹ All days</Text></TouchableOpacity>
-                      ) : null}
-                      {displayedAuditShifts.map(shift => {
-                    const kind = hoursChangeKind(shift);
-                    const startMs = getTimestampMs(shift.startAt, shift.workPeriods?.[0]?.startIso);
-                    const endMs = getTimestampMs(shift.endAt, shift.workPeriods?.[0]?.endIso);
-                    return (
-                      <View key={shift.id} style={styles.auditShiftRow}>
-                        <View style={{ flex: 1 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                            <Text style={styles.auditShiftTime}>
-                              {startMs ? formatClockTime(startMs) : '—'} – {endMs ? formatClockTime(endMs) : '—'}
+                  <TextInput
+                    style={styles.auditSearch}
+                    value={memberQuery}
+                    onChangeText={setMemberQuery}
+                    placeholder="Search name"
+                    placeholderTextColor={PIZZA_FIRE.textMuted}
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                    accessibilityLabel="Search members"
+                  />
+                  <ScrollView
+                    style={styles.auditDropdownList}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {visibleAuditMembers.length === 0 ? (
+                      <Text style={styles.auditDropdownEmpty}>No matches</Text>
+                    ) : (
+                      visibleAuditMembers.map(u => {
+                        const selected = auditUserId === u.id;
+                        const inactive = orgStatusLabel(u);
+                        return (
+                          <TouchableOpacity
+                            key={u.id}
+                            style={[styles.auditDropdownItem, selected && styles.auditUserItemActive]}
+                            onPress={() => selectAuditMember(u.id)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected }}
+                          >
+                            <Image
+                              source={Avatars[(u.avatarUrl as AvatarKey) || 'man-1']}
+                              style={[styles.auditAvatar, selected && styles.auditAvatarActive]}
+                            />
+                            <Text
+                              style={[styles.auditUserName, selected && styles.auditUserNameActive]}
+                              numberOfLines={1}
+                            >
+                              {u.name || u.email || 'Member'}
+                              {inactive ? ' · Inactive' : ''}
                             </Text>
-                            <HoursChangeBadge added={kind === 'added'} edited={kind === 'edited'} />
-                          </View>
-                          {shift.scheduledStartTime && shift.scheduledEndTime ? (
-                            <Text style={styles.auditShiftScheduled}>
-                              Scheduled: {shift.scheduledStartTime} – {shift.scheduledEndTime}
-                            </Text>
-                          ) : null}
-                        </View>
-                      </View>
-                    );
-                      })}
-                    </>
-                  )}
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </ScrollView>
                 </View>
               ) : null}
             </View>
+
+            <Text style={styles.fieldLabel}>Worksite</Text>
+            <View style={styles.auditDropdown}>
+              <TouchableOpacity
+                style={styles.auditDropdownTrigger}
+                onPress={() => {
+                  if (worksitePickerOpen) {
+                    closeWorksitePicker();
+                    return;
+                  }
+                  closeMemberPicker();
+                  setWorksitePickerOpen(true);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: worksitePickerOpen }}
+                accessibilityLabel={
+                  selectedAuditWorksite
+                    ? `Worksite ${selectedAuditWorksite.name}`
+                    : 'All worksites'
+                }
+              >
+                <Text
+                  style={[styles.auditDropdownValue, !selectedAuditWorksite && styles.auditDropdownPlaceholder]}
+                  numberOfLines={1}
+                >
+                  {selectedAuditWorksite ? selectedAuditWorksite.name : 'All worksites'}
+                </Text>
+                <Text style={styles.auditDropdownChevron}>{worksitePickerOpen ? '⌃' : '⌄'}</Text>
+              </TouchableOpacity>
+              {worksitePickerOpen ? (
+                <View>
+                  <TextInput
+                    style={styles.auditSearch}
+                    value={worksiteQuery}
+                    onChangeText={setWorksiteQuery}
+                    placeholder="Search worksite"
+                    placeholderTextColor={PIZZA_FIRE.textMuted}
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                    accessibilityLabel="Search worksites"
+                  />
+                  <ScrollView
+                    style={styles.auditDropdownList}
+                    nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    <TouchableOpacity
+                      style={[styles.auditDropdownItem, !auditGeofenceId && styles.auditUserItemActive]}
+                      onPress={() => selectAuditWorksite(null)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: !auditGeofenceId }}
+                    >
+                      <Text
+                        style={[styles.auditUserName, !auditGeofenceId && styles.auditUserNameActive]}
+                        numberOfLines={1}
+                      >
+                        All worksites
+                      </Text>
+                    </TouchableOpacity>
+                    {visibleAuditWorksites.length === 0 ? (
+                      <Text style={styles.auditDropdownEmpty}>No matches</Text>
+                    ) : (
+                      visibleAuditWorksites.map(site => {
+                        const selected = auditGeofenceId === site.id;
+                        return (
+                          <TouchableOpacity
+                            key={site.id}
+                            style={[styles.auditDropdownItem, selected && styles.auditUserItemActive]}
+                            onPress={() => selectAuditWorksite(site.id)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected }}
+                          >
+                            <Text
+                              style={[styles.auditUserName, selected && styles.auditUserNameActive]}
+                              numberOfLines={1}
+                            >
+                              {site.name}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+              ) : null}
+            </View>
+
+            <Text style={styles.fieldLabel}>Period</Text>
+            <View style={styles.periodRow}>
+              {(['today', 'week', 'month', 'all', 'custom'] as const).map(p => (
+                <TouchableOpacity
+                  key={p}
+                  style={[styles.periodBtn, auditPeriod === p && styles.periodBtnActive]}
+                  onPress={() => setAuditPeriod(p)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: auditPeriod === p }}
+                >
+                  <Text style={[styles.periodBtnText, auditPeriod === p && styles.periodBtnTextActive]}>
+                    {p === 'today' ? 'Today' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : p === 'all' ? 'All' : 'Custom'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {auditPeriod === 'custom' ? (
+              <View style={styles.customRangeRow}>
+                <View style={styles.customDateField}>
+                  <Text style={styles.label}>Start</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={customStart}
+                    onChangeText={setCustomStart}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={PIZZA_FIRE.textMuted}
+                  />
+                </View>
+                <View style={styles.customDateField}>
+                  <Text style={styles.label}>End</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={customEnd}
+                    onChangeText={setCustomEnd}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={PIZZA_FIRE.textMuted}
+                  />
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.auditResultContainer}>
+              <Text style={styles.auditResultLabel} numberOfLines={2}>
+                Total {auditResult.toFixed(1)}h
+                <Text style={styles.auditResultPeriod}>
+                  {' · '}
+                  {auditPeriod === 'all'
+                    ? 'Lifetime'
+                    : auditPeriod === 'custom'
+                      ? `${customStart} – ${customEnd}`
+                      : auditPeriod === 'today'
+                        ? 'Today'
+                        : `This ${auditPeriod}`}
+                  {selectedAuditWorksite ? ` · ${selectedAuditWorksite.name}` : ''}
+                </Text>
+              </Text>
+            </View>
+            {auditUserId && showingWorksiteFolders && auditWorksiteFolders.length > 0 ? (
+              <View style={styles.auditShiftList}>
+                {auditWorksiteFolders.map(folder => (
+                  <TouchableOpacity
+                    key={folder.id}
+                    style={styles.auditShiftRow}
+                    onPress={() => {
+                      setAuditDayKey(null);
+                      setAuditFolderId(folder.id);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${folder.name}, ${folder.shifts.length} ${folder.shifts.length === 1 ? 'shift' : 'shifts'}`}
+                  >
+                    <Text style={styles.auditShiftTime}>{folder.name}</Text>
+                    <Text style={styles.auditShiftScheduled}>
+                      {folder.shifts.length} {folder.shifts.length === 1 ? 'shift' : 'shifts'} ›
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+            {auditUserId && !showingWorksiteFolders && folderShifts.length > 0 ? (
+              <View style={styles.auditShiftList}>
+                {!auditGeofenceId ? (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setAuditDayKey(null);
+                      setAuditFolderId(null);
+                    }}
+                    hitSlop={8}
+                  >
+                    <Text style={styles.auditShiftScheduled}>‹ Worksites</Text>
+                  </TouchableOpacity>
+                ) : null}
+                {auditUsesDayNavigation && !auditDayKey ? auditDays.map(([dayKey, dayShifts]) => (
+                  <TouchableOpacity key={dayKey} style={styles.auditShiftRow} onPress={() => setAuditDayKey(dayKey)}>
+                    <Text style={styles.auditShiftTime}>{new Date(`${dayKey}T00:00:00`).toLocaleDateString()}</Text>
+                    <Text style={styles.auditShiftScheduled}>{dayShifts.length} {dayShifts.length === 1 ? 'shift' : 'shifts'} ›</Text>
+                  </TouchableOpacity>
+                )) : (
+                  <>
+                    {auditUsesDayNavigation ? (
+                      <TouchableOpacity onPress={() => setAuditDayKey(null)} hitSlop={8}>
+                        <Text style={styles.auditShiftScheduled}>‹ All days</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                    {displayedAuditShifts.map(shift => {
+                      const kind = hoursChangeKind(shift);
+                      const startMs = getTimestampMs(shift.startAt, shift.workPeriods?.[0]?.startIso);
+                      const endMs = getTimestampMs(shift.endAt, shift.workPeriods?.[0]?.endIso);
+                      return (
+                        <View key={shift.id} style={styles.auditShiftRow}>
+                          <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <Text style={styles.auditShiftTime}>
+                                {startMs ? formatClockTime(startMs) : '—'} – {endMs ? formatClockTime(endMs) : '—'}
+                              </Text>
+                              <HoursChangeBadge added={kind === 'added'} edited={kind === 'edited'} />
+                            </View>
+                            {shift.scheduledStartTime && shift.scheduledEndTime ? (
+                              <Text style={styles.auditShiftScheduled}>
+                                Scheduled: {shift.scheduledStartTime} – {shift.scheduledEndTime}
+                              </Text>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </>
+                )}
+              </View>
+            ) : null}
           </View>
 
           {activeShifts.length > 0 && (
@@ -403,92 +652,28 @@ export default function WorksiteOverviewScreen({ navigation }: Props) {
               {activeShifts.map(s => {
                 const userName = s.user?.name || s.user?.email || 'Unknown';
                 return (
-                  <View key={s.id} style={styles.personCard}>
-                    <View style={styles.personHeader}>
-                    {SHOW_DEBUG_ONLY_OPERATIONS ? <TouchableOpacity 
-                      style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                      onPress={() => openEmployeeProfile(s.userId, userName)}
-                      activeOpacity={0.8}
-                    >
-                      <Image 
-                        source={Avatars[(s.user?.avatarUrl as AvatarKey) || 'man-1']} 
-                        style={styles.personAvatar} 
-                      />
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.personName}>{userName}</Text>
-                        <Text style={styles.personWorksite}>{s.geofenceName}</Text>
-                      </View>
-                    </TouchableOpacity> : null}
-                      <View style={styles.timerBadge}>
-                        <Text style={styles.timerText}>{formatElapsed(s.startAt)}</Text>
-                      </View>
+                  <TouchableOpacity
+                    key={s.id}
+                    style={styles.activeRow}
+                    onPress={() => openEmployeeProfile(s.userId, userName)}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${userName}, ${s.geofenceName || 'worksite'}, ${formatElapsed(s)}`}
+                  >
+                    <Image
+                      source={Avatars[(s.user?.avatarUrl as AvatarKey) || 'man-1']}
+                      style={styles.activeAvatar}
+                    />
+                    <View style={styles.activeCopy}>
+                      <Text style={styles.activeName} numberOfLines={1}>{userName}</Text>
+                      <Text style={styles.activeWorksite} numberOfLines={1}>{s.geofenceName || '—'}</Text>
                     </View>
-                  </View>
+                    <Text style={styles.activeTimer} numberOfLines={1}>{formatElapsed(s)}</Text>
+                  </TouchableOpacity>
                 );
               })}
             </View>
           )}
-
-          <View style={styles.section}>
-            <Text style={styles.sectionHeader}>Member Productivity</Text>
-            {memberStats.map(m => (
-              <View key={m.userId} style={styles.personCard}>
-                <View style={styles.personHeader}>
-                  <TouchableOpacity
-                    style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
-                    onPress={() => navigation.navigate('WorkingHours', { employeeUserId: m.userId, employeeName: m.userName })}
-                    activeOpacity={0.8}
-                  >
-                    <Image 
-                      source={Avatars[(m.avatarUrl as AvatarKey) || 'man-1']} 
-                      style={[styles.personAvatar, !m.isOnline && { borderColor: PIZZA_FIRE.cardBorder }]} 
-                    />
-                    <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <Text style={styles.personName}>{m.userName}</Text>
-                        <HoursChangeBadge added={m.hasAdded} edited={m.hasEdited} />
-                      </View>
-                      <Text style={styles.personWorksite}>Total Contributions</Text>
-                    </View>
-                    <View style={styles.hourBadge}>
-                      <Text style={styles.hourText}>{m.totalHours.toFixed(1)}h</Text>
-                    </View>
-                  </TouchableOpacity>
-                </View>
-                {SHOW_DEBUG_ONLY_OPERATIONS ? <TouchableOpacity 
-                  style={[styles.messageBtn, styles.actionSecondary]}
-                  onPress={() => navigation.navigate('Chat', { prefillText: `@${m.userName} ` })}
-                >
-                  <Text style={styles.messageBtnText}>Message {m.userName.split(' ')[0]}</Text>
-                </TouchableOpacity> : null}
-              </View>
-            ))}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionHeader}>Worksite Stats</Text>
-            {stats.map(item => (
-              <View key={item.id} style={styles.card}>
-                <Text style={styles.worksiteName}>{item.name}</Text>
-                <View style={styles.statsRow}>
-                  <View style={styles.statBox}>
-                    <Text style={styles.statLabel}>Total Hours</Text>
-                    <Text style={styles.statValue}>{item.totalHours.toFixed(1)}h</Text>
-                  </View>
-                  <View style={styles.statBox}>
-                    <Text style={styles.statLabel}>Active Now</Text>
-                    <Text style={[styles.statValue, item.activePeople > 0 && styles.activeValue]}>
-                      {item.activePeople}
-                    </Text>
-                  </View>
-                  <View style={styles.statBox}>
-                    <Text style={styles.statLabel}>Total Shifts</Text>
-                    <Text style={styles.statValue}>{item.totalShifts}</Text>
-                  </View>
-                </View>
-              </View>
-            ))}
-          </View>
         </ScrollView>
       )}
     </View>
@@ -501,192 +686,132 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: PIZZA_FIRE.divider,
   },
-  back: { fontSize: 18, fontWeight: 'bold', color: PIZZA_FIRE.gold },
-  title: { fontSize: 20, fontWeight: 'bold', color: PIZZA_FIRE.textPrimary },
-  list: { padding: 16, gap: 16 },
+  back: { fontSize: 17, fontWeight: '700', color: PIZZA_FIRE.gold, minWidth: 64 },
+  title: { fontSize: 18, fontWeight: '700', color: PIZZA_FIRE.textPrimary },
+  list: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 24 },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  empty: { textAlign: 'center', marginTop: 40, color: PIZZA_FIRE.textMuted },
-  card: {
-    backgroundColor: PIZZA_FIRE.surface,
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.qlBorder,
-  },
-  worksiteName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: PIZZA_FIRE.textPrimary,
-    marginBottom: 12,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  statBox: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: PIZZA_FIRE.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  statValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: PIZZA_FIRE.textSecondary,
-  },
-  activeValue: {
-    color: '#4CAF50',
-  },
   section: {
-    marginBottom: 24,
+    marginBottom: 18,
   },
   sectionHeader: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: PIZZA_FIRE.accent,
-    letterSpacing: 1.5,
-    marginBottom: 12,
-    textTransform: 'uppercase',
-  },
-  personCard: {
-    backgroundColor: PIZZA_FIRE.surface,
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.qlBorder,
-    marginBottom: 12,
-  },
-  personHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-  },
-  personAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    borderWidth: 2,
-    borderColor: '#4CAF50',
-  },
-  personName: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: PIZZA_FIRE.textPrimary,
-  },
-  personWorksite: {
-    fontSize: 12,
-    color: PIZZA_FIRE.textMuted,
-    marginTop: 2,
-  },
-  timerBadge: {
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.cardBorder,
-  },
-  timerText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#4CAF50',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-  },
-  messageBtn: {
-    backgroundColor: PIZZA_FIRE.qlFill,
-    paddingVertical: 10,
-    borderRadius: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.qlBorder,
-  },
-  messageBtnText: {
-    color: PIZZA_FIRE.textSecondary,
-    fontWeight: '800',
     fontSize: 13,
+    fontWeight: '700',
+    color: PIZZA_FIRE.textSecondary,
+    letterSpacing: 0.4,
+    marginBottom: 8,
   },
-  actionSecondary: {},
-  hourBadge: {
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.accent,
-  },
-  hourText: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: PIZZA_FIRE.accent,
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: PIZZA_FIRE.textMuted,
+    marginBottom: 6,
   },
   scroll: {
     flex: 1,
   },
-  auditCard: {
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 18,
-    padding: 16,
+  auditDropdown: {
     borderWidth: 1,
-    borderColor: PIZZA_FIRE.accent,
-  },
-  auditSubLabel: {
-    fontSize: 12,
-    color: PIZZA_FIRE.textMuted,
-    fontWeight: '700',
+    borderColor: PIZZA_FIRE.cardBorder,
+    borderRadius: 8,
     marginBottom: 10,
-    textTransform: 'uppercase',
+    overflow: 'hidden',
   },
-  auditUserScroll: {
+  auditDropdownTrigger: {
     flexDirection: 'row',
-  },
-  auditUserItem: {
     alignItems: 'center',
-    marginRight: 16,
-    width: 60,
+    gap: 8,
+    minHeight: 44,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
   },
-  auditUserItemActive: {},
+  auditDropdownValue: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600',
+    color: PIZZA_FIRE.textPrimary,
+  },
+  auditDropdownPlaceholder: {
+    color: PIZZA_FIRE.textMuted,
+    fontWeight: '500',
+  },
+  auditDropdownChevron: {
+    fontSize: 14,
+    color: PIZZA_FIRE.textMuted,
+    paddingLeft: 4,
+  },
+  auditSearch: {
+    minHeight: 40,
+    paddingHorizontal: 10,
+    paddingVertical: Platform.OS === 'android' ? 6 : 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: PIZZA_FIRE.divider,
+    color: PIZZA_FIRE.textPrimary,
+    fontSize: 15,
+  },
+  auditDropdownList: {
+    maxHeight: 240,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: PIZZA_FIRE.divider,
+  },
+  auditDropdownEmpty: {
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    color: PIZZA_FIRE.textMuted,
+    fontSize: 13,
+  },
+  auditDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  auditUserItemActive: {
+    backgroundColor: PIZZA_FIRE.accentSoft,
+  },
   auditAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
   auditAvatarActive: {
     borderColor: PIZZA_FIRE.accent,
-    borderWidth: 2,
   },
   auditUserName: {
-    fontSize: 11,
-    color: PIZZA_FIRE.textMuted,
-    marginTop: 6,
-    textAlign: 'center',
+    flex: 1,
+    fontSize: 13,
+    color: PIZZA_FIRE.textSecondary,
+    flexShrink: 1,
   },
   auditUserNameActive: {
-    color: PIZZA_FIRE.accent,
-    fontWeight: 'bold',
+    color: PIZZA_FIRE.textPrimary,
+    fontWeight: '700',
   },
   periodRow: {
     flexDirection: 'row',
-    gap: 8,
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
   },
   periodBtn: {
-    flex: 1,
-    backgroundColor: PIZZA_FIRE.surfaceInset,
+    minHeight: 40,
+    minWidth: 56,
+    flexGrow: 1,
+    flexBasis: '18%',
+    paddingHorizontal: 8,
     paddingVertical: 8,
     borderRadius: 8,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
   },
@@ -696,47 +821,41 @@ const styles = StyleSheet.create({
   },
   periodBtnText: {
     color: PIZZA_FIRE.textMuted,
-    fontSize: 10,
-    fontWeight: 'bold',
+    fontSize: 12,
+    fontWeight: '700',
   },
   periodBtnTextActive: {
     color: PIZZA_FIRE.charcoal,
   },
   auditResultContainer: {
-    marginTop: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    padding: 16,
-    borderRadius: 12,
+    marginTop: 4,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: PIZZA_FIRE.divider,
   },
   auditResultLabel: {
-    fontSize: 14,
-    color: PIZZA_FIRE.textSecondary,
-    fontWeight: '600',
+    fontSize: 15,
+    color: PIZZA_FIRE.textPrimary,
+    fontWeight: '700',
   },
   auditResultPeriod: {
-    fontSize: 12,
+    fontSize: 13,
     color: PIZZA_FIRE.textMuted,
-    marginTop: 2,
-  },
-  auditResultValue: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: PIZZA_FIRE.accent,
+    fontWeight: '500',
   },
   auditShiftList: {
-    marginTop: 12,
-    gap: 8,
+    marginTop: 8,
+    gap: 6,
   },
   auditShiftRow: {
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: '#2E241D',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingVertical: 8,
+    minHeight: 44,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: PIZZA_FIRE.divider,
   },
   auditShiftTime: {
     color: PIZZA_FIRE.textPrimary,
@@ -745,33 +864,66 @@ const styles = StyleSheet.create({
   },
   auditShiftScheduled: {
     color: PIZZA_FIRE.textMuted,
-    fontSize: 11,
-    marginTop: 4,
-    fontStyle: 'italic',
+    fontSize: 12,
+    marginTop: 2,
   },
   customRangeRow: {
     flexDirection: 'row',
-    marginTop: 16,
-    padding: 12,
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.cardBorder,
+    gap: 10,
+    marginBottom: 8,
+  },
+  customDateField: {
+    flex: 1,
   },
   label: {
-    fontSize: 10,
+    fontSize: 11,
     color: PIZZA_FIRE.textMuted,
-    fontWeight: 'bold',
+    fontWeight: '600',
     marginBottom: 4,
-    textTransform: 'uppercase',
   },
   input: {
-    backgroundColor: PIZZA_FIRE.surfaceInset,
     color: PIZZA_FIRE.textPrimary,
-    padding: 10,
-    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    minHeight: 40,
+    borderRadius: 6,
     fontSize: 14,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
+  },
+  activeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minHeight: 48,
+    paddingVertical: 6,
+  },
+  activeAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+  },
+  activeCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activeName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: PIZZA_FIRE.textPrimary,
+  },
+  activeWorksite: {
+    fontSize: 12,
+    color: PIZZA_FIRE.textMuted,
+    marginTop: 1,
+  },
+  activeTimer: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: PIZZA_FIRE.success,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginLeft: 8,
+    flexShrink: 0,
+    maxWidth: '38%',
   },
 });

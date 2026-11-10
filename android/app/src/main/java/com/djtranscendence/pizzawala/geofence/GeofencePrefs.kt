@@ -26,8 +26,24 @@ object GeofencePrefs {
   private const val KEY_AUTO_SHIFT_ENABLED = "auto_shift_enabled"
   private const val KEY_SUPPRESS_ENTER_WHILE_ON_SHIFT = "suppress_enter_while_on_shift"
   private const val KEY_ENTER_HANDLED_PREFIX = "enter_handled_"
+  private const val KEY_BREAK_RETURN_HANDLED_PREFIX = "break_return_handled_"
+  private const val KEY_CONFIRMED_AWAY_PREFIX = "confirmed_away_"
+  private const val KEY_PENDING_AUTO_PREFIX = "pending_auto_"
   private const val KEY_EXIT_NOTIFIED_PREFIX = "exit_notified_"
   private const val KEY_REGISTERED_SIGNATURE = "registered_signature"
+  private const val KEY_SHIFT_ACTIVE = "shift_active"
+  private const val KEY_SHIFT_ID = "shift_id"
+  private const val KEY_SHIFT_USER_ID = "shift_user_id"
+  private const val KEY_SHIFT_GEOFENCE_ID = "shift_geofence_id"
+  private const val KEY_SHIFT_GEOFENCE_NAME = "shift_geofence_name"
+  private const val KEY_SHIFT_PAUSED = "shift_paused"
+  private const val KEY_BREAK_SOURCE = "break_source"
+  private const val KEY_AUTO_BREAK_ARMED = "auto_break_armed"
+  private const val KEY_CUTOFF_REACHED = "shift_cutoff_reached"
+  private const val KEY_PENDING_SHIFT_ACTION = "pending_shift_action"
+  private const val KEY_PENDING_JS_ACTION = "pending_js_action"
+  private const val KEY_PENDING_JS_GEOFENCE_ID = "pending_js_geofence_id"
+  private const val KEY_PENDING_JS_GEOFENCE_NAME = "pending_js_geofence_name"
 
   fun setAutoShiftEnabled(context: Context, enabled: Boolean) {
     context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -50,7 +66,7 @@ object GeofencePrefs {
 
   fun isNotificationsEnabled(context: Context): Boolean {
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-      .getBoolean(KEY_NOTIFICATIONS_ENABLED, true) // Default to true
+      .getBoolean(KEY_NOTIFICATIONS_ENABLED, false)
   }
 
   fun setSuppressEnterWhileOnShift(context: Context, suppressed: Boolean) {
@@ -97,6 +113,223 @@ object GeofencePrefs {
     if (geofenceId.isBlank()) return false
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
       .getBoolean(KEY_EXIT_NOTIFIED_PREFIX + geofenceId, false)
+  }
+
+  fun setBreakReturnHandledForVisit(context: Context, geofenceId: String, handled: Boolean) {
+    if (geofenceId.isBlank()) return
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (handled) {
+      prefs.putBoolean(KEY_BREAK_RETURN_HANDLED_PREFIX + geofenceId, true)
+    } else {
+      prefs.remove(KEY_BREAK_RETURN_HANDLED_PREFIX + geofenceId)
+    }
+    prefs.apply()
+  }
+
+  fun isBreakReturnHandledForVisit(context: Context, geofenceId: String): Boolean {
+    if (geofenceId.isBlank()) return false
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_BREAK_RETURN_HANDLED_PREFIX + geofenceId, false)
+  }
+
+  fun setConfirmedAwayForVisit(context: Context, geofenceId: String, away: Boolean) {
+    if (geofenceId.isBlank()) return
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (away) {
+      prefs.putBoolean(KEY_CONFIRMED_AWAY_PREFIX + geofenceId, true)
+    } else {
+      prefs.remove(KEY_CONFIRMED_AWAY_PREFIX + geofenceId)
+    }
+    prefs.apply()
+  }
+
+  fun isConfirmedAwayForVisit(context: Context, geofenceId: String): Boolean {
+    if (geofenceId.isBlank()) return false
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_CONFIRMED_AWAY_PREFIX + geofenceId, false)
+  }
+
+  fun getPendingAutoAction(context: Context, geofenceId: String): String? {
+    if (geofenceId.isBlank()) return null
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_PENDING_AUTO_PREFIX + geofenceId, null)
+  }
+
+  fun setPendingAutoAction(context: Context, geofenceId: String, action: String?) {
+    if (geofenceId.isBlank()) return
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (action.isNullOrBlank()) {
+      prefs.remove(KEY_PENDING_AUTO_PREFIX + geofenceId)
+    } else {
+      prefs.putString(KEY_PENDING_AUTO_PREFIX + geofenceId, action)
+    }
+    prefs.apply()
+  }
+
+  fun consumePendingAutoAction(context: Context, geofenceId: String, action: String): Boolean {
+    val pending = getPendingAutoAction(context, geofenceId)
+    if (pending != action) return false
+    setPendingAutoAction(context, geofenceId, null)
+    return true
+  }
+
+  fun saveShiftSnapshot(
+    context: Context,
+    active: Boolean,
+    shiftId: String?,
+    userId: String?,
+    geofenceId: String?,
+    geofenceName: String?,
+    paused: Boolean,
+  ) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_SHIFT_ACTIVE, active)
+      .putString(KEY_SHIFT_ID, shiftId)
+      .putString(KEY_SHIFT_USER_ID, userId)
+      .putString(KEY_SHIFT_GEOFENCE_ID, geofenceId)
+      .putString(KEY_SHIFT_GEOFENCE_NAME, geofenceName)
+      .putBoolean(KEY_SHIFT_PAUSED, paused)
+      .apply()
+    if (!paused) {
+      setBreakSource(context, null)
+    }
+  }
+
+  fun clearShiftSnapshot(context: Context) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_SHIFT_ACTIVE, false)
+      .remove(KEY_SHIFT_ID)
+      .remove(KEY_SHIFT_USER_ID)
+      .remove(KEY_SHIFT_GEOFENCE_ID)
+      .remove(KEY_SHIFT_GEOFENCE_NAME)
+      .putBoolean(KEY_SHIFT_PAUSED, false)
+      .remove(KEY_BREAK_SOURCE)
+      .remove(KEY_PENDING_SHIFT_ACTION)
+      .apply()
+  }
+
+  fun isShiftActive(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_SHIFT_ACTIVE, false)
+  }
+
+  fun isShiftPaused(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_SHIFT_PAUSED, false)
+  }
+
+  fun getShiftId(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_SHIFT_ID, null)
+  }
+
+  fun getShiftUserId(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_SHIFT_USER_ID, null)
+  }
+
+  fun getShiftGeofenceId(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_SHIFT_GEOFENCE_ID, null)
+  }
+
+  fun getShiftGeofenceName(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_SHIFT_GEOFENCE_NAME, null)
+  }
+
+  fun setShiftPaused(context: Context, paused: Boolean) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_SHIFT_PAUSED, paused)
+      .apply()
+  }
+
+  fun setBreakSource(context: Context, source: String?) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (source.isNullOrBlank()) {
+      prefs.remove(KEY_BREAK_SOURCE)
+    } else {
+      prefs.putString(KEY_BREAK_SOURCE, source)
+    }
+    prefs.apply()
+  }
+
+  fun getBreakSource(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_BREAK_SOURCE, null)
+  }
+
+  fun isAutomaticBreak(context: Context): Boolean {
+    return getBreakSource(context) == "auto"
+  }
+
+  fun setAutoBreakArmed(context: Context, armed: Boolean) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_AUTO_BREAK_ARMED, armed)
+      .apply()
+  }
+
+  fun isAutoBreakArmed(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_AUTO_BREAK_ARMED, true)
+  }
+
+  fun setCutoffReached(context: Context, reached: Boolean) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putBoolean(KEY_CUTOFF_REACHED, reached)
+      .apply()
+  }
+
+  fun isCutoffReached(context: Context): Boolean {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getBoolean(KEY_CUTOFF_REACHED, false)
+  }
+
+  fun setPendingShiftAction(context: Context, action: String?) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+    if (action.isNullOrBlank()) {
+      prefs.remove(KEY_PENDING_SHIFT_ACTION)
+    } else {
+      prefs.putString(KEY_PENDING_SHIFT_ACTION, action)
+    }
+    prefs.apply()
+  }
+
+  fun getPendingShiftAction(context: Context): String? {
+    return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .getString(KEY_PENDING_SHIFT_ACTION, null)
+  }
+
+  fun setPendingJsAction(context: Context, action: String, geofenceId: String?, geofenceName: String?) {
+    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+      .edit()
+      .putString(KEY_PENDING_JS_ACTION, action)
+      .putString(KEY_PENDING_JS_GEOFENCE_ID, geofenceId)
+      .putString(KEY_PENDING_JS_GEOFENCE_NAME, geofenceName)
+      .apply()
+  }
+
+  fun takePendingJsAction(context: Context): Triple<String, String?, String?>? {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val action = prefs.getString(KEY_PENDING_JS_ACTION, null) ?: return null
+    val geofenceId = prefs.getString(KEY_PENDING_JS_GEOFENCE_ID, null)
+    val geofenceName = prefs.getString(KEY_PENDING_JS_GEOFENCE_NAME, null)
+    prefs.edit()
+      .remove(KEY_PENDING_JS_ACTION)
+      .remove(KEY_PENDING_JS_GEOFENCE_ID)
+      .remove(KEY_PENDING_JS_GEOFENCE_NAME)
+      .apply()
+    return Triple(action, geofenceId, geofenceName)
+  }
+
+  fun isCurrentShiftWorksite(context: Context, geofenceId: String): Boolean {
+    val current = getShiftGeofenceId(context)
+    return !current.isNullOrBlank() && current == geofenceId
   }
 
   fun setRegisteredSignature(context: Context, signature: String) {

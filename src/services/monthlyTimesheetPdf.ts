@@ -6,12 +6,22 @@ import { calcBreakMs, calcWorkedMs, getTimestampMs, normalizeShiftPeriods, type 
 
 export type TimesheetRow = {
   date: string;
-  activity: 'Working' | 'Driving';
+  activity: string;
   start: string;
   end: string;
   breakMs: number;
   workedMs: number;
 };
+
+export function timesheetActivityLabel(shift: LiveShift) {
+  if (shift.workCategory === 'driving') return 'Driving';
+  const site = (shift.geofenceName || shift.worksiteName || '').trim();
+  return site ? `Working - ${site}` : 'Working';
+}
+
+export function totalWorkingTimeMs(rows: TimesheetRow[]) {
+  return rows.reduce((total, row) => (row.activity === 'Driving' ? total : total + row.workedMs), 0);
+}
 
 const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const ORANGE: [number, number, number] = [232, 133, 57];
@@ -56,41 +66,48 @@ function shiftStartMs(shift: LiveShift) {
   return getTimestampMs(shift.startAt, fallback);
 }
 
-/** Build display rows only. Stored shifts are never merged or modified. */
+/** Same-site working shifts on one day become one row. Different sites stay separate. */
 export function buildMonthlyTimesheetRows(shifts: LiveShift[], monthKey: string, nowMs = Date.now()): TimesheetRow[] {
-  const grouped = new Map<string, { start: number; end: number; breakMs: number; workedMs: number }>();
+  const grouped = new Map<string, { date: string; activity: string; start: number; end: number; breakMs: number; workedMs: number }>();
   shifts.forEach(shift => {
     if (shift.isScheduled) return;
     const started = shiftStartMs(shift);
     if (!started || localDateKey(started).slice(0, 7) !== monthKey) return;
     const { workPeriods } = normalizeShiftPeriods(shift, nowMs);
     if (!workPeriods.length) return;
-    const category: TimesheetRow['activity'] = shift.workCategory === 'driving' ? 'Driving' : 'Working';
-    const key = `${localDateKey(started)}:${category}`;
     const first = Math.min(...workPeriods.map(p => new Date(p.startIso).getTime()).filter(Number.isFinite));
     const last = Math.max(...workPeriods.map(p => (p.endIso ? new Date(p.endIso).getTime() : nowMs)).filter(Number.isFinite));
     if (!Number.isFinite(first) || !Number.isFinite(last)) return;
+    const activity = timesheetActivityLabel(shift);
+    const date = localDateKey(started);
+    const key = `${date}\t${activity}`;
     const current = grouped.get(key);
     grouped.set(key, {
+      date,
+      activity,
       start: current ? Math.min(current.start, first) : first,
       end: current ? Math.max(current.end, last) : last,
-      breakMs: (current?.breakMs || 0) + (category === 'Working' ? calcBreakMs(shift, nowMs) : 0),
+      breakMs: (current?.breakMs || 0) + (activity === 'Driving' ? 0 : calcBreakMs(shift, nowMs)),
       workedMs: (current?.workedMs || 0) + calcWorkedMs(shift, nowMs),
     });
   });
-  return Array.from(grouped.entries())
-    .map(([key, value]) => {
-      const [date, activity] = key.split(':') as [string, TimesheetRow['activity']];
-      return { date, activity, start: clock(value.start), end: clock(value.end), breakMs: value.breakMs, workedMs: value.workedMs };
-    })
-    .sort((a, b) => a.date.localeCompare(b.date) || a.activity.localeCompare(b.activity));
+  return Array.from(grouped.values())
+    .sort((a, b) => a.date.localeCompare(b.date) || a.start - b.start || a.activity.localeCompare(b.activity))
+    .map(value => ({
+      date: value.date,
+      activity: value.activity,
+      start: clock(value.start),
+      end: clock(value.end),
+      breakMs: value.breakMs,
+      workedMs: value.workedMs,
+    }));
 }
 
 export function buildMonthlyTimesheetPdfBase64(employeeName: string, monthKey: string, rows: TimesheetRow[]) {
   const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
   const width = pdf.internal.pageSize.getWidth();
   const margin = 15;
-  const col = [31, 29, 27, 27, 25, 35];
+  const col = [28, 46, 22, 22, 22, 34];
   const tableRight = margin + col.reduce((total, value) => total + value, 0);
   const headers = ['Date', 'Activity', 'Start', 'End', 'Break', 'Working time'];
   const monthLabel = new Date(`${monthKey}-01T12:00:00`).toLocaleString('en-US', { month: 'long', year: 'numeric' });
@@ -160,6 +177,24 @@ export function buildMonthlyTimesheetPdfBase64(employeeName: string, monthKey: s
     }
     drawRow([displayDate(row.date), row.activity, row.start, row.end, row.activity === 'Driving' ? '—' : duration(row.breakMs), duration(row.workedMs)]);
   });
+  if (y > 268) {
+    pdf.addPage();
+    y = 18;
+    drawPageHeader();
+    drawTableHeader();
+  }
+  const workingTotal = totalWorkingTimeMs(rows);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setFontSize(9);
+  pdf.setTextColor(20, 20, 20);
+  pdf.text('Total working time', margin + 2, y + 6);
+  pdf.text(duration(workingTotal), margin + col[0] + col[1] + col[2] + col[3] + col[4] + col[5] / 2, y + 6, {
+    align: 'center',
+  });
+  y += 10;
+  pdf.setDrawColor(...ORANGE);
+  pdf.setLineWidth(0.35);
+  pdf.line(margin, y, tableRight, y);
   const signatureY = Math.max(y + 16, pdf.internal.pageSize.getHeight() - 31);
   if (signatureY > pdf.internal.pageSize.getHeight() - 18) {
     pdf.addPage();

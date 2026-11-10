@@ -21,11 +21,27 @@ object ShiftOngoingService {
   private const val REFRESH_REQUEST_CODE = 92011
   private const val REFRESH_INTERVAL_MS = 60_000L
 
-  fun sync(context: Context, mode: String, periodStartMs: Long, baseElapsedMs: Long) {
+  fun sync(
+    context: Context,
+    mode: String,
+    periodStartMs: Long,
+    baseElapsedMs: Long,
+    workElapsedMs: Long? = null,
+  ) {
     val appContext = context.applicationContext
-    ShiftOngoingStore.save(appContext, mode, periodStartMs, baseElapsedMs)
+    ShiftOngoingStore.save(appContext, mode, periodStartMs, baseElapsedMs, workElapsedMs)
+    if (ShiftOngoingStore.applyCutoffIfDue(appContext)) {
+      val cutoffAt = ShiftOngoingStore.cutoffAtMs(appContext)
+      GeofenceShiftActions.dispatchCutoff(appContext, cutoffAt, GeofencePrefs.getShiftId(appContext))
+    } else {
+      GeofenceShiftCutoffWorker.schedule(appContext)
+    }
     scheduleRefresh(appContext)
     postNotification(appContext)
+  }
+
+  fun postCurrent(context: Context) {
+    postNotification(context.applicationContext)
   }
 
   fun refresh(context: Context) {
@@ -34,12 +50,22 @@ object ShiftOngoingService {
       cancelRefresh(appContext)
       return
     }
+    if (ShiftOngoingStore.applyCutoffIfDue(appContext)) {
+      val cutoffAt = ShiftOngoingStore.cutoffAtMs(appContext)
+      GeofenceShiftActions.dispatchCutoff(appContext, cutoffAt, GeofencePrefs.getShiftId(appContext))
+    }
     postNotification(appContext)
   }
 
   fun restoreIfActive(context: Context) {
     val appContext = context.applicationContext
     if (!ShiftOngoingStore.isActive(appContext)) return
+    if (ShiftOngoingStore.applyCutoffIfDue(appContext)) {
+      val cutoffAt = ShiftOngoingStore.cutoffAtMs(appContext)
+      GeofenceShiftActions.dispatchCutoff(appContext, cutoffAt, GeofencePrefs.getShiftId(appContext))
+    } else {
+      GeofenceShiftCutoffWorker.schedule(appContext)
+    }
     scheduleRefresh(appContext)
     postNotification(appContext)
   }

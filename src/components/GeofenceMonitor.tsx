@@ -33,18 +33,20 @@ import {
   setLastUserId,
   setLastUserName,
   shouldNotifyForEvent,
-  getAutoShiftEnabled,
   getLocationFeaturesEnabled,
+  getWorksiteAlertsEnabled,
   subscribeLocationFeatureSettings,
+  syncNativeWorksiteNotificationPref,
 } from '../geofencing/storage';
 import { effectiveGeofenceRadiusMeters } from '../geofencing/effectiveRadius';
 import { setNativeUserName } from '../geofencing/native';
-import { processGeofenceEvent, startShift, endShift } from '../geofencing/processor';
-import { decideGeofenceNotification, onShiftEnded, onShiftStarted } from '../geofencing/notificationPolicy';
+import { processGeofenceEvent } from '../geofencing/processor';
+import { decideGeofenceNotification } from '../geofencing/notificationPolicy';
 import { showGeofenceNotification } from '../notifications/geofenceNotifications';
 import type { GeofencePromptPayload } from '../geofencing/types';
 import { normalizeGeofenceTransition } from '../geofencing/transition';
 import { navigate } from '../navigation/navigationRef';
+import { activeWorksites, isActiveWorksite } from '../utils/locationPrompt';
 
 const MAX_IOS_GEOFENCES = 20;
 const GEOFENCE_ENTER_MARGIN_METERS = 5;
@@ -72,7 +74,7 @@ const pickNearestGeofences = (
   geofences: Geofence[],
   origin: { lat: number; lng: number } | null
 ) => {
-  const active = geofences.filter(item => item?.active !== false);
+  const active = activeWorksites(geofences);
   if (Platform.OS !== 'ios') {
     return active;
   }
@@ -202,23 +204,26 @@ export default function GeofenceMonitor() {
       if (!hasBackgroundLocation) return;
 
       await initNativeGeofencing();
+      await syncNativeWorksiteNotificationPref();
 
-      try {
-        const notifSettings = await notifee.requestPermission({
-          alert: true,
-          badge: true,
-          sound: true,
-        });
-        const notifyOk =
-          notifSettings.authorizationStatus === AuthorizationStatus.AUTHORIZED ||
-          notifSettings.authorizationStatus === AuthorizationStatus.PROVISIONAL;
-        if (!notifyOk) {
-          console.warn(
-            '[GeofenceMonitor] Notification permission not granted; worksite alerts may be missing.'
-          );
+      if (await getWorksiteAlertsEnabled()) {
+        try {
+          const notifSettings = await notifee.requestPermission({
+            alert: true,
+            badge: true,
+            sound: true,
+          });
+          const notifyOk =
+            notifSettings.authorizationStatus === AuthorizationStatus.AUTHORIZED ||
+            notifSettings.authorizationStatus === AuthorizationStatus.PROVISIONAL;
+          if (!notifyOk) {
+            console.warn(
+              '[GeofenceMonitor] Notification permission not granted; worksite alerts may be missing.'
+            );
+          }
+        } catch {
+          // ignore notification permission failure
         }
-      } catch {
-        // ignore notification permission failure
       }
 
       await ensureActivityRecognitionPermission();
@@ -246,25 +251,12 @@ export default function GeofenceMonitor() {
     };
   }, [userId, teamId, locationFeaturesEnabled]);
 
-  const wasOnShiftRef = useRef(false);
-  useEffect(() => {
-    if (isOnShift) {
-      wasOnShiftRef.current = true;
-      void onShiftStarted();
-      return;
-    }
-    if (wasOnShiftRef.current) {
-      wasOnShiftRef.current = false;
-      void onShiftEnded();
-    }
-  }, [isOnShift]);
-
   useEffect(() => {
     const showPendingPrompt = async () => {
       if (!userId) return;
       const pending = await consumePendingPrompt();
       if (!pending) return;
-      navigate('MySchedule', { prompt: pending });
+      navigate('Home');
     };
     void showPendingPrompt();
   }, [userId]);
@@ -274,7 +266,7 @@ export default function GeofenceMonitor() {
       .sort((a, b) => a.id.localeCompare(b.id))
       .map(g => {
         const r = effectiveGeofenceRadiusMeters(g.radiusMeters);
-        return `${g.id}:${r}:${g.center.lat.toFixed(5)}:${g.center.lng.toFixed(5)}`;
+        return `${g.id}:${r}:${g.center.lat.toFixed(5)}:${g.center.lng.toFixed(5)}:${isActiveWorksite(g) ? '1' : '0'}`;
       })
       .join('|');
 
@@ -335,7 +327,7 @@ export default function GeofenceMonitor() {
       console.warn('[GeofenceMonitor] No geofence metadata for id:', event.geofenceId);
       return;
     }
-    if (geofence.active === false) {
+    if (!isActiveWorksite(geofence)) {
       return;
     }
     if (!geofencesRef.current.some(g => g.id === geofence.id)) {
@@ -366,7 +358,6 @@ export default function GeofenceMonitor() {
       return;
     }
 
-    let didAutoHandle = false;
     if (transition === 'enter' || transition === 'exit') {
       const occurredAt =
         typeof event.timestamp === 'number' && event.timestamp > 0 ? event.timestamp : Date.now();
@@ -379,31 +370,21 @@ export default function GeofenceMonitor() {
           occurredAt,
         };
       const shouldNotify = await shouldNotifyForEvent(result.eventId);
-      const autoShift = await getAutoShiftEnabled();
       const user = nativeAuth().currentUser;
 
-      if (autoShift && user?.uid && transition === 'enter') {
-        didAutoHandle = true;
-        await startShift(user.uid, geofence.id, geofence.name || 'Worksite');
-      }
+      const decision = user?.uid
+        ? await decideGeofenceNotification(user.uid, transition, geofence.id)
+        : { show: false as const };
 
       if (
         shouldNotify &&
         user?.uid &&
-        (didAutoHandle || result.promptPayload) &&
+        decision.show &&
         Platform.OS !== 'android' &&
         AppState.currentState === 'active'
       ) {
-        const decision = await decideGeofenceNotification(user.uid, transition, geofence.id);
-        if (decision.show) {
-          const variant = didAutoHandle ? 'auto_result' : 'prompt';
-          void showGeofenceNotification(basePayload, { variant });
-        }
+        void showGeofenceNotification(basePayload, { variant: decision.variant });
       }
-    }
-
-    if (result.promptPayload && !didAutoHandle) {
-      navigate('MySchedule', { prompt: result.promptPayload });
     }
   };
 
@@ -426,7 +407,7 @@ export default function GeofenceMonitor() {
 
     const current = { lat: coords.latitude, lng: coords.longitude };
     for (const geofence of geofencesRef.current) {
-      if (geofence?.active === false) continue;
+      if (!isActiveWorksite(geofence)) continue;
       const radius = effectiveGeofenceRadiusMeters(geofence.radiusMeters);
       const distanceMeters = getDistanceMeters(current, geofence.center);
       const enterThreshold = radius;
@@ -562,32 +543,15 @@ export default function GeofenceMonitor() {
         occurredAt,
       };
 
-    let didAutoHandle = false;
     if (transition === 'enter' || transition === 'exit') {
       const shouldNotify = await shouldNotifyForEvent(result.eventId);
-      const autoShift = await getAutoShiftEnabled();
       const user = nativeAuth().currentUser;
-
-      if (autoShift && user?.uid) {
-        didAutoHandle = true;
-        if (transition === 'enter') {
-          await startShift(user.uid, geofence.id, geofence.name || 'Worksite');
-        } else {
-          await endShift(user.uid);
-        }
+      const decision = user?.uid
+        ? await decideGeofenceNotification(user.uid, transition, geofence.id)
+        : { show: false as const };
+      if (shouldNotify && user?.uid && decision.show) {
+        void showGeofenceNotification(basePayload, { variant: decision.variant });
       }
-
-      if (shouldNotify && user?.uid && (didAutoHandle || result.promptPayload)) {
-        const decision = await decideGeofenceNotification(user.uid, transition, geofence.id);
-        if (decision.show) {
-          const variant = didAutoHandle ? 'auto_result' : 'prompt';
-          void showGeofenceNotification(basePayload, { variant });
-        }
-      }
-    }
-
-    if (result.promptPayload && !didAutoHandle) {
-      navigate('MySchedule', { prompt: result.promptPayload });
     }
   };
 

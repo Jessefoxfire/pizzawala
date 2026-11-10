@@ -41,6 +41,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { auth } from '../services/firebase';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { setPromptActionStatus, loadCachedGeofences } from '../geofencing/storage';
+import { activeWorksites } from '../utils/locationPrompt';
 import type { GeofencePromptPayload } from '../geofencing/types';
 import Geolocation from 'react-native-geolocation-service';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
@@ -285,8 +286,7 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
         );
         if (pos && cached.length > 0) {
           const current = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          const sorted = cached
-            .filter(g => g.active)
+          const sorted = activeWorksites(cached)
             .map(g => ({ ...g, dist: getDistance(current, g.center) }))
             .sort((a, b) => a.dist - b.dist);
           if (sorted[0] && sorted[0].dist < 300) {
@@ -318,6 +318,8 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
     if (!openShift || shiftBusy) return;
     setShiftBusy(true);
     try {
+      const { onManualBreak } = require('../geofencing/notificationPolicy');
+      await onManualBreak();
       await pauseLiveShift(openShift.id);
     } catch (err: any) {
       Alert.alert('Notice', err?.message || 'Could not pause shift.');
@@ -330,6 +332,8 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
     if (!openShift || shiftBusy) return;
     setShiftBusy(true);
     try {
+      const { onManualResume } = require('../geofencing/notificationPolicy');
+      await onManualResume(openShift.geofenceId);
       await resumeLiveShift(openShift.id);
     } catch (err: any) {
       Alert.alert('Notice', err?.message || 'Could not resume shift.');
@@ -787,11 +791,8 @@ export default function MyScheduleScreen({ navigation, route }: Props) {
         userId={userId}
         activeShift={openShift}
         onCancel={() => setDaySummaryOpen(false)}
-        onConfirmed={result => {
+        onConfirmed={() => {
           setDaySummaryOpen(false);
-          if (result.queued) {
-            Alert.alert('Saved offline', result.notice || 'Shift end will sync when you are back online.');
-          }
         }}
       />
 
@@ -839,17 +840,17 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
-  calendarCard: { margin: 16, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, backgroundColor: PIZZA_FIRE.surfaceInset },
+  calendarCard: { margin: 16, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, backgroundColor: PIZZA_FIRE.surfaceInset },
   innerCalendar: { borderBottomWidth: 1, borderBottomColor: PIZZA_FIRE.divider },
   sectionHeader: { marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
   sectionTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
   upcomingList: { marginHorizontal: 16, gap: 10 },
-  upcomingItem: { backgroundColor: PIZZA_FIRE.surface, padding: 16, borderRadius: 12, borderLeftWidth: 4, borderLeftColor: PIZZA_FIRE.accent },
+  upcomingItem: { backgroundColor: PIZZA_FIRE.surface, padding: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: PIZZA_FIRE.accent },
   upcomingWorksite: { color: PIZZA_FIRE.textPrimary, fontWeight: 'bold', fontSize: 16 },
   upcomingTime: { color: PIZZA_FIRE.textMuted, fontSize: 13, marginTop: 4 },
-  timerCard: { margin: 16, padding: 24, borderRadius: 20, backgroundColor: PIZZA_FIRE.surface, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  timerCard: { margin: 16, padding: 24, borderRadius: 8, backgroundColor: PIZZA_FIRE.surface, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
   timerHeader: { color: PIZZA_FIRE.accent, fontSize: 13, fontWeight: '800', textTransform: 'uppercase', marginBottom: 12, letterSpacing: 1 },
-  proximityBadge: { backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 12, marginBottom: 16, width: '100%', alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  proximityBadge: { backgroundColor: PIZZA_FIRE.surfaceInset, padding: 12, borderRadius: 8, marginBottom: 16, width: '100%', alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   proximityText: { fontSize: 13, fontWeight: '600', textAlign: 'center' },
   textInside: { color: '#4CAF50' },
   textOutside: { color: '#F44336' },
@@ -859,29 +860,29 @@ const styles = StyleSheet.create({
   timerValue: { color: PIZZA_FIRE.textPrimary, fontSize: 42, fontWeight: '900', fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace' },
   timerStatus: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginTop: 8, fontStyle: 'italic' },
   timerActions: { marginTop: 24, width: '100%', flexDirection: 'row', gap: 10 },
-  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  pauseBtn: { flex: 1, backgroundColor: '#5A4739', paddingVertical: 14, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
   pauseBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '900', textTransform: 'uppercase' },
-  startBtn: { flex: 1, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  startBtn: { flex: 1, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 14, borderRadius: 8, alignItems: 'center' },
   startBtnText: { color: PIZZA_FIRE.charcoal, fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
-  endBtn: { flex: 1, backgroundColor: '#5C2420', paddingVertical: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#9E3C2E' },
+  endBtn: { flex: 1, backgroundColor: '#5C2420', paddingVertical: 14, borderRadius: 8, alignItems: 'center', borderWidth: 1, borderColor: '#9E3C2E' },
   endBtnText: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
-  auditCard: { margin: 16, padding: 20, backgroundColor: PIZZA_FIRE.surface, borderRadius: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  auditCard: { margin: 16, padding: 20, backgroundColor: PIZZA_FIRE.surface, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   auditTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700', marginBottom: 16 },
   auditRow: { flexDirection: 'row', marginBottom: 16 },
   auditLabel: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginBottom: 8, textTransform: 'uppercase', fontWeight: 'bold' },
   auditInput: { backgroundColor: PIZZA_FIRE.inputBg, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, height: 48, justifyContent: 'center' },
   auditInputText: { color: PIZZA_FIRE.textPrimary, fontSize: 14 },
-  auditBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  auditBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 12, borderRadius: 7, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.accent },
   auditBtnText: { color: PIZZA_FIRE.accent, fontWeight: 'bold', fontSize: 14 },
   auditResult: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: PIZZA_FIRE.divider, alignItems: 'center' },
   auditResultText: { color: PIZZA_FIRE.textPrimary, fontSize: 18, fontWeight: '900' },
-  settingsCard: { marginHorizontal: 16, padding: 16, borderRadius: 16, backgroundColor: PIZZA_FIRE.surface, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  settingsCard: { marginHorizontal: 16, padding: 16, borderRadius: 8, backgroundColor: PIZZA_FIRE.surface, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   settingsRow: { flexDirection: 'row', alignItems: 'center' },
   settingsLabel: { color: PIZZA_FIRE.textPrimary, fontWeight: 'bold' },
   settingsDesc: { color: PIZZA_FIRE.textMuted, fontSize: 12, marginTop: 2 },
   historyList: { marginHorizontal: 16, gap: 10 },
   historyGroupWrap: { gap: 6 },
-  historyItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: PIZZA_FIRE.surface, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  historyItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: PIZZA_FIRE.surface, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   historyRight: { alignItems: 'flex-end', gap: 4 },
   historyExpandHint: { color: PIZZA_FIRE.textMuted, fontSize: 16, fontWeight: '700', lineHeight: 16 },
   historySubItem: {
@@ -891,7 +892,7 @@ const styles = StyleSheet.create({
     marginLeft: 12,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    borderRadius: 10,
+    borderRadius: 7,
     backgroundColor: PIZZA_FIRE.crustDark,
     borderWidth: 1,
     borderColor: '#2E241D',
@@ -904,21 +905,21 @@ const styles = StyleSheet.create({
   empty: { color: PIZZA_FIRE.textMuted, textAlign: 'center', marginTop: 20, fontSize: 13 },
   errorWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
   errorText: { color: '#9E3C2E', textAlign: 'center', fontSize: 14, marginBottom: 16 },
-  retryBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
+  retryBtn: { backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 7, borderWidth: 1, borderColor: PIZZA_FIRE.accent },
   retryBtnText: { color: PIZZA_FIRE.accent, fontWeight: '800' },
   pickerModalBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'flex-end' },
   pickerCard: { backgroundColor: PIZZA_FIRE.bgMid, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   pickerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   pickerTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 16, fontWeight: '700' },
   pickerClose: { color: PIZZA_FIRE.accent, fontWeight: '700' },
-  promptCard: { margin: 16, padding: 16, borderRadius: 16, backgroundColor: PIZZA_FIRE.inputBg, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
+  promptCard: { margin: 16, padding: 16, borderRadius: 8, backgroundColor: PIZZA_FIRE.inputBg, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   promptTitle: { fontSize: 18, fontWeight: '700', color: PIZZA_FIRE.textPrimary },
   promptHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   badge: { backgroundColor: PIZZA_FIRE.accent, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   badgeText: { color: PIZZA_FIRE.charcoal, fontSize: 12, fontWeight: 'bold' },
   promptText: { marginTop: 8, color: PIZZA_FIRE.textSecondary, lineHeight: 22, fontSize: 15 },
   promptActions: { flexDirection: 'row', gap: 12, marginTop: 12 },
-  promptBtn: { flex: 1, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  promptBtn: { flex: 1, backgroundColor: PIZZA_FIRE.accent, paddingVertical: 10, borderRadius: 7, alignItems: 'center' },
   promptBtnText: { color: PIZZA_FIRE.charcoal, fontWeight: '700' },
   promptBtnGhost: { backgroundColor: PIZZA_FIRE.surfaceInset, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder },
   promptBtnGhostText: { color: PIZZA_FIRE.textSecondary, fontWeight: '600' },

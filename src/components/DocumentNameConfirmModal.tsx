@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import PizzaFireButton from './PizzaFireButton';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 import {
@@ -99,16 +100,12 @@ export default function DocumentNameConfirmModal({
             }}
           />
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.confirmButton, !canConfirm && styles.confirmButtonDisabled]}
+            <PizzaFireButton label="Cancel" variant="muted" onPress={onCancel} />
+            <PizzaFireButton
+              label="Confirm upload"
               onPress={() => onConfirm(name)}
               disabled={!canConfirm}
-            >
-              <Text style={styles.confirmText}>Confirm upload</Text>
-            </TouchableOpacity>
+            />
           </View>
         </Pressable>
       </Pressable>
@@ -125,7 +122,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 18,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     padding: 18,
@@ -164,7 +161,7 @@ const styles = StyleSheet.create({
   preview: {
     width: '100%',
     height: 140,
-    borderRadius: 12,
+    borderRadius: 8,
     backgroundColor: PIZZA_FIRE.inputBg,
   },
   aiBadge: {
@@ -172,7 +169,7 @@ const styles = StyleSheet.create({
     top: 8,
     right: 8,
     backgroundColor: 'rgba(201, 120, 43, 0.92)',
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 4,
   },
@@ -188,7 +185,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.inputBg,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.accent,
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
     marginBottom: 12,
@@ -213,7 +210,7 @@ const styles = StyleSheet.create({
   },
   input: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     color: PIZZA_FIRE.textPrimary,
@@ -224,31 +221,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     gap: 10,
     marginTop: 16,
-  },
-  cancelButton: {
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  cancelText: {
-    color: PIZZA_FIRE.textMuted,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  confirmButton: {
-    backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  confirmButtonDisabled: {
-    opacity: 0.45,
-  },
-  confirmText: {
-    color: PIZZA_FIRE.textPrimary,
-    fontSize: 14,
-    fontWeight: '800',
   },
 });

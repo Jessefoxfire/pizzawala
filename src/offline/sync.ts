@@ -11,11 +11,13 @@ import {
 } from '@react-native-firebase/firestore';
 import {
   clearOfflineOpenShift,
+  getOfflineClosedShifts,
   getOfflineOpenShift,
   loadOutbox,
+  removeOfflineClosedShift,
   removeOutboxItem,
 } from './outbox';
-import { isDeviceOnline } from './connectivity';
+import { deviceLooksOnline, markConnectionDegraded, markConnectionHealthy } from './connectivity';
 import type { OutboxItem } from './types';
 import {
   buildOfflineShiftEndWrite,
@@ -153,7 +155,33 @@ async function syncShiftEnd(item: Extract<OutboxItem, { type: 'shift_end' }>) {
   const ref = doc(fs, 'shifts', item.payload.shiftId);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
-    console.warn('[Offline] Dropping stale end — shift missing:', item.payload.shiftId);
+    const closed = (await getOfflineClosedShifts()).find(
+      shift => shift.clientShiftId === item.payload.shiftId
+    );
+    if (!closed) {
+      console.warn('[Offline] Shift end has no Firestore doc or local close snapshot:', item.payload.shiftId);
+      return;
+    }
+    await setDoc(ref, {
+      userId: closed.userId,
+      teamId: closed.teamId,
+      geofenceId: closed.geofenceId ?? null,
+      geofenceName: closed.geofenceName ?? null,
+      workCategory: closed.workCategory ?? null,
+      status: 'closed',
+      locked: true,
+      paused: false,
+      workPeriods: closed.workPeriods,
+      breakPeriods: closed.breakPeriods,
+      startAt: closed.startAt,
+      endAt: closed.endAt,
+      startedBy: closed.startedBy,
+      endedBy: item.payload.endedBy,
+      source: 'offline',
+      offlineOutboxId: item.id,
+      offlineRecordedAtIso: item.payload.recordedAtIso,
+      updatedAt: serverTimestamp(),
+    });
     return;
   }
   const data = { id: snap.id, ...snap.data() } as LiveShift;
@@ -193,6 +221,7 @@ async function syncItem(item: OutboxItem): Promise<void> {
         if (offline?.clientShiftId === item.payload.shiftId) {
           await clearOfflineOpenShift();
         }
+        await removeOfflineClosedShift(item.payload.shiftId);
       }
       return;
     default:
@@ -202,7 +231,7 @@ async function syncItem(item: OutboxItem): Promise<void> {
 
 export async function flushOutbox(): Promise<{ synced: number; failed: number }> {
   if (syncing) return { synced: 0, failed: 0 };
-  const online = await isDeviceOnline();
+  const online = await deviceLooksOnline();
   if (!online) return { synced: 0, failed: 0 };
 
   syncing = true;
@@ -219,11 +248,16 @@ export async function flushOutbox(): Promise<{ synced: number; failed: number }>
       } catch (error) {
         console.warn('[Offline] Failed to sync outbox item:', item.type, error);
         failed += 1;
+        markConnectionDegraded();
         break;
       }
     }
   } finally {
     syncing = false;
+  }
+
+  if (failed === 0) {
+    markConnectionHealthy();
   }
 
   return { synced, failed };

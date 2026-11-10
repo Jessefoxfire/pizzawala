@@ -7,7 +7,13 @@ jest.mock('../src/offline/outbox', () => ({
   getRememberedOpenShiftId: jest.fn(async () => null),
 }));
 
-import { applyPendingShiftEnds, buildOfflineShiftEndWrite, type LiveShift } from '../src/services/shifts';
+import {
+  applyPendingShiftEnds,
+  buildOfflineShiftEndWrite,
+  liveShiftsFromLocalOffline,
+  resolveHomeActiveShift,
+  type LiveShift,
+} from '../src/services/shifts';
 
 function openShift(): LiveShift {
   return {
@@ -52,6 +58,64 @@ describe('offline shift end', () => {
 
     expect(shift.status).toBe('closed');
     expect(shift.workPeriods?.[0].endIso).toBe('2026-10-01T16:00:00.000Z');
+  });
+
+  it('hides the Home ticker when a pending end matches either live id', () => {
+    const local = { ...openShift(), id: 'offline-abc' };
+    const remote = { ...openShift(), id: 'firestore-xyz' };
+    expect(
+      resolveHomeActiveShift(local, remote, [
+        { shiftId: 'firestore-xyz', endedBy: 'manual', recordedAtIso: '' },
+      ])
+    ).toBeNull();
+    expect(
+      resolveHomeActiveShift(local, remote, [
+        { shiftId: 'offline-abc', endedBy: 'manual', recordedAtIso: '' },
+      ])
+    ).toBeNull();
+  });
+
+  it('stops the Home ticker after Confirm Day even if Firestore is still open', () => {
+    const local = { ...openShift(), id: 'offline-abc' };
+    const remote = { ...openShift(), id: 'firestore-xyz' };
+    expect(resolveHomeActiveShift(local, remote, [], ['offline-abc', 'firestore-xyz'])).toBeNull();
+    expect(resolveHomeActiveShift(null, remote, [], ['offline-abc', 'firestore-xyz'])).toBeNull();
+  });
+
+  it('shows a new clock-in after Confirm Day', () => {
+    const next = { ...openShift(), id: 'offline-new' };
+    expect(resolveHomeActiveShift(next, null, [], ['offline-abc', 'firestore-xyz'])).toEqual(next);
+  });
+
+  it('keeps the Home ticker stopped after Confirm Day even if snapshot still has an open shift', () => {
+    const remote = { ...openShift(), id: 'firestore-xyz' };
+    expect(resolveHomeActiveShift(null, remote, [], [], true)).toBeNull();
+  });
+
+  it('keeps a locally closed shift visible in Hours before it syncs', () => {
+    const shifts = liveShiftsFromLocalOffline({
+      open: null,
+      closed: [
+        {
+          clientShiftId: 'offline-abc',
+          userId: 'user-1',
+          teamId: 'team-1',
+          recordedAtIso: '2026-10-01T08:00:00.000Z',
+          workPeriods: [
+            { startIso: '2026-10-01T08:00:00.000Z', endIso: '2026-10-01T16:00:00.000Z' },
+          ],
+          breakPeriods: [],
+          startAt: '2026-10-01T08:00:00.000Z',
+          endAt: '2026-10-01T16:00:00.000Z',
+          pendingSync: true,
+        },
+      ],
+      outbox: [],
+      userId: 'user-1',
+    });
+    expect(shifts).toHaveLength(1);
+    expect(shifts[0].status).toBe('closed');
+    expect(shifts[0].id).toBe('offline-abc');
   });
 
   it('keeps an edited finish time on the queued clock-out', () => {

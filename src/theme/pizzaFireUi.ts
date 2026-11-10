@@ -1,16 +1,19 @@
 import { StyleSheet } from 'react-native';
 import { PIZZA_FIRE, PIZZA_FIRE_RADIUS } from './pizzaFireTheme';
 
-/** Shared Quick Links–inspired controls. Home tiles remain the visual source of truth. */
+/**
+ * Outline action buttons (Save / Cancel / Delete). Prefer `PizzaFireButton`.
+ * Home Quick Link tiles stay separate (qlFill) — they are not these buttons.
+ */
 export const pizzaFireUi = StyleSheet.create({
   button: {
-    minHeight: 44,
+    alignSelf: 'flex-start',
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: PIZZA_FIRE_RADIUS.lg,
-    backgroundColor: PIZZA_FIRE.qlFill,
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.qlBorder,
+    backgroundColor: 'transparent',
+    borderWidth: 1.8,
+    borderColor: PIZZA_FIRE.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -18,52 +21,52 @@ export const pizzaFireUi = StyleSheet.create({
     opacity: 0.88,
   },
   buttonPrimary: {
-    backgroundColor: 'rgba(212, 72, 32, 0.32)',
-    borderColor: PIZZA_FIRE.hotAccentBorder,
+    backgroundColor: 'transparent',
+    borderColor: PIZZA_FIRE.accent,
   },
   buttonMuted: {
-    backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderColor: PIZZA_FIRE.qlBorder,
+    backgroundColor: 'transparent',
+    borderColor: PIZZA_FIRE.textMuted,
   },
   buttonSuccess: {
     backgroundColor: 'rgba(125, 219, 106, 0.16)',
-    borderColor: 'rgba(125, 219, 106, 0.42)',
+    borderColor: 'rgba(125, 219, 106, 0.65)',
   },
   buttonDanger: {
-    backgroundColor: 'rgba(255, 69, 58, 0.34)',
-    borderColor: 'rgba(255, 160, 150, 0.75)',
+    backgroundColor: 'transparent',
+    borderColor: 'rgba(255, 69, 58, 0.65)',
   },
   buttonDisabled: {
     opacity: 0.45,
   },
   buttonLabel: {
-    color: PIZZA_FIRE.textSecondary,
-    fontSize: 12,
+    color: PIZZA_FIRE.accent,
+    fontSize: 14,
     fontWeight: '800',
     textAlign: 'center',
   },
   buttonLabelPrimary: {
-    color: PIZZA_FIRE.textPrimary,
+    color: PIZZA_FIRE.accent,
   },
   buttonLabelMuted: {
-    color: PIZZA_FIRE.textSecondary,
+    color: PIZZA_FIRE.textMuted,
   },
   buttonLabelSuccess: {
-    color: PIZZA_FIRE.success,
+    color: 'rgba(125, 219, 106, 0.65)',
   },
   buttonLabelDanger: {
-    color: '#FFE4E0',
+    color: 'rgba(255, 69, 58, 0.65)',
   },
   card: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 14,
+    borderRadius: PIZZA_FIRE_RADIUS.md,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
     padding: 16,
   },
   cardInner: {
     backgroundColor: PIZZA_FIRE.surfaceInset,
-    borderRadius: 14,
+    borderRadius: PIZZA_FIRE_RADIUS.md,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
     alignItems: 'center',

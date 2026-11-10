@@ -51,10 +51,10 @@ export const PIZZA_FIRE = {
 } as const;
 
 export const PIZZA_FIRE_RADIUS = {
-  sm: 10,
-  md: 12,
-  lg: 16,
-  xl: 20,
+  sm: 6,
+  md: 7,
+  lg: 8,
+  xl: 11,
   pill: 999,
 } as const;
 

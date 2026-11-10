@@ -13,6 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { createAccountWithEmail, uploadStorageRef, uploadStorageRefFallback } from '../services/firebase';
+import { acceptTeamInvite, validateTeamInvite } from '../services/teamInvites';
 import { doc, getFirestore, updateDoc } from '@react-native-firebase/firestore';
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -24,6 +25,8 @@ import { putFileAndGetDownloadUrl } from '../utils/storageUpload';
 import PizzaFireScreen from '../components/PizzaFireScreen';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { useAppLayout } from '../theme/responsiveLayout';
+import { clearPendingInviteToken, persistPendingInviteToken, readPendingInviteToken } from '../services/pendingInvite';
+import { normalizeInviteToken } from '../utils/teamInvites';
 
 type CreateAccountScreenProps = NativeStackScreenProps<RootStackParamList, 'CreateAccount'>;
 
@@ -31,11 +34,14 @@ const avatarOptions: { id: AvatarKey }[] = Object.keys(Avatars).map(key => ({
   id: key as AvatarKey,
 }));
 
-export default function CreateAccountScreen({ navigation }: CreateAccountScreenProps) {
+export default function CreateAccountScreen({ navigation, route }: CreateAccountScreenProps) {
   const layout = useAppLayout();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState(route.params?.invite || '');
+  const [inviteStatus, setInviteStatus] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [selectedAvatar, setSelectedAvatar] = useState<AvatarKey | null>(null);
   const [localUri, setLocalUri] = useState<string | null>(null);
@@ -45,6 +51,34 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
   useEffect(() => {
     return () => { isMounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    const incoming = normalizeInviteToken(route.params?.invite);
+    let cancelled = false;
+    void (async () => {
+      const stored = incoming || await readPendingInviteToken();
+      if (cancelled || !stored) return;
+      setInviteCode(stored);
+      await persistPendingInviteToken(stored);
+      setInviteStatus('Checking invite…');
+      setInviteError(null);
+      try {
+        await validateTeamInvite(stored);
+        if (!cancelled) {
+          setInviteStatus('Valid Pizza Wala invite. Create an account to join as a member.');
+          setInviteError(null);
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setInviteStatus(null);
+          setInviteError(err?.message || 'This invite link is not valid.');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [route.params?.invite]);
 
   const handleImagePick = async (useCamera: boolean) => {
     const source = useCamera ? 'camera' : 'library';
@@ -75,8 +109,21 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
 
     setIsLoading(true);
     try {
+      const token = normalizeInviteToken(inviteCode);
+      if (inviteCode.trim() && !token) {
+        Alert.alert('Invite', 'That invite code is not valid.');
+        return;
+      }
+      if (token) {
+        await persistPendingInviteToken(token);
+        await validateTeamInvite(token);
+      }
       const userCredential = await createAccountWithEmail(name, email, password, selectedAvatar);
       const user = userCredential.user;
+      if (token) {
+        await acceptTeamInvite(token, user.uid);
+        await clearPendingInviteToken();
+      }
 
       if (localUri) {
         const storagePath = `users/${user.uid}/photos/profile.jpg`;
@@ -106,6 +153,9 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
         const code = error?.code ? String(error.code) : '';
         if (code === 'auth/email-already-in-use') {
           Alert.alert('Email already registered', 'Please log in instead.');
+        } else if (/invite/i.test(String(error?.message || ''))) {
+          setInviteError(error.message);
+          Alert.alert('Invite', error.message);
         } else {
           Alert.alert('Creation Failed', error.message || 'Please try again.');
         }
@@ -128,6 +178,8 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
               </TouchableOpacity>
               <Text style={styles.title}>Create Account</Text>
               <Text style={styles.subtitle}>Select an Avatar or Upload a Profile Pic</Text>
+              {inviteStatus ? <Text style={styles.inviteOk}>{inviteStatus}</Text> : null}
+              {inviteError ? <Text style={styles.inviteBad}>{inviteError}</Text> : null}
 
               <View style={styles.avatarSection}>
                 <View style={styles.avatarGrid}>
@@ -176,6 +228,23 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
               </View>
 
               <View style={styles.inputGroup}>
+                <Text style={styles.label}>Invite code (optional)</Text>
+                <TextInput
+                  placeholder="Paste invite code from your link"
+                  value={inviteCode}
+                  onChangeText={text => {
+                    setInviteCode(text);
+                    setInviteError(null);
+                    setInviteStatus(null);
+                  }}
+                  style={styles.input}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholderTextColor="#8F6A48"
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
                 <Text style={styles.label}>Password</Text>
                 <View style={styles.passwordContainer}>
                   <TextInput
@@ -212,17 +281,19 @@ export default function CreateAccountScreen({ navigation }: CreateAccountScreenP
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   scrollContainer: { flexGrow: 1, justifyContent: 'center', alignItems: 'center', padding: 20, paddingVertical: 60 },
-  card: { width: '100%', backgroundColor: PIZZA_FIRE.surfaceInset, paddingHorizontal: 24, paddingVertical: 32, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
-  homeButton: { alignSelf: 'flex-start', marginBottom: 16, backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginTop: -8 },
+  card: { width: '100%', backgroundColor: PIZZA_FIRE.surfaceInset, paddingHorizontal: 24, paddingVertical: 32, borderRadius: 7, alignItems: 'center', borderWidth: 1, borderColor: PIZZA_FIRE.qlBorder },
+  homeButton: { alignSelf: 'flex-start', marginBottom: 16, backgroundColor: PIZZA_FIRE.inputBg, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, marginTop: -8 },
   homeButtonContent: { flexDirection: 'row', alignItems: 'center' },
   homeButtonText: { fontSize: 13, color: PIZZA_FIRE.textSecondary, fontWeight: '600', marginLeft: 6 },
   title: { fontSize: 26, fontWeight: '900', color: PIZZA_FIRE.textPrimary, marginBottom: 4 },
   subtitle: { fontSize: 15, color: PIZZA_FIRE.textSecondary, marginBottom: 24, textAlign: 'center' },
+  inviteOk: { fontSize: 13, color: PIZZA_FIRE.success, textAlign: 'center', marginBottom: 12, lineHeight: 18 },
+  inviteBad: { fontSize: 13, color: PIZZA_FIRE.danger, textAlign: 'center', marginBottom: 12, lineHeight: 18 },
   avatarSection: { width: '100%', marginBottom: 20, alignItems: 'center' },
   avatarGrid: { width: '100%', alignItems: 'center' },
-  uploadPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: PIZZA_FIRE.inputBg, padding: 10, borderRadius: 40, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginBottom: 12, width: '100%', justifyContent: 'center' },
+  uploadPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: PIZZA_FIRE.inputBg, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, marginBottom: 12, width: '100%', justifyContent: 'center' },
   avatarSelectedPill: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accentSoft },
-  cameraIconBg: { backgroundColor: PIZZA_FIRE.inputBg, padding: 10, borderRadius: 20, marginRight: 12 },
+  cameraIconBg: { backgroundColor: PIZZA_FIRE.inputBg, padding: 10, borderRadius: 8, marginRight: 12 },
   customPreview: { width: 44, height: 44, borderRadius: 22, marginRight: 12, borderWidth: 2, borderColor: PIZZA_FIRE.accent },
   uploadText: { color: PIZZA_FIRE.accent, fontWeight: 'bold', fontSize: 15 },
   orText: { color: PIZZA_FIRE.textMuted, fontSize: 11, fontWeight: '900', marginVertical: 12, textTransform: 'uppercase' },
@@ -232,11 +303,11 @@ const styles = StyleSheet.create({
   avatarSelected: { borderColor: PIZZA_FIRE.accent, backgroundColor: PIZZA_FIRE.accent },
   inputGroup: { width: '100%', marginBottom: 16 },
   label: { fontSize: 12, fontWeight: '800', color: PIZZA_FIRE.textMuted, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
-  input: { width: '100%', backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, fontSize: 16, color: PIZZA_FIRE.textSecondary },
-  passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 12, width: '100%' },
+  input: { width: '100%', backgroundColor: PIZZA_FIRE.inputBg, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 8, fontSize: 16, color: PIZZA_FIRE.textSecondary },
+  passwordContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: PIZZA_FIRE.inputBg, borderRadius: 8, width: '100%' },
   passwordInput: { flex: 1, paddingVertical: 14, paddingHorizontal: 16, fontSize: 16, color: PIZZA_FIRE.textSecondary },
   eyeIcon: { paddingRight: 16 },
-  button: { backgroundColor: PIZZA_FIRE.accent, padding: 16, borderRadius: 12, alignItems: 'center', marginTop: 10, width: '100%', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 4 },
+  button: { backgroundColor: PIZZA_FIRE.accent, padding: 16, borderRadius: 8, alignItems: 'center', marginTop: 10, width: '100%', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 4 },
   buttonText: { fontWeight: '900', fontSize: 16, color: PIZZA_FIRE.textPrimary, textTransform: 'uppercase' },
   backButton: { marginTop: 24 },
   backButtonText: { color: PIZZA_FIRE.textMuted, fontSize: 14, textAlign: 'center' },

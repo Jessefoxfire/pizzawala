@@ -39,6 +39,14 @@ class GeofenceEventService : HeadlessJsTaskService() {
         putString("geofenceId", intent.getStringExtra("geofenceId"))
         putString("transition", intent.getStringExtra("transition"))
         putBoolean("delayed", delayed)
+      } else if (type == "shift_action") {
+        putString("action", intent.getStringExtra("action"))
+        putString("shiftId", intent.getStringExtra("shiftId"))
+        putString("geofenceId", intent.getStringExtra("geofenceId"))
+        putString("geofenceName", intent.getStringExtra("geofenceName"))
+        putString("breakSource", intent.getStringExtra("breakSource"))
+        val recordedAtMs = intent.getLongExtra("recordedAtMs", 0L)
+        if (recordedAtMs > 0L) putDouble("recordedAtMs", recordedAtMs.toDouble())
       }
     }
 

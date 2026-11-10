@@ -18,11 +18,17 @@ import {
   where,
 } from '@react-native-firebase/firestore';
 import EventDayTimeModal from './EventDayTimeModal';
+import PizzaFireButton from './PizzaFireButton';
 import HoursChangeBadge from './HoursChangeBadge';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
-import { applyPendingShiftEnds, offlineOpenShiftToLiveShift, submitDaySummary, type LiveShift } from '../services/shifts';
-import { getOfflineOpenShift, getPendingShiftEnds } from '../offline/outbox';
+import {
+  applyPendingShiftEnds,
+  loadLocalOfflineShifts,
+  submitDaySummary,
+  type LiveShift,
+} from '../services/shifts';
+import { getPendingShiftEnds } from '../offline/outbox';
 import { subscribeOutboxChanges } from '../offline/events';
 import type { PendingShiftEnd, WriteResult } from '../offline/types';
 import {
@@ -33,9 +39,10 @@ import {
   formatHoursMinutesLabel,
   formatIsoTimeRange,
   formatScheduledLabel,
+  findOverlappingDaySummaryRow,
   mergeDaySummaryRows,
   rowChangeKind,
-  totalActualMs,
+  totalWorkedMsFromSummaryRows,
   validateDaySummaryRows,
   type DaySummaryRow,
 } from '../utils/daySummary';
@@ -62,6 +69,7 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
   const [rows, setRows] = useState<DaySummaryRow[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [dateKey, setDateKey] = useState(() => localDateKey(new Date()));
+  const [removedShiftIds, setRemovedShiftIds] = useState<string[]>([]);
   const [editor, setEditor] = useState<{
     mode: 'edit' | 'add';
     draftId?: string;
@@ -72,8 +80,9 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
   editorRef.current = editor;
   const recentRef = useRef<LiveShift[]>([]);
   const openRef = useRef<LiveShift[]>([]);
-  const offlineRef = useRef<LiveShift | null>(null);
+  const offlineRef = useRef<LiveShift[]>([]);
   const pendingEndsRef = useRef<PendingShiftEnd[]>([]);
+  const omittedShiftIdsRef = useRef<Set<string>>(new Set());
   const activeShiftRef = useRef<LiveShift | null>(activeShift);
   activeShiftRef.current = activeShift;
 
@@ -85,8 +94,9 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
     for (const shift of openRef.current) {
       if (!shift.isScheduled) byId.set(shift.id, shift);
     }
-    const offline = offlineRef.current;
-    if (offline) byId.set(offline.id, offline);
+    for (const offline of offlineRef.current) {
+      byId.set(offline.id, offline);
+    }
     const active = activeShiftRef.current;
     if (active && !active.isScheduled) byId.set(active.id, active);
     setLiveShifts(applyPendingShiftEnds([...byId.values()], pendingEndsRef.current));
@@ -100,11 +110,13 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
     if (!visible) {
       setRows([]);
       setEditor(null);
+      setRemovedShiftIds([]);
       setSaving(false);
       setLiveShifts([]);
       recentRef.current = [];
       openRef.current = [];
-      offlineRef.current = null;
+      offlineRef.current = [];
+      omittedShiftIdsRef.current = new Set();
       return;
     }
     if (!userId) return undefined;
@@ -166,10 +178,12 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
     );
 
     const refreshOffline = async () => {
-      const [offline, pending] = await Promise.all([getOfflineOpenShift(), getPendingShiftEnds()]);
+      const [offlineShifts, pending] = await Promise.all([
+        loadLocalOfflineShifts(userId),
+        getPendingShiftEnds(),
+      ]);
       pendingEndsRef.current = pending;
-      offlineRef.current =
-        offline && offline.userId === userId ? offlineOpenShiftToLiveShift(offline) : null;
+      offlineRef.current = offlineShifts;
       publishLiveShifts();
     };
     void refreshOffline();
@@ -188,10 +202,14 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
   useEffect(() => {
     if (!visible) return;
     const incoming = buildDaySummaryRows(liveShifts, scheduled, dateKey, nowMs);
-    setRows(current => mergeDaySummaryRows(current, incoming));
-  }, [visible, liveShifts, scheduled, dateKey, nowMs]);
+    setRows(current =>
+      mergeDaySummaryRows(current, incoming).filter(
+        row => !row.shiftId || !removedShiftIds.includes(row.shiftId)
+      )
+    );
+  }, [visible, liveShifts, scheduled, dateKey, nowMs, removedShiftIds]);
 
-  const totalLabel = formatHoursMinutesLabel(totalActualMs(rows));
+  const totalLabel = formatHoursMinutesLabel(totalWorkedMsFromSummaryRows(rows, liveShifts, nowMs));
   const breakdown = useMemo(
     () => dailyShiftBreakdown(liveShifts, dateKey, nowMs),
     [liveShifts, dateKey, nowMs]
@@ -229,42 +247,70 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
         Alert.alert('Invalid times', created);
         return;
       }
+      const overlap = findOverlappingDaySummaryRow(rows, created);
+      if (overlap) {
+        Alert.alert('Cannot save', 'This shift overlaps another shift.');
+        return;
+      }
       setRows(rows =>
         [...rows, created].sort((a, b) => new Date(a.startIso).getTime() - new Date(b.startIso).getTime())
       );
       setEditor(null);
       return;
     }
-    let applied: DaySummaryRow | null = null;
-    let error: string | null = null;
-    setRows(rows =>
-      rows.map(row => {
-        if (row.draftId !== current.draftId) return row;
-        const next = applyTimesToRow(row, dateKey, startTime, endTime);
-        if (typeof next === 'string') {
-          error = next;
-          return row;
-        }
-        applied = next;
-        return next;
-      })
-    );
-    if (error) {
-      Alert.alert('Invalid times', error);
+    const existing = rows.find(row => row.draftId === current.draftId);
+    if (!existing) {
+      setEditor(null);
       return;
     }
-    if (applied) {
-      setEditor(null);
+    const next = applyTimesToRow(existing, dateKey, startTime, endTime);
+    if (typeof next === 'string') {
+      Alert.alert('Invalid times', next);
+      return;
     }
+    const overlap = findOverlappingDaySummaryRow(rows, next, current.draftId);
+    if (overlap) {
+      Alert.alert('Cannot save', 'This shift overlaps another shift.');
+      return;
+    }
+    setRows(currentRows => currentRows.map(row => (row.draftId === current.draftId ? next : row)));
+    setEditor(null);
+  };
+
+  const dropRow = (row: DaySummaryRow) => {
+    if (row.shiftId) omittedShiftIdsRef.current.add(row.shiftId);
+    setRows(current => current.filter(item => item.draftId !== row.draftId));
+    setEditor(null);
   };
 
   const removeAdded = (draftId: string) => {
-    setRows(current => current.filter(row => row.draftId !== draftId));
+    const row = rows.find(item => item.draftId === draftId);
+    if (row) dropRow(row);
+    else setRows(current => current.filter(item => item.draftId !== draftId));
+  };
+
+  const handleEditorRemove = () => {
+    const current = editorRef.current;
+    if (!current || current.mode !== 'edit' || !current.draftId) {
+      setEditor(null);
+      return;
+    }
+    const row = rows.find(item => item.draftId === current.draftId);
+    if (!row) {
+      setEditor(null);
+      return;
+    }
+    if (row.shiftId) {
+      setRemovedShiftIds(ids => (ids.includes(row.shiftId!) ? ids : [...ids, row.shiftId!]));
+    }
+    setRows(currentRows => currentRows.filter(item => item.draftId !== row.draftId));
+    setEditor(null);
   };
 
   const handleConfirmDay = async () => {
     if (!userId || saving) return;
-    const error = validateDaySummaryRows(rows);
+    const error =
+      rows.length === 0 && removedShiftIds.length > 0 ? null : validateDaySummaryRows(rows);
     if (error) {
       Alert.alert('Cannot confirm', error);
       return;
@@ -274,6 +320,7 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
       const result = await submitDaySummary({
         userId,
         dateKey,
+        removedShiftIds,
         rows: rows.map(row => ({
           shiftId: row.shiftId,
           added: row.added,
@@ -348,9 +395,7 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
                 })
               )}
 
-              <TouchableOpacity style={styles.addBtn} onPress={openAdd} activeOpacity={0.8}>
-                <Text style={styles.addBtnText}>+ Add Shift</Text>
-              </TouchableOpacity>
+              <PizzaFireButton label="+ Add Shift" onPress={openAdd} fontSize={15} style={styles.addBtn} />
             </ScrollView>
           )}
 
@@ -371,12 +416,13 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
           </View>
 
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel} disabled={saving}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmBtn} onPress={() => void handleConfirmDay()} disabled={saving}>
-              <Text style={styles.confirmText}>{saving ? 'Saving…' : 'Confirm Day'}</Text>
-            </TouchableOpacity>
+            <PizzaFireButton label="Cancel" variant="muted" onPress={handleCancel} disabled={saving} />
+            <PizzaFireButton
+              label="Confirm Day"
+              onPress={() => void handleConfirmDay()}
+              disabled={saving}
+              loading={saving}
+            />
           </View>
         </View>
       </View>
@@ -389,6 +435,7 @@ export default function DaySummaryModal({ visible, userId, activeShift = null, o
         endTime={editor?.endTime || '17:00'}
         onClose={() => setEditor(null)}
         onConfirm={handleEditorConfirm}
+        onDelete={editor?.mode === 'edit' ? handleEditorRemove : undefined}
       />
     </>
   );
@@ -403,7 +450,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -437,7 +484,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.crustDark,
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 12,
     borderWidth: 1,
     borderColor: '#2E241D',
@@ -475,17 +522,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   addBtn: {
-    borderWidth: 1,
-    borderColor: PIZZA_FIRE.accent,
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
     marginTop: 4,
-  },
-  addBtnText: {
-    color: PIZZA_FIRE.accent,
-    fontWeight: '800',
-    fontSize: 15,
   },
   total: {
     color: PIZZA_FIRE.gold,
@@ -497,29 +534,9 @@ const styles = StyleSheet.create({
   },
   actions: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     gap: 10,
     marginTop: 16,
-  },
-  cancelBtn: {
-    flex: 1,
-    backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  cancelText: {
-    color: PIZZA_FIRE.textPrimary,
-    fontWeight: '800',
-  },
-  confirmBtn: {
-    flex: 1,
-    backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  confirmText: {
-    color: PIZZA_FIRE.charcoal,
-    fontWeight: '900',
   },
 });

@@ -75,6 +75,19 @@
             android:exported="false" />
 
         <receiver
+            android:name=".geofence.GeofenceNotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.djtranscendence.pizzawala.geofence.IGNORE_ENTER" />
+                <action android:name="com.djtranscendence.pizzawala.geofence.IGNORE_BREAK_RETURN" />
+                <action android:name="com.djtranscendence.pizzawala.geofence.BREAK" />
+                <action android:name="com.djtranscendence.pizzawala.geofence.RESUME" />
+                <action android:name="com.djtranscendence.pizzawala.geofence.RESTART" />
+                <action android:name="com.djtranscendence.pizzawala.geofence.ONGOING_TAP" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".geofence.ShiftOngoingRefreshReceiver"
             android:exported="false" />
 
@@ -108,6 +121,21 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pizzawala" android:host="invite" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="pizzawala-admin.vercel.app"
+                    android:pathPrefix="/invite" />
             </intent-filter>
 
         </activity>

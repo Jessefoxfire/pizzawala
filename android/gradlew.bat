@@ -75,6 +75,13 @@ goto fail
 :execute
 @rem Setup the command line
 
+@rem Pizza Wala / Windows ninja MAX_PATH: Cursor sandbox GRADLE_USER_HOME
+@rem (…\Temp\cursor-sandbox-cache\<hash>\gradle\…) makes RN prefab headers
+@rem like ComponentDescriptorFactory.h exceed 260 characters. Always use C:\g.
+if not exist "C:\g" mkdir "C:\g"
+set "GRADLE_USER_HOME=C:\g"
+set "GRADLE_OPTS=%GRADLE_OPTS% -Dgradle.user.home=C:\g"
+
 set CLASSPATH=
 
 

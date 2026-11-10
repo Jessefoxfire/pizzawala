@@ -17,6 +17,7 @@ import { collection, getFirestore, onSnapshot, query } from '@react-native-fireb
 import { resolveAvatarSource } from '../utils/avatar';
 import type { RootStackParamList } from '../navigation/AppNavigator';
 import { openUserProfile } from '../navigation/openUserProfile';
+import { orgStatusLabel, sortEmployeesByOrgActive } from '../utils/orgStatus';
 import {
   deleteHygieneCredential,
   deleteTemperatureLog,
@@ -58,8 +59,7 @@ export default function AdminHygieneScreen({ navigation }: Props) {
     const fs = getFirestore();
     const unsubUsers = onSnapshot(query(collection(fs, 'users')), snap => {
       const items = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
-      items.sort((a: any, b: any) => String(a.name || a.email || '').localeCompare(String(b.name || b.email || '')));
-      setUsers(items);
+      setUsers(sortEmployeesByOrgActive(items));
     });
     const unsubTemps = onSnapshot(query(collection(fs, 'hygieneTemperatureLogs')), snap => {
       const items = snap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() }));
@@ -368,7 +368,10 @@ export default function AdminHygieneScreen({ navigation }: Props) {
                     <Image source={resolveAvatarSource(user.avatarUrl, user.customAvatarUrl)} style={styles.avatar} />
                   </TouchableOpacity>
                   <View style={styles.personBody}>
-                    <Text style={styles.personTitle}>{user.name || user.email || 'Team member'}</Text>
+                    <Text style={styles.personTitle}>
+                      {user.name || user.email || 'Team member'}
+                      {orgStatusLabel(user) ? ` · ${orgStatusLabel(user)}` : ''}
+                    </Text>
                     <Text style={styles.personMeta}>{uploadCount === 0 ? (user.email || 'No email on file') : `${uploadCount} file${uploadCount === 1 ? '' : 's'} uploaded`}</Text>
                     {uploadCount > 0 ? (
                       <Text style={styles.personHint}>{expanded ? 'Tap to hide files' : 'Tap to view files'}</Text>
@@ -476,7 +479,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 16,
     gap: 10,
   },
@@ -514,7 +517,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 16,
     marginBottom: 14,
   },
@@ -522,7 +525,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     overflow: 'hidden',
   },
   tableHeader: {
@@ -557,7 +560,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 160, 150, 0.75)',
     backgroundColor: 'rgba(255, 69, 58, 0.34)',
-    borderRadius: 16,
+    borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
@@ -569,7 +572,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 12,
   },
   avatar: {
@@ -600,7 +603,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.qlBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 14,
     marginBottom: 10,
   },

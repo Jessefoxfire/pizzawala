@@ -42,6 +42,7 @@ import {
   type ShiftPlanCell,
 } from '../utils/shiftPlanGrid';
 import { resolveAvatarSource } from '../utils/avatar';
+import { isOrgActive, orgStatusLabel, sortByOrgActivePreserving } from '../utils/orgStatus';
 import {
   EVENT_SEASONS_CONFIG_ID,
   parseSeasonDoc,
@@ -186,8 +187,11 @@ export default function AdminScheduleScreen({ navigation }: Props) {
 
   const selectedEvent = eventCards.find(card => card.id === selectedEventId) || null;
   const eventEmployees = useMemo(
-    () => (selectedEvent ? uniqueEmployeesFromShifts(selectedEvent.shifts) : []),
-    [selectedEvent]
+    () => {
+      const employees = selectedEvent ? uniqueEmployeesFromShifts(selectedEvent.shifts) : [];
+      return sortByOrgActivePreserving(employees, emp => isOrgActive(users.find(user => user.id === emp.userId)));
+    },
+    [selectedEvent, users]
   );
   const selectedEmployee = eventEmployees.find(emp => emp.userId === selectedUserId) || null;
 
@@ -344,7 +348,10 @@ export default function AdminScheduleScreen({ navigation }: Props) {
       >
         <Image source={avatarSource} style={styles.cardAvatar} />
         <View style={styles.shiftInfo}>
-          <Text style={styles.shiftUser}>{item.userName}</Text>
+          <Text style={styles.shiftUser}>
+            {item.userName}
+            {orgStatusLabel(user) ? ` · ${orgStatusLabel(user)}` : ''}
+          </Text>
           <Text style={styles.shiftWorksite}>
             {item.shiftCount} shift{item.shiftCount === 1 ? '' : 's'}
           </Text>
@@ -513,7 +520,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surface,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 16,
+    borderRadius: 8,
     padding: 16,
     marginBottom: 12,
   },
@@ -524,7 +531,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: PIZZA_FIRE.surface,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 8,
     marginBottom: 12,
     alignItems: 'center',
     borderWidth: 1,
@@ -534,7 +541,7 @@ const styles = StyleSheet.create({
   exportSection: { marginBottom: 16, gap: 10 },
   viewScheduleBtn: {
     backgroundColor: PIZZA_FIRE.surface,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,
@@ -543,7 +550,7 @@ const styles = StyleSheet.create({
   viewScheduleBtnText: { color: PIZZA_FIRE.gold, fontSize: 14, fontWeight: '900' },
   downloadBtn: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,

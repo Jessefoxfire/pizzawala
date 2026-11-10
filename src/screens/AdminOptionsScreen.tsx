@@ -20,19 +20,16 @@ import PizzaFireBackground from '../components/PizzaFireBackground';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, tilePixelWidth, useAppLayout } from '../theme/responsiveLayout';
 import { SHOW_DEBUG_ONLY_OPERATIONS } from '../config/buildFeatures';
-import { useOffline } from '../context/OfflineContext';
 import {
   collection,
   doc,
-  getDocs,
-  query,
   updateDoc,
-  where,
   onSnapshot,
 } from 'firebase/firestore';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { db } from '../services/firebase';
-import { getNativeNotificationsEnabled, setNativeNotificationsEnabled } from '../geofencing/native';
+import { LAST_ADMIN_NOTICE, withAdminRole, wouldLeaveNoActiveAdmin } from '../utils/teamRoles';
+import { orgStatusLabel, sortEmployeesByOrgActive } from '../utils/orgStatus';
 
  type Props = NativeStackScreenProps<RootStackParamList, 'AdminOptions'>;
 
@@ -46,12 +43,9 @@ export default function AdminOptionsScreen({ navigation }: Props) {
   const layout = useAppLayout();
   const tileWidth = tilePixelWidth(layout);
   const insets = useSafeAreaInsets();
-  const { syncBannerVisible } = useOffline();
   const [adminModalVisible, setAdminModalVisible] = useState(false);
-  const [adminEmail, setAdminEmail] = useState('');
   const [grantAdmin, setGrantAdmin] = useState(true);
   const [adminSaving, setAdminSaving] = useState(false);
-  const [alertsEnabled, setAlertsEnabled] = useState(true);
 
   const [users, setUsers] = useState<any[]>([]);
   const [userPickerVisible, setUserPickerVisible] = useState(false);
@@ -70,17 +64,6 @@ export default function AdminOptionsScreen({ navigation }: Props) {
     return () => unsub();
   }, []);
 
-  React.useEffect(() => {
-    void getNativeNotificationsEnabled().then(enabled => {
-      setAlertsEnabled(enabled);
-    });
-  }, []);
-
-  const handleToggleAlerts = async (enabled: boolean) => {
-    setAlertsEnabled(enabled);
-    await setNativeNotificationsEnabled(enabled);
-  };
-
   const handleAdminRoleUpdate = async () => {
     if (adminSaving) return;
     if (!selectedUser) {
@@ -88,12 +71,14 @@ export default function AdminOptionsScreen({ navigation }: Props) {
       return;
     }
 
+    if (wouldLeaveNoActiveAdmin(users, selectedUser.id, { grantAdmin })) {
+      Alert.alert('Last admin', LAST_ADMIN_NOTICE);
+      return;
+    }
+
     setAdminSaving(true);
     try {
-      const roles = Array.isArray(selectedUser.roles) ? selectedUser.roles : [];
-      const nextRoles = grantAdmin
-        ? Array.from(new Set([...roles, 'admin']))
-        : roles.filter((role: string) => role !== 'admin');
+      const nextRoles = withAdminRole(selectedUser.roles, grantAdmin);
       
       await updateDoc(doc(db, 'users', selectedUser.id), { 
         roles: nextRoles,
@@ -112,12 +97,14 @@ export default function AdminOptionsScreen({ navigation }: Props) {
   };
 
   const filteredUsers = React.useMemo(() => {
-    if (!searchQuery.trim()) return users.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    const q = searchQuery.toLowerCase();
-    return users.filter(u => 
-      (u.name || '').toLowerCase().includes(q) || 
-      (u.email || '').toLowerCase().includes(q)
-    ).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const q = searchQuery.trim().toLowerCase();
+    const filtered = q
+      ? users.filter(u =>
+          (u.name || '').toLowerCase().includes(q) ||
+          (u.email || '').toLowerCase().includes(q)
+        )
+      : users;
+    return sortEmployeesByOrgActive(filtered);
   }, [users, searchQuery]);
 
   const adminTiles: AdminTile[] = [
@@ -147,9 +134,14 @@ export default function AdminOptionsScreen({ navigation }: Props) {
       onPress: () => navigation.navigate('Geofences'),
     },
     {
-      label: 'Members',
+      label: 'Employees',
       icon: require('../../assets/Icons/Profile.png'),
       onPress: () => navigation.navigate('ManageUsers'),
+    },
+    {
+      label: 'Settings',
+      icon: require('../../assets/Icons/Admin.png'),
+      onPress: () => navigation.navigate('Settings'),
     },
     ...(!SHOW_DEBUG_ONLY_OPERATIONS
       ? [{
@@ -165,12 +157,12 @@ export default function AdminOptionsScreen({ navigation }: Props) {
     },
     {
       label: 'Hygiene',
-      icon: require('../../assets/Icons/Medal.png'),
+      icon: require('../../assets/Icons/Hygiene.png'),
       onPress: () => navigation.navigate('Hygiene'),
     },
     {
       label: 'Receipts',
-      icon: require('../../assets/Icons/Admin.png'),
+      icon: require('../../assets/Icons/Receipts.png'),
       onPress: () => navigation.navigate('AdminReceipts'),
     },
     ...(SHOW_DEBUG_ONLY_OPERATIONS
@@ -194,7 +186,7 @@ export default function AdminOptionsScreen({ navigation }: Props) {
     },
   ];
 
-  const headerTopInset = insets.top + (syncBannerVisible ? 18 : layout.isShort ? 6 : 8);
+  const headerTopInset = insets.top + (layout.isShort ? 6 : 8);
 
   return (
     <View style={styles.screen}>
@@ -307,7 +299,9 @@ export default function AdminOptionsScreen({ navigation }: Props) {
                     setSearchQuery('');
                   }}
                 >
-                  <Text style={styles.userItemName}>{item.name || 'Unnamed'}</Text>
+                  <Text style={styles.userItemName}>
+                    {item.name || 'Unnamed'}{orgStatusLabel(item) ? ` · ${orgStatusLabel(item)}` : ''}
+                  </Text>
                   <Text style={styles.userItemEmail}>{item.email}</Text>
                 </TouchableOpacity>
               )}
@@ -352,7 +346,7 @@ const styles = StyleSheet.create({
   closeBtn: {
     width: 40,
     height: 40,
-    borderRadius: 20,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(255, 159, 28, 0.14)',
@@ -380,7 +374,7 @@ const styles = StyleSheet.create({
     minWidth: 96,
     alignItems: 'center',
     paddingVertical: 14,
-    borderRadius: 16,
+    borderRadius: 8,
     backgroundColor: 'rgba(255, 159, 28, 0.14)',
     borderWidth: 1,
     borderColor: 'rgba(255, 159, 28, 0.28)',
@@ -408,7 +402,7 @@ const styles = StyleSheet.create({
   modalCard: {
     margin: 20,
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 20,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -418,7 +412,7 @@ const styles = StyleSheet.create({
   pickerTrigger: {
     backgroundColor: PIZZA_FIRE.inputBg,
     padding: 14,
-    borderRadius: 12,
+    borderRadius: 8,
     marginTop: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -441,7 +435,7 @@ const styles = StyleSheet.create({
   searchInput: {
     backgroundColor: PIZZA_FIRE.inputBg,
     padding: 12,
-    borderRadius: 10,
+    borderRadius: 7,
     marginTop: 12,
     color: PIZZA_FIRE.textSecondary,
     borderWidth: 1,

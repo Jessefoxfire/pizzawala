@@ -53,34 +53,43 @@ object GeofenceHeadlessFg {
   }
 
   fun start(service: Service) {
-    ensureChannel(service)
-    val notification: Notification = NotificationCompat.Builder(service, CHANNEL_ID)
-      .setContentTitle(service.getString(R.string.app_name))
-      .setContentText("")
-      .setSmallIcon(R.mipmap.ic_launcher)
-      .setSilent(true)
-      .setPriority(NotificationCompat.PRIORITY_MIN)
-      .setCategory(NotificationCompat.CATEGORY_SERVICE)
-      .setShowWhen(false)
-      .build()
+    val onShift = ShiftOngoingStore.isActive(service)
+    val notification: Notification = if (onShift) {
+      ShiftOngoingStore.buildNotification(service)
+    } else {
+      ensureChannel(service)
+      NotificationCompat.Builder(service, CHANNEL_ID)
+        .setContentTitle(service.getString(R.string.app_name))
+        .setContentText("")
+        .setSmallIcon(R.mipmap.ic_launcher)
+        .setSilent(true)
+        .setPriority(NotificationCompat.PRIORITY_MIN)
+        .setCategory(NotificationCompat.CATEGORY_SERVICE)
+        .setShowWhen(false)
+        .build()
+    }
+    val id = if (onShift) ShiftOngoingStore.NOTIFICATION_ID else NOTIFICATION_ID
 
     if (Build.VERSION.SDK_INT >= 34) {
       service.startForeground(
-        NOTIFICATION_ID,
+        id,
         notification,
         ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
       )
     } else {
-      service.startForeground(NOTIFICATION_ID, notification)
+      service.startForeground(id, notification)
     }
   }
 
   fun stop(service: Service) {
+    val keepPosted = ShiftOngoingStore.isActive(service)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-      service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
+      service.stopForeground(
+        if (keepPosted) Service.STOP_FOREGROUND_DETACH else Service.STOP_FOREGROUND_REMOVE
+      )
     } else {
       @Suppress("DEPRECATION")
-      service.stopForeground(true)
+      service.stopForeground(!keepPosted)
     }
   }
 }

@@ -413,12 +413,7 @@ export default function HygieneScreen({ navigation }: Props) {
       await refreshPendingTemps();
       setTemperatures(current => ({ ...current, [target.key]: '' }));
       setUnitNotes(current => ({ ...current, [target.key]: '' }));
-      Alert.alert(
-        result.queued ? 'Saved offline' : 'Saved',
-        result.queued
-          ? `${target.label} saved on this device and will sync when you are back online.`
-          : `${target.label} temperature logged.`
-      );
+      Alert.alert('Saved', `${target.label} temperature logged.`);
     } catch (error: any) {
       Alert.alert('Could not save', error?.message || 'Temperature log failed.');
     } finally {
@@ -467,14 +462,10 @@ export default function HygieneScreen({ navigation }: Props) {
       }
 
       const parts: string[] = [];
-      if (saved) parts.push(`${saved} logged.`);
-      if (queued) parts.push(`${queued} saved offline and will sync when you are back online.`);
+      if (saved || queued) parts.push(`${saved + queued} logged.`);
       if (failed.length) parts.push(`Could not save: ${failed.join(', ')}.`);
 
-      Alert.alert(
-        queued && !saved ? 'Saved offline' : failed.length ? 'Partially saved' : 'Saved',
-        parts.join(' ')
-      );
+      Alert.alert(failed.length ? 'Partially saved' : 'Saved', parts.join(' '));
     } finally {
       setSavingAll(false);
     }
@@ -695,12 +686,7 @@ export default function HygieneScreen({ navigation }: Props) {
       await refreshPendingTemps();
       setAddingLog(null);
       setAddDatePickerOpen(false);
-      Alert.alert(
-        result.queued ? 'Saved offline' : 'Saved',
-        result.queued
-          ? `${target.label} saved on this device and will sync when you are back online.`
-          : `${target.label} temperature logged.`
-      );
+      Alert.alert('Saved', `${target.label} temperature logged.`);
     } catch (error: any) {
       Alert.alert('Could not save', error?.message || 'Save failed.');
     } finally {
@@ -1854,7 +1840,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 16,
     marginBottom: 12,
   },
@@ -1862,7 +1848,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 16,
   },
   emptyText: { color: PIZZA_FIRE.textMuted, fontSize: 14 },
@@ -1870,7 +1856,7 @@ const styles = StyleSheet.create({
   muted: { color: PIZZA_FIRE.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 8 },
   input: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     color: PIZZA_FIRE.textPrimary,
@@ -1987,7 +1973,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     paddingHorizontal: 8,
@@ -2003,7 +1989,7 @@ const styles = StyleSheet.create({
   },
   rowConfirmButton: {
     backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 10,
+    borderRadius: 7,
     width: 44,
     height: 38,
     alignItems: 'center',
@@ -2025,7 +2011,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 14,
+    borderRadius: 7,
     paddingVertical: 13,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2041,7 +2027,7 @@ const styles = StyleSheet.create({
   },
   noteModalCard: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 14,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     padding: 18,
@@ -2054,7 +2040,7 @@ const styles = StyleSheet.create({
   },
   noteModalInput: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     color: PIZZA_FIRE.textPrimary,
@@ -2071,7 +2057,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   noteModalCancel: {
-    borderRadius: 10,
+    borderRadius: 7,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
@@ -2082,7 +2068,7 @@ const styles = StyleSheet.create({
   },
   noteModalSave: {
     backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 10,
+    borderRadius: 7,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
@@ -2093,7 +2079,7 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     marginTop: 10,
-    borderRadius: 14,
+    borderRadius: 7,
     paddingVertical: 13,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2108,7 +2094,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 16,
     marginBottom: 10,
     flexDirection: 'row',
@@ -2119,7 +2105,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.surfaceInset,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
-    borderRadius: 14,
+    borderRadius: 7,
     padding: 16,
     marginBottom: 10,
     flexDirection: 'row',
@@ -2145,9 +2131,9 @@ const styles = StyleSheet.create({
   documentFolderModalHint: { color: PIZZA_FIRE.textMuted, fontSize: 12, lineHeight: 17, marginTop: 12, marginBottom: 12 },
   createFileLink: { alignSelf: 'flex-start', paddingVertical: 10, paddingHorizontal: 2, marginTop: 6 },
   createFileLinkText: { color: PIZZA_FIRE.textMuted, fontSize: 12, fontWeight: '700' },
-  newFileModalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 14, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, padding: 18 },
+  newFileModalCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 7, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, padding: 18 },
   newFileModalHint: { color: PIZZA_FIRE.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 14 },
-  newFileModalInput: { backgroundColor: PIZZA_FIRE.inputBg, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, borderRadius: 10, color: PIZZA_FIRE.textPrimary, fontSize: 15, paddingHorizontal: 12, paddingVertical: 11 },
+  newFileModalInput: { backgroundColor: PIZZA_FIRE.inputBg, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, borderRadius: 7, color: PIZZA_FIRE.textPrimary, fontSize: 15, paddingHorizontal: 12, paddingVertical: 11 },
   newFileModalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 16 },
   newFileModalCancel: { paddingHorizontal: 14, paddingVertical: 10 },
   newFileModalCancelText: { color: PIZZA_FIRE.textMuted, fontSize: 14, fontWeight: '700' },
@@ -2155,7 +2141,7 @@ const styles = StyleSheet.create({
   newFileModalSaveText: { color: PIZZA_FIRE.charcoal, fontSize: 14, fontWeight: '800' },
   keyboardAvoiding: { flex: 1 },
   actionMenuBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end', padding: 16 },
-  actionMenuCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 16, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, padding: 10 },
+  actionMenuCard: { backgroundColor: PIZZA_FIRE.bgMid, borderRadius: 8, borderWidth: 1, borderColor: PIZZA_FIRE.cardBorder, padding: 10 },
   actionMenuTitle: { color: PIZZA_FIRE.textPrimary, fontSize: 15, fontWeight: '800', paddingHorizontal: 10, paddingTop: 8, paddingBottom: 10 },
   actionMenuOption: { paddingHorizontal: 12, paddingVertical: 13, borderTopWidth: 1, borderTopColor: PIZZA_FIRE.divider },
   actionMenuOptionText: { color: PIZZA_FIRE.textPrimary, fontSize: 15, fontWeight: '700' },
@@ -2279,7 +2265,7 @@ const styles = StyleSheet.create({
   },
   editDateButton: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 10,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     paddingHorizontal: 12,
@@ -2299,7 +2285,7 @@ const styles = StyleSheet.create({
   editInput: {
     flex: 1,
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     color: PIZZA_FIRE.textPrimary,
@@ -2310,7 +2296,7 @@ const styles = StyleSheet.create({
   },
   editNotesInput: {
     backgroundColor: PIZZA_FIRE.inputBg,
-    borderRadius: 12,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
     color: PIZZA_FIRE.textPrimary,
@@ -2322,7 +2308,7 @@ const styles = StyleSheet.create({
   editPanelActions: { flexDirection: 'row', gap: 10 },
   editCancelButton: {
     flex: 1,
-    borderRadius: 14,
+    borderRadius: 7,
     paddingVertical: 13,
     alignItems: 'center',
     borderWidth: 1,
@@ -2338,7 +2324,7 @@ const styles = StyleSheet.create({
   },
   datePickerCard: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,

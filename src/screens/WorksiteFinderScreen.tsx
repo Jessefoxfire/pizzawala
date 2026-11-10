@@ -687,7 +687,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.bgMid,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.accent,
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },
@@ -706,7 +706,7 @@ const styles = StyleSheet.create({
     backgroundColor: PIZZA_FIRE.bgMid,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.accent,
-    borderRadius: 12,
+    borderRadius: 8,
     paddingVertical: 8,
     paddingHorizontal: 8,
     zIndex: 25,
@@ -720,7 +720,7 @@ const styles = StyleSheet.create({
   teamRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: 10,
+    borderRadius: 7,
     paddingVertical: 6,
     paddingHorizontal: 6,
     marginBottom: 6,
@@ -734,7 +734,7 @@ const styles = StyleSheet.create({
   teamRowAvatar: {
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: 7,
     marginRight: 8,
   },
   teamRowName: {
@@ -788,7 +788,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 420,
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 14,
+    borderRadius: 7,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.accent,
     paddingVertical: 12,
@@ -1027,7 +1027,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 8,
     backgroundColor: 'rgba(6, 182, 212, 0.65)',
   },
   userDot: {
@@ -1041,7 +1041,7 @@ const styles = StyleSheet.create({
   otherUserMarker: {
     width: 48,
     height: 48,
-    borderRadius: 24,
+    borderRadius: 8,
     borderWidth: 3,
     borderColor: PIZZA_FIRE.accent,
     backgroundColor: '#fff',
@@ -1057,7 +1057,7 @@ const styles = StyleSheet.create({
   otherUserPlaceholder: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 8,
     backgroundColor: PIZZA_FIRE.accent,
   },
 });

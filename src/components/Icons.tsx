@@ -60,6 +60,17 @@ export const Icons = {
       />
     </Svg>
   ),
+  chevronDown: ({ width = 24, height = 24, color = '#000' }: IconProps) => (
+    <Svg width={width} height={height} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M6 9l6 6 6-6"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  ),
   location: ({ width = 24, height = 24, color = '#000' }: IconProps) => (
     <Svg width={width} height={height} viewBox="0 0 24 24" fill="none">
       <Path
@@ -70,6 +81,33 @@ export const Icons = {
         strokeLinejoin="round"
       />
       <Circle cx={12} cy={10} r={3} stroke={color} strokeWidth={2} />
+    </Svg>
+  ),
+  truck: ({ width = 24, height = 24, color = '#000' }: IconProps) => (
+    <Svg width={width} height={height} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M15 18H9"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Circle cx={17} cy={18} r={2} stroke={color} strokeWidth={2} />
+      <Circle cx={7} cy={18} r={2} stroke={color} strokeWidth={2} />
     </Svg>
   ),
   users: ({ width = 24, height = 24, color = '#000' }: IconProps) => (

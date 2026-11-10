@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Platform, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { dateToTimeString, timeStringToDate } from '../utils/eventDays';
+import PizzaFireButton from './PizzaFireButton';
 import { PIZZA_FIRE } from '../theme/pizzaFireTheme';
 import { sheetCardStyle, useAppLayout } from '../theme/responsiveLayout';
 
@@ -48,12 +49,8 @@ export default function TimePickerModal({ visible, value, title = 'Select time',
             themeVariant="dark"
           />
           <View style={styles.actions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.confirmBtn} onPress={confirm}>
-              <Text style={styles.confirmText}>Done</Text>
-            </TouchableOpacity>
+            <PizzaFireButton label="Cancel" variant="muted" onPress={onClose} />
+            <PizzaFireButton label="Done" onPress={confirm} />
           </View>
         </View>
       </View>
@@ -70,7 +67,7 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: PIZZA_FIRE.bgMid,
-    borderRadius: 20,
+    borderRadius: 8,
     padding: 16,
     borderWidth: 1,
     borderColor: PIZZA_FIRE.cardBorder,
@@ -85,25 +82,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
+    alignItems: 'center',
     gap: 12,
     marginTop: 8,
-  },
-  cancelBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  cancelText: {
-    color: PIZZA_FIRE.textMuted,
-    fontWeight: '700',
-  },
-  confirmBtn: {
-    backgroundColor: PIZZA_FIRE.accent,
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  confirmText: {
-    color: PIZZA_FIRE.charcoal,
-    fontWeight: '900',
   },
 });
